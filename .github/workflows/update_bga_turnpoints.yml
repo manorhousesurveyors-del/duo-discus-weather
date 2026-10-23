@@ -1,0 +1,44 @@
+name: Update BGA turnpoints
+
+on:
+  schedule:
+    - cron: '0 6 1 */3 *' # 1 January, April, July, October at 06:00 UTC.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bga-turnpoints-main
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Test parser and update safeguards
+        run: python -m unittest tests.test_bga_turnpoints -v
+      - name: Fetch and validate a complete BGA catalog
+        run: python bga_turnpoints.py --update
+      - name: Validate saved catalog
+        run: python bga_turnpoints.py
+      - name: Commit changed data to main
+        run: |
+          git add -- data/bga_turnpoints.json
+          if git diff --cached --quiet; then
+            echo "BGA turnpoints unchanged."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'data: refresh BGA turnpoints'
+          # A concurrent main update stops this push safely; never force it.
+          git push origin HEAD:main

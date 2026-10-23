@@ -29,13 +29,15 @@ class DashboardTests(unittest.TestCase):
 
     def test_map_contains_layers_and_only_verified_asset_hosts(self):
         values=tuple(forecast(p) for p in forecast_locations())
-        with patch('app.interpolate_map_samples',return_value=[[52.5,-2.8,4.]]):
-            map_view,waves=app.build_map(values,NOW,layers=['Thermals','Cloud base','Wave sites','Routes'])
+        with patch('app.thermal_overlay_data',return_value=None):
+            map_view,waves=app.build_map(values,NOW,layers=['Thermals','Cloud base','Wave sites'])
         document=map_view.get_root().render()
         for value in ('tile.openstreetmap.org','a.tile.opentopomap.org','cdn.jsdelivr.net',
-                      'Thermal strength','Potential cloud base','Duo Discus task templates'):
+                      'Thermal strength','Potential cloud base'):
             self.assertIn(value,document)
         self.assertEqual(len(waves),12)
+        self.assertNotIn('Active task',document)
+        self.assertNotIn('Duo Discus task templates',document)
         self.assertNotIn('rawcdn.githack.com',document)
         self.assertNotIn('d3js.org',document)
 
@@ -53,27 +55,27 @@ class DashboardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'snapshot.json'
             save_bundle(ForecastBundle(tuple(forecast(p) for p in forecast_locations()),(),.5,(),NOW),path)
-            with patch.dict('os.environ',{'DUO_DASHBOARD_SNAPSHOT':str(path)}):
+            with patch.dict('os.environ',{'DUO_DASHBOARD_SNAPSHOT':str(path),'DUO_TASK_STORE':directory+'/tasks'}):
                 at=AppTest.from_file(str(Path(app.__file__)),default_timeout=30).run()
                 self.assertFalse(at.exception)
-                self.assertEqual([tab.label for tab in at.tabs],['Weather map','Task planner','Wave watch','Data quality'])
-                self.assertEqual(len(at.metric),4)
+                self.assertEqual([tab.label for tab in at.tabs],['Weather map','Task planner','Wave watch','Help & Briefing Bot','Data quality'])
+                self.assertEqual(len(at.metric),6)
                 self.assertEqual(len(at.get('plotly_chart')),2)
-                at.slider[0].set_value(16).run()
+                at.slider(key="forecast_hour").set_value(16).run()
                 self.assertFalse(at.exception)
                 self.assertIn('16:00',at.metric[3].value)
-                at.selectbox[0].select('ukmo').run()
+                at.selectbox(key='forecast_model').select('ukmo').run()
                 self.assertFalse(at.exception)
-                self.assertTrue(at.error)
+                self.assertTrue(any("does not cover" in w.value.lower() for w in at.warning))
 
     def test_map_click_switches_inspector_to_coordinate(self):
         from streamlit.testing.v1 import AppTest
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'snapshot.json'
             save_bundle(ForecastBundle(tuple(forecast(p) for p in forecast_locations()),(),.5,(),NOW),path)
-            with patch.dict('os.environ',{'DUO_DASHBOARD_SNAPSHOT':str(path)}), \
+            with patch.dict('os.environ',{'DUO_DASHBOARD_SNAPSHOT':str(path),'DUO_TASK_STORE':directory+'/tasks'}), \
                  patch('streamlit_folium.st_folium',return_value={'last_clicked':{'lat':53.,'lng':-2.5}}):
                 at=AppTest.from_file(str(Path(app.__file__)),default_timeout=30).run()
                 self.assertFalse(at.exception)
-                self.assertEqual(at.selectbox[-1].value,'Map coordinate')
+                self.assertEqual(at.selectbox(key='inspector_selection').value,'Map coordinate')
                 self.assertEqual(len(at.get('plotly_chart')),2)

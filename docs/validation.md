@@ -177,3 +177,56 @@ domains. Added custom domains are `api.rainviewer.com`,
 existing `cdn.jsdelivr.net` preset. SMTP still requires TCP 465 on its delivery
 host. The draft reports `requires_publish: true`; publication and fresh-task
 restoration were not claimed or independently verified.
+
+## BGA task-planning upgrade — 23 October 2026
+
+The expanded offline suite passes **122 tests**, none skipped. Coverage includes
+CUP/CSV/JSON/GeoJSON import, source checksums and provenance, complete-list
+validation, failed-sync preservation, unchanged-sync behavior and downgrade
+rejection. Geometry and flight tests cover ≤35 km corridor spacing, both polar
+loadings, wind effects, hourly integration, launch windows, rain/cloud-height
+limits, missing midpoint data, local distance classes and daily task storage.
+A short clear-weather window cannot be widened by risky launch hours.
+
+Streamlit tests exercise sequence loading, reordering, clearing, date separation,
+model/hour changes, tooltips and map-event deduplication. Bot tests verify that
+suggestions load only after an explicit action and successful corridor assessment;
+missing weather disables loading. Raster tests verify fixed RGB colors, transparent
+unsupported areas and preservation of the physical palette through Mercator/PNG
+rendering. CUP task order, duplicate-name disambiguation and TSK XML escaping and
+observation zones are checked.
+
+Both GitHub Actions workflows pass **actionlint 1.7.7**. Python compilation,
+`pip check` and `git diff --check` also pass. No new Python dependency was required.
+
+Live BGA synchronization retrieved **1,390** records from the **2026a** SeeYou
+file listed on the Worldwide Soaring Turnpoint Exchange's current BGA index.
+A second live check reported **unchanged**, with zero added/removed/modified
+records. The saved source hash and attribution identify the exact public download.
+The primary Newport-Peace HTTPS endpoint was unavailable with an upstream
+certificate error during verification; the validated mirror supplied the list.
+TLS verification remained enabled throughout.
+
+A live ECMWF corridor request for **MYN → BIE → MYN**, **282.36 km**, returned all
+**6 requested sample forecasts**, with **0 failures**. For **24 October 2026**, all
+**18 leg/hour rows** had the required weather and the engine returned **NOT
+ACHIEVABLE** with conservative net climbs as low as −1.6 kt. This is an integration
+check, not retrospective validation of forecast skill.
+
+Browser validation uses Chromium with the recorded real weather bundle to avoid
+repeating the full national weather request. Public map/CDN assets are fetched
+through the environment's verified TLS client because Chromium lacks its managed
+proxy CA. The default map has no task route; explicit task loading draws the
+selected sequence. Browser downloads of CUP and TSK were parsed successfully.
+Map-side thermal on/off updates the sidebar, sidebar enable displays the raster,
+and disabling removes it. No JavaScript or Streamlit exceptions were observed
+in these completed interaction checks; map and marker-cluster assets returned 200.
+A direct browser click on the MYN marker selected the published code and exact
+52.51865 N, 2.88095 W coordinates. A manual CUP upload was parsed, saved with a
+user-supplied label and removed
+through Data quality. The live GitHub quarterly schedule has not been triggered
+during verification.
+
+Runtime evidence remains under ignored `var/` (test logs, live-task JSON,
+browser results, screenshots and downloaded task files). These contain no alert
+credentials. No live notifications were sent.

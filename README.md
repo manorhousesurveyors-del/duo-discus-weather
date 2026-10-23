@@ -16,7 +16,7 @@ python3 -m venv .venv
 ```
 
 The dashboard provides nine regional forecasts, twelve wave sites, thermal and
-cloud-base maps, convergence ribbons, route capacity, observed radar, METAR/TAF
+cloud-base maps, convergence ribbons, custom BGA tasks, observed radar, METAR/TAF
 popups, and a map-click sounding/meteogram inspector. Choose model, day, local
 hour, wing loading and layers in the sidebar. Times follow **Europe/London**,
 including winter GMT. The initial view selects tomorrow at 13:00 after today's
@@ -27,6 +27,32 @@ Public weather APIs need no credentials. The first map/grid load can take a few
 minutes because requests respect Open-Meteo's weighted quota. Allow about 2 GB
 RAM for the dashboard and land mask; the mask alone expands to about 1 GB.
 Dependencies are pinned in [requirements.txt](requirements.txt).
+
+## BGA tasks, thermal map and briefing assistant
+
+The bundled BGA **2026a** catalog contains **1,390** published turnpoints with
+trigraphs, coordinates and elevations, attributed to the Worldwide Soaring
+Turnpoint Exchange's unofficial mirror. The map starts without a preset route.
+Build daily tasks by searching codes/names, clicking BGA markers or coordinates,
+or explicitly loading a preset; reorder, clear and export CUP/XCSoar TSK files.
+
+Every custom leg is checked hourly using sampled corridor forecasts, the chosen
+34/43 kg/m² Duo Discus polar, conservative climbs, cloud height and wind. The
+planner reports achievability, launch windows, elapsed time and the weakest leg.
+A separate local day-capacity estimate highlights 100/250/300/500 km potential.
+
+Thermals use a fixed blue–cyan–yellow–orange–red net-climb scale with a legend,
+switchable in the sidebar and map control. Bookmark `?thermals=on` to start with
+it enabled. **Help & Briefing Bot** answers from the selected forecasts/catalog
+and checks suggested BGA triangles and out-and-returns before offering to load
+them. It requires no LLM key. Controls, metrics, table columns and map markers
+have hover explanations.
+
+Data quality supports CUP/CSV/JSON uploads and a manual BGA update check.
+[Quarterly synchronization](.github/workflows/update_bga_turnpoints.yml) runs
+at 06:00 UTC on 1 January, April, July and October and commits validated catalog
+changes to main. See [task planning and data provenance](docs/task-planning.md)
+for source attribution, supported formats, assessment limits and operating details.
 
 ## Evaluate without sending
 
@@ -75,8 +101,8 @@ convergence. See [physics methods](docs/physics.md) for equations and thresholds
 The APIs do not provide every requested field. Missing values remain unavailable;
 900/950 hPa interpolation is explicit and stays inside available pressure
 levels. Boundary-layer height and heat flux can be estimates, and wave/front
-classifications are heuristic. Route capacity uses endpoint weather and an
-idealized climb/glide cycle. These are planning aids, not validated predictions
+classifications are heuristic. The legacy watchdog routes use endpoint weather; custom tasks sample the
+corridor every ≤35 km and integrate hourly climb/glide progress. These are planning aids, not validated predictions
 of climb, wave crests or a terrain/airspace-cleared flight plan.
 
 Ridge anchors are approximate named summits. The attributed XCSoar polar is
@@ -105,12 +131,13 @@ instructions are in the operations guide. Never place credentials in payloads.
 The saved custom allowlist includes `api.rainviewer.com`,
 `tilecache.rainviewer.com`, `tile.openstreetmap.org`,
 `a.tile.opentopomap.org`, the weather APIs and notification destinations.
-Leaflet/heatmap assets use `cdn.jsdelivr.net` from the existing package preset.
+BGA synchronization uses `soaringweb.org` and `www.newportpeace.co.uk`;
+`members.gliding.co.uk` is retained for source documentation. Leaflet/marker assets use `cdn.jsdelivr.net` from the existing package preset.
 The browser also needs tile/script access. Gmail additionally requires outbound
 **TCP 465**; an HTTPS proxy domain allowlist alone does not enable SMTP. The
 GitHub runner is the intended scheduled delivery host.
 
 Install/start instructions and network changes are saved in the cloud
 configuration **draft**. Review and save the changes in environment settings,
-then publish the environment to retain them. Saving files here does not push
-them to GitHub or activate its schedule.
+then publish the environment to retain them. The committed workflows become available after the corresponding GitHub push;
+saving the cloud draft alone does not publish an environment or run a workflow.

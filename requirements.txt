@@ -1,4 +1,4 @@
-# Python 3.11+; exact direct dependency versions validated in the cloud environment.
+# Python 3.12+; exact direct dependency versions validated in the cloud environment.
 numpy==2.3.5
 scipy==1.17.0
 pandas==2.2.3

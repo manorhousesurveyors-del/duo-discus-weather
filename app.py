@@ -13,11 +13,11 @@ from pathlib import Path
 import re
 
 import folium
-from folium.plugins import HeatMap
+from folium.plugins import FastMarkerCluster
+from folium.utilities import mercator_transform
 from branca.colormap import LinearColormap
 from branca.element import MacroElement, Template
 import numpy as np
-import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from scipy.interpolate import griddata
@@ -25,13 +25,15 @@ from scipy.spatial import cKDTree
 import streamlit as st
 from streamlit_folium import st_folium
 
+from task_planning import task_distance
+
 from alerts import (ForecastBundle, GRID_VARIABLES, evaluate_convergence, load_bundle)
-from config import (FORECAST_MODELS, LOCAL_TIMEZONE, MONITORING_ZONES, ROUTES,
+from config import (FORECAST_MODELS, LOCAL_TIMEZONE, MONITORING_ZONES,
                     WAVE_RIDGES, GeoPoint, convergence_grid, forecast_locations)
 from data_ingestion import (AviationWeatherClient, Forecast, IngestionError, JsonHttpClient,
                             OpenMeteoClient, utc_datetime)
 from soaring_physics import (CP, RD, Profile, dewpoint_c, distance_bearing,
-                             evaluate_task_day, evaluate_thermals, evaluate_wave, rank_wave_sites)
+                             evaluate_thermals, evaluate_wave, rank_wave_sites)
 
 MODEL_LABELS = {'ifs025':'ECMWF · medium range', 'ukmo':'Met Office · UK 2 km', 'icon_eu':'DWD ICON-EU · 7 km'}
 CATEGORY_COLOURS = {'VFR':'#15835d','MVFR':'#2674c5','IFR':'#d84949','LIFR':'#a342ac','UNKNOWN':'#6c7780'}
@@ -183,7 +185,7 @@ def interpolate_map_samples(samples):
             if np.isfinite(v) and d <= 75 and on_land]
 
 
-def add_colour_legend(map_view, caption, colours, minimum, maximum):
+def add_colour_legend(map_view, caption, colours, minimum, maximum, layer=None):
     """Leaflet legend with inline CSS; no additional script/CDN dependency."""
     legend = MacroElement()
     legend._template = Template('''{% macro script(this, kwargs) %}
@@ -195,7 +197,16 @@ def add_colour_legend(map_view, caption, colours, minimum, maximum):
             return div;
         };
         {{this.get_name()}}.addTo({{this._parent.get_name()}});
+        {% if this.layer %}
+        function {{this.get_name()}}_update() {
+            {{this.get_name()}}.getContainer().style.display =
+                {{this._parent.get_name()}}.hasLayer({{this.layer.get_name()}}) ? '' : 'none';
+        }
+        {{this._parent.get_name()}}.on('layeradd layerremove', {{this.get_name()}}_update);
+        {{this.get_name()}}_update();
+        {% endif %}
     {% endmacro %}''')
+    legend.layer = layer
     legend.content = ('<div style="background:rgba(255,255,255,.94);padding:9px 12px;border-radius:5px;'
                       'width:240px;font:11px sans-serif;color:#183042">'+html.escape(caption)+
                       '<div style="height:9px;margin-top:7px;background:linear-gradient(to right,'+
@@ -204,283 +215,401 @@ def add_colour_legend(map_view, caption, colours, minimum, maximum):
     legend.add_to(map_view)
 
 
+THERMAL_STOPS = ((0., '#2354cf'), (1., '#1d8df0'), (1.7, '#20d4e5'),
+                 (3., '#f4e65a'), (4.25, '#f59335'), (5.5, '#d72932'))
+
+
+def thermal_colour(value):
+    positions = np.array([s[0] for s in THERMAL_STOPS])
+    colours = np.array([[int(s[1][i:i+2],16) for i in (1,3,5)] for s in THERMAL_STOPS])
+    rgb = [int(round(np.interp(value,positions,colours[:,i]))) for i in range(3)]
+    return '#' + ''.join(f'{v:02x}' for v in rgb)
+
+
+def thermal_overlay_data(samples):
+    """Fixed-value RGBA field, independent of point density and map zoom."""
+    if len(samples)<3:
+        return None
+    values={}
+    for lat,lon,value in samples:
+        values.setdefault((lat,lon),[]).append(value)
+    array=np.array([[lat,lon,np.mean(v)] for (lat,lon),v in values.items()])
+    projection=np.column_stack((array[:,1]*111*math.cos(math.radians(54)),array[:,0]*111))
+    if len(array)<3 or np.linalg.matrix_rank(projection-projection.mean(axis=0))<2:
+        return None
+    south,north=max(49.,array[:,0].min()-.1),min(61.5,array[:,0].max()+.1)
+    west,east=max(-9.,array[:,1].min()-.1),min(2.5,array[:,1].max()+.1)
+    lats=np.linspace(south,north,max(3,math.ceil((north-south)/.04)))
+    lons=np.linspace(west,east,max(3,math.ceil((east-west)/.04)))
+    lat,lon=np.meshgrid(lats,lons,indexing='ij')
+    query=np.column_stack((lon.ravel()*111*math.cos(math.radians(54)),lat.ravel()*111))
+    field=griddata(projection,array[:,2],query,method='linear')
+    distance,_=cKDTree(projection).query(query)
+    from global_land_mask import globe
+    mask=np.isfinite(field) & (distance<=75) & globe.is_land(lat.ravel(),lon.ravel())
+    rgba=np.zeros((len(field),4),dtype=np.uint8)
+    stops=np.array([v for v,_ in THERMAL_STOPS])
+    for channel,offset in enumerate((1,3,5)):
+        colours=np.array([int(c[offset:offset+2],16) for _,c in THERMAL_STOPS])
+        rgba[mask,channel]=np.rint(np.interp(field[mask],stops,colours)).astype(np.uint8)
+    rgba[mask,3]=155
+    return np.flipud(rgba.reshape((*lat.shape,4))), [[south,west],[north,east]]
+
+
 def build_map(forecasts, when, *, layers, aviation=None, radar=None, convergence=None,
-              centre=(53.3,-2.6), zoom=6):
-    map_view = folium.Map(location=centre,zoom_start=zoom,tiles=None,control_scale=True,prefer_canvas=True)
-    # Leaflet/heatmap assets use jsDelivr, already part of the environment preset.
-    map_view.default_js = [('leaflet','https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js'),
-                           ('jquery','https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js')]
-    map_view.default_css = [('leaflet_css','https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css')]
+              centre=(53.3,-2.6), zoom=6, task=(), turnpoints=()):
+    map_view=folium.Map(location=centre,zoom_start=zoom,tiles=None,control_scale=True,prefer_canvas=True)
+    map_view.default_js=[('leaflet','https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js'),
+                         ('jquery','https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js')]
+    map_view.default_css=[('leaflet_css','https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css')]
     folium.TileLayer('https://a.tile.opentopomap.org/{z}/{x}/{y}.png',name='Topography',
-                     attr='Map data © OpenStreetMap contributors, SRTM | Map style © OpenTopoMap (CC-BY-SA)',max_zoom=17).add_to(map_view)
+        attr='Map data © OpenStreetMap contributors, SRTM | Map style © OpenTopoMap (CC-BY-SA)',max_zoom=17).add_to(map_view)
     folium.TileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',name='OpenStreetMap',
-                     attr='© OpenStreetMap contributors',max_zoom=19,show=False).add_to(map_view)
-    thermal_samples, cloud_samples, waves = [],[],[]
-    thermal_group = folium.FeatureGroup(name='Thermal strength · kt',show='Thermals' in layers,control='Thermals' in layers)
-    cloud_group = folium.FeatureGroup(name='Potential cloud base · ft AMSL',show='Cloud base' in layers,control='Cloud base' in layers)
-    wave_group = folium.FeatureGroup(name='UK wave sites and indicative lee bars',show='Wave sites' in layers,control='Wave sites' in layers)
+        attr='© OpenStreetMap contributors',max_zoom=19,show=False).add_to(map_view)
+    thermal_samples,cloud_samples,waves=[],[],[]
+    thermal_group=folium.FeatureGroup(name='Thermal strength · kt',show='Thermals' in layers)
+    cloud_group=folium.FeatureGroup(name='Potential cloud base · ft AMSL',show='Cloud base' in layers,control='Cloud base' in layers)
+    wave_group=folium.FeatureGroup(name='UK wave potential',show='Wave sites' in layers,control='Wave sites' in layers)
     for forecast in forecasts:
-        try:
-            profile = Profile.from_forecast(forecast,when)
-        except KeyError:
-            continue
-        t = evaluate_thermals(profile)
-        lat,lon = forecast.location.latitude,forecast.location.longitude
-        if t.net_climb_knots is not None:
-            thermal_samples.append([lat,lon,max(0,t.net_climb_knots)])
-        if t.cloud_base_ft_amsl is not None:
-            cloud_samples.append([lat,lon,t.cloud_base_ft_amsl])
-        label = html.escape(forecast.location.name)
-        climb = 'Unavailable' if t.net_climb_knots is None else f'{t.net_climb_knots:.1f} kt'
-        base = 'Unavailable' if t.cloud_base_ft_amsl is None else f'{t.cloud_base_ft_amsl:.0f} ft AMSL'
-        folium.CircleMarker([lat,lon],radius=4,color='#d7783f',fill=True,tooltip=f'{label}: {climb}',
-                            popup=f'{label}<br>Net climb estimate: {climb}<br>Cloud base: {base}').add_to(thermal_group)
+        try: profile=Profile.from_forecast(forecast,when)
+        except KeyError: continue
+        t=evaluate_thermals(profile); lat,lon=forecast.location.latitude,forecast.location.longitude
+        if t.net_climb_knots is not None: thermal_samples.append([lat,lon,t.net_climb_knots])
+        if t.cloud_base_ft_amsl is not None: cloud_samples.append([lat,lon,t.cloud_base_ft_amsl])
+        label=html.escape(forecast.location.name)
+        climb='Unavailable' if t.net_climb_knots is None else f'{t.net_climb_knots:.1f} kt'
+        base='Unavailable' if t.cloud_base_ft_amsl is None else f'{t.cloud_base_ft_amsl:.0f} ft AMSL'
+        folium.CircleMarker([lat,lon],radius=3,color=thermal_colour(t.net_climb_knots or 0),fill=True,
+            tooltip=folium.Tooltip(f'{label}: {climb} net climb; potential base {base}. Radiation/parcel estimates; inspect the sounding before choosing a task.'),
+            popup=f'{label}<br>Net climb estimate: {climb}<br>Cloud base: {base}').add_to(thermal_group)
         if forecast.location.key.startswith('ridge:'):
-            ridge = WAVE_RIDGES[forecast.location.key.split(':',1)[1]]
-            wave = evaluate_wave(profile,ridge)
-            waves.append(wave)
-            colour = '#7653a1' if wave.complete and wave.score is not None and wave.score>=75 else '#82909a'
-            score = 'Unavailable' if wave.score is None else f'{wave.score:.0f}/100'+('' if wave.complete else ' · provisional')
+            ridge=WAVE_RIDGES[forecast.location.key.split(':',1)[1]]
+            wave=evaluate_wave(profile,ridge); waves.append(wave)
+            colour='#7653a1' if wave.complete and wave.score is not None and wave.score>=75 else '#82909a'
+            score='Unavailable' if wave.score is None else f'{wave.score:.0f}/100'+('' if wave.complete else ' · provisional')
             folium.CircleMarker([lat,lon],radius=8,color=colour,fill=True,fill_opacity=.85,
-                                tooltip=f'{label}: {score}',popup=f'{label}<br>{score}<br>Approximate ridge anchor').add_to(wave_group)
-            if wave.wind_from_deg is not None and wave.score is not None and wave.score >= 50:
-                spacing = min(15,max(3,(wave.characteristic_scale_km or 8)))
+                tooltip=folium.Tooltip(f'{label}: {score}. A heuristic wave score at an approximate ridge anchor; check stability and wind shear.'),
+                popup=f'{label}<br>{score}<br>Approximate ridge anchor').add_to(wave_group)
+            if wave.wind_from_deg is not None and wave.score is not None and wave.score>=50:
+                spacing=min(15,max(3,wave.characteristic_scale_km or 8))
                 for n in (1,2,3):
-                    a,b = _destination(lat,lon,wave.wind_from_deg+180,n*spacing)
-                    ends = [_destination(a,b,wave.wind_from_deg+side,4) for side in (-90,90)]
+                    a,b=_destination(lat,lon,wave.wind_from_deg+180,n*spacing)
+                    ends=[_destination(a,b,wave.wind_from_deg+side,4) for side in (-90,90)]
                     folium.PolyLine(ends,color=colour,weight=3,opacity=.55,dash_array='5,5',
-                                    tooltip='Indicative lee orientation / Scorer scale; not predicted lift bands').add_to(wave_group)
-    heat = interpolate_map_samples(thermal_samples) if 'Thermals' in layers else []
-    if heat:
-        heat_layer = HeatMap([[a,b,min(v,6)/6] for a,b,v in heat],radius=18,blur=20,min_opacity=.15,
-                              gradient={.2:'#e1c35e',.55:'#df8e43',1:'#a33d2f'})
-        heat_layer.default_js = [('leaflet-heat','https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.js')]
-        heat_layer.add_to(thermal_group)
-    cloud_colour = LinearColormap(['#e6f5f6','#77bdc8','#2b82a3','#344781'],vmin=1500,vmax=8000)
+                        tooltip=folium.Tooltip('Indicative downwind orientation and Scorer length scale. These bars do not locate resolved lift or rotor.')).add_to(wave_group)
+    raster=thermal_overlay_data(thermal_samples)
+    if raster is not None:
+        image,bounds=raster
+        # Folium's built-in reprojection returns floats that Branca normalizes
+        # per channel. Cast explicitly to preserve the absolute colour scale.
+        image=np.rint(mercator_transform(image,(bounds[0][0],bounds[1][0]),origin='upper')).astype(np.uint8)
+        folium.raster_layers.ImageOverlay(image,bounds=bounds,origin='upper',mercator_project=False,
+            opacity=1.,interactive=False,pixelated=False,zindex=200).add_to(thermal_group)
+    # Always build the thermal layer so the map control can enable it while the sidebar starts off.
+    thermal_group.add_to(map_view)
+    add_colour_legend(map_view,'Net climb · kt: blue <1 · yellow 3 · red ≥5.5',
+                      [f'{c} {v/5.5*100:.2f}%' for v,c in THERMAL_STOPS],0,5.5,layer=thermal_group)
+    synchronizer=MacroElement()
+    synchronizer.layer=thermal_group
+    synchronizer._template=Template('''{% macro script(this, kwargs) %}
+        {{this._parent.get_name()}}.on('overlayadd overlayremove', function(event) {
+            if (event.layer !== {{this.layer.get_name()}} || !window.__GLOBAL_DATA__) return;
+            var state = window.__GLOBAL_DATA__;
+            state.selected_tags = (state.selected_tags || []).filter(function(tag) {
+                return !String(tag).startsWith('duo:thermals:');
+            });
+            state.selected_tags.push('duo:thermals:' + (event.type === 'overlayadd' ? 'on' : 'off'));
+        });
+    {% endmacro %}''')
+    synchronizer.add_to(map_view)
+    cloud_colour=LinearColormap(['#e6f5f6','#77bdc8','#2b82a3','#344781'],vmin=1500,vmax=8000)
     if 'Cloud base' in layers:
         for lat,lon,value in interpolate_map_samples(cloud_samples):
             folium.Rectangle([[lat-.09,lon-.09],[lat+.09,lon+.09]],stroke=False,fill=True,fill_opacity=.38,
-                              fill_color=cloud_colour(value),tooltip=f'Interpolated potential base {value:.0f} ft AMSL').add_to(cloud_group)
-        add_colour_legend(map_view,'Potential cloud base · ft AMSL',
-                          ['#e6f5f6','#77bdc8','#2b82a3','#344781'],1500,8000)
-    for group in (thermal_group,cloud_group,wave_group):
-        group.add_to(map_view)
-    if 'Thermals' in layers:
-        add_colour_legend(map_view,'Net thermal climb estimate · kt',
-                          ['#e1c35e','#df8e43','#a33d2f'],0,6)
-    routes = folium.FeatureGroup(name='Duo Discus task templates',show='Routes' in layers,control='Routes' in layers)
-    for route in ROUTES.values():
-        coordinates = [(p.latitude,p.longitude) for p in route.waypoints]
-        if route.key == 'A':
-            folium.Polygon(coordinates,color='#243f5a',weight=3,fill_opacity=.03,tooltip=route.name).add_to(routes)
-        else:
-            _,bearing = distance_bearing(*route.waypoints)
-            polygon = [_destination(*coordinates[0],bearing-90,2),_destination(*coordinates[1],bearing-90,2),
-                       _destination(*coordinates[1],bearing+90,2),_destination(*coordinates[0],bearing+90,2)]
-            folium.Polygon(polygon,color='#2c8c83',fill_opacity=.12,tooltip='Snowdonia–South Wales: schematic corridor').add_to(routes)
-            folium.PolyLine(coordinates,color='#2c8c83',weight=3,tooltip=route.name).add_to(routes)
-    routes.add_to(map_view)
-    convergence_group = folium.FeatureGroup(name='Convergence ribbons',show='Convergence' in layers,control='Convergence' in layers)
+                fill_color=cloud_colour(value),tooltip=folium.Tooltip(f'Potential cloud base {value:.0f} ft AMSL. Compare with the mixing top; blue thermals may stop below this height.')).add_to(cloud_group)
+        add_colour_legend(map_view,'Potential cloud base · ft AMSL',['#e6f5f6','#77bdc8','#2b82a3','#344781'],1500,8000)
+    cloud_group.add_to(map_view); wave_group.add_to(map_view)
+    if 'BGA turnpoints' in layers and turnpoints:
+        catalog_layer=folium.FeatureGroup(name='BGA turnpoints · click to select')
+        marker_data=[]
+        for point in turnpoints:
+            elevation='unknown elevation' if point.elevation_m is None else f'{point.elevation_m:.0f} m AMSL'
+            label=html.escape(f'{"BGA" if point.official else "Imported"} {point.code} · {point.name}')
+            marker_data.append([point.latitude,point.longitude,point.code,label,elevation])
+        # One compact dataset avoids rendering thousands of Python/Jinja marker
+        # objects on every Streamlit rerun; Leaflet still creates each tooltip.
+        cluster=FastMarkerCluster(marker_data,name='BGA marker clusters',control=False,
+            options={'disableClusteringAtZoom':10},callback="""function(row) {
+                var marker = L.marker([row[0], row[1]], {bgaCode: row[2],
+                    icon: L.divIcon({className: 'empty', iconSize: [12,12], iconAnchor: [6,6],
+                        html: '<div data-bga-code="' + row[2] + '" aria-label="' + row[3] +
+                            '" style="width:8px;height:8px;border:2px solid white;border-radius:50%;background:#395b75"></div>'})});
+                marker.bindTooltip(row[3] + ' · ' + row[4] +
+                    '. In Add to task mode, click to use this point as the selected task role.', {sticky: true});
+                return marker;
+            }""")
+        cluster.default_js=[('markerclusterjs','https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js')]
+        cluster.default_css=[('markerclustercss','https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/MarkerCluster.css'),
+                             ('markerclusterdefaultcss','https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css')]
+        cluster.add_to(catalog_layer); catalog_layer.add_to(map_view)
+        # MarkerCluster can replace the event's source layer as events bubble.
+        # Carry the selected catalog identifier explicitly, using the component's
+        # returned tag channel, instead of guessing a code from screen coordinates.
+        marker_events=MacroElement(); marker_events.cluster=cluster
+        marker_events._template=Template('''{% macro script(this, kwargs) %}
+            {{this.cluster.get_name()}}.eachLayer(function(marker) {
+                marker.on('click', function() {
+                    var state = window.__GLOBAL_DATA__;
+                    if (!state) return;
+                    state.selected_tags = (state.selected_tags || []).filter(function(tag) {
+                        return !String(tag).startsWith('duo:point:');
+                    });
+                    state.selected_tags.push('duo:point:' + marker.options.bgaCode + ':' + Date.now());
+                    {{this._parent.get_name()}}.fire('moveend');
+                });
+            });
+        {% endmacro %}''')
+        marker_events.add_to(map_view)
+    if task:
+        active=folium.FeatureGroup(name=f'Active task · {task_distance(task):.0f} km')
+        if len(task)>1:
+            folium.PolyLine([(p.latitude,p.longitude) for p in task],color='#223c58',weight=4,
+                tooltip=folium.Tooltip('Your selected task legs, in sequence. The task verdict uses sampled corridor weather; this line is not an airspace-cleared route.')).add_to(active)
+        for i,point in enumerate(task):
+            role='Start' if i==0 else ('Finish' if i==len(task)-1 else 'Turnpoint')
+            folium.Marker([point.latitude,point.longitude],
+                icon=folium.DivIcon(html=f'<div style="background:#193d59;color:white;border:2px solid white;border-radius:50%;width:26px;height:26px;text-align:center;line-height:22px;font-weight:700">{i+1}</div>',icon_size=(28,28),icon_anchor=(14,14)),
+                tooltip=folium.Tooltip(html.escape(f'{role} {i+1}: {point.code} · {point.name}. Reorder or remove this point in the task builder.'))).add_to(active)
+        active.add_to(map_view)
+    convergence_group=folium.FeatureGroup(name='Convergence ribbons',show='Convergence' in layers,control='Convergence' in layers)
     if convergence is not None:
-        cells = {(c.row,c.column):c for c in convergence.cells}
+        cells={(c.row,c.column):c for c in convergence.cells}
         for key,cell in cells.items():
-            label = html.escape(f'{cell.classification} · {cell.surface_s1:.2e} s⁻¹ · ΔTd {cell.dewpoint_gradient_k_per_100km:.1f} K/100 km')
-            folium.CircleMarker([cell.latitude,cell.longitude],radius=5,color='#d04489',fill=True,tooltip=label).add_to(convergence_group)
+            label=html.escape(f'{cell.classification} · {cell.surface_s1:.2e} s⁻¹ · ΔTd {cell.dewpoint_gradient_k_per_100km:.1f} K/100 km. A coarse-grid front candidate, not a resolved lift line.')
+            folium.CircleMarker([cell.latitude,cell.longitude],radius=5,color='#d04489',fill=True,tooltip=folium.Tooltip(label)).add_to(convergence_group)
             for dr,dc in ((0,1),(1,-1),(1,0),(1,1)):
-                neighbour = cells.get((key[0]+dr,key[1]+dc))
+                neighbour=cells.get((key[0]+dr,key[1]+dc))
                 if neighbour:
                     folium.PolyLine([(cell.latitude,cell.longitude),(neighbour.latitude,neighbour.longitude)],
-                                    color='#d04489',weight=8,opacity=.55,tooltip=label).add_to(convergence_group)
+                        color='#d04489',weight=8,opacity=.55,tooltip=folium.Tooltip(label)).add_to(convergence_group)
     convergence_group.add_to(map_view)
-    metars = folium.FeatureGroup(name='METAR wind barbs / flight category',show='METAR' in layers,control='METAR' in layers)
+    metars=folium.FeatureGroup(name='METAR wind barbs / flight category',show='METAR' in layers,control='METAR' in layers)
     if aviation:
         for station,report in aviation.metars.items():
-            if report.latitude is None or report.longitude is None:
-                continue
-            colour = '#8a9298' if report.stale else CATEGORY_COLOURS[report.flight_category]
-            text = html.escape(f'{station} · {report.flight_category} · {report.observed_at:%H:%M UTC}'+(' · STALE' if report.stale else ''))
-            raw = html.escape(str(report.raw.get('rawOb','')))
-            taf = aviation.tafs.get(station)
-            taf_text = '' if taf is None else '<hr>'+html.escape(str(taf.raw.get('rawTAF','')))
-            folium.Marker([report.latitude,report.longitude],icon=folium.DivIcon(html=wind_barb_svg(report.wind.direction_deg,report.wind.speed_knots,colour),icon_size=(44,44),icon_anchor=(22,22)),
-                          tooltip=text,popup=folium.Popup(raw+taf_text,max_width=420)).add_to(metars)
+            if report.latitude is None or report.longitude is None: continue
+            colour='#8a9298' if report.stale else CATEGORY_COLOURS[report.flight_category]
+            tip=html.escape(f'{station} · {report.flight_category} · {report.observed_at:%H:%M UTC}'+(' · STALE' if report.stale else '')+'. Wind barb points into the wind; click for raw METAR/TAF and check report age.')
+            taf=aviation.tafs.get(station)
+            popup=html.escape(str(report.raw.get('rawOb','')))+('' if taf is None else '<hr>'+html.escape(str(taf.raw.get('rawTAF',''))))
+            folium.Marker([report.latitude,report.longitude],
+                icon=folium.DivIcon(html=wind_barb_svg(report.wind.direction_deg,report.wind.speed_knots,colour),icon_size=(44,44),icon_anchor=(22,22)),
+                tooltip=folium.Tooltip(tip),popup=folium.Popup(popup,max_width=420)).add_to(metars)
     metars.add_to(map_view)
     if radar:
-        folium.TileLayer(radar['url'],name='RainViewer observed radar',attr='Radar © RainViewer',
-                         overlay=True,opacity=.55,max_native_zoom=7,max_zoom=17,show='Radar' in layers).add_to(map_view)
+        folium.TileLayer(radar['url'],name='RainViewer observed radar',attr='Radar © RainViewer',overlay=True,
+            opacity=.55,max_native_zoom=7,max_zoom=17,show='Radar' in layers).add_to(map_view)
     folium.LayerControl(collapsed=False).add_to(map_view)
     return map_view,rank_wave_sites(waves)
 
 
 def main():
+    from planning_ui import (active_task, briefing_panel, catalog_panel, current_catalog,
+                             process_map_event, task_builder, task_result, task_weather, weather_table)
+    from task_planning import assess_task, classify_day, validate_task
     st.set_page_config(page_title='Duo · UK soaring weather',page_icon='⛅',layout='wide',initial_sidebar_state='expanded')
     st.markdown('<style>.block-container{padding-top:1.5rem}div[data-testid="stMetric"]{background:#fff;border:1px solid #dce5e8;border-radius:12px;padding:12px}'
                 'h1{letter-spacing:-.04em}section[data-testid="stSidebar"]{border-right:1px solid #dce5e8}</style>',unsafe_allow_html=True)
-    now = datetime.now(UTC)
-    recorded_path = os.environ.get('DUO_DASHBOARD_SNAPSHOT')
-    recorded = load_bundle(Path(recorded_path)) if recorded_path else None
-    anchor = recorded.created_at if recorded else now
+    now=datetime.now(UTC)
+    recorded_path=os.environ.get('DUO_DASHBOARD_SNAPSHOT')
+    try: recorded=load_bundle(Path(recorded_path)) if recorded_path else None
+    except (OSError,ValueError,KeyError) as exc:
+        st.error(f'Recorded forecast could not be read: {exc}'); return
+    anchor=recorded.created_at if recorded else now
     st.title('Duo · UK soaring weather')
-    st.caption('G-CKML  /  THERMALS · WAVE · CONVERGENCE')
+    st.caption('G-CKML  /  YOUR TASK · THERMALS · WAVE · CONVERGENCE')
     if recorded:
-        st.info(f'Recorded forecast snapshot · retrieved {anchor.astimezone(LOCAL_TIMEZONE):%d %b %Y %H:%M %Z}. Inspector uses recorded sites.')
+        st.info(f'Recorded forecast snapshot · retrieved {anchor.astimezone(LOCAL_TIMEZONE):%d %b %Y %H:%M %Z}. Task weather uses stored samples within 15 km; gaps remain unavailable.')
+    catalog=current_catalog()
+    default_thermal=st.query_params.get('thermals','off')=='on'
+    if 'map_layers' not in st.session_state:
+        st.session_state['map_layers']=['BGA turnpoints','Wave sites','METAR','Radar']+(['Thermals'] if default_thermal else [])
+    def thermal_default_changed():
+        enabled=st.session_state['thermal_default']
+        st.query_params['thermals']='on' if enabled else 'off'
+        layers=[layer for layer in st.session_state['map_layers'] if layer!='Thermals']
+        st.session_state['map_layers']=layers+(['Thermals'] if enabled else [])
     with st.sidebar:
         st.subheader('Forecast controls')
-        model_key = st.selectbox('Forecast model',list(MODEL_LABELS),format_func=MODEL_LABELS.get)
-        default_day = 1 if anchor.astimezone(LOCAL_TIMEZONE).hour >= 13 else 0
-        day_index = st.selectbox('Forecast day',list(range(6)),index=default_day,
-                                format_func=lambda d:f'Day {d} · {(anchor.astimezone(LOCAL_TIMEZONE).date()+timedelta(days=d)):%a %d %b}')
-        hour = st.slider('Local time · Europe/London',9,19,13,format='%d:00')
-        loading = st.radio('Wing loading',['dry','ballasted'],format_func=lambda s:'Dry · 34 kg/m²' if s=='dry' else 'Ballasted · 43 kg/m²',horizontal=True)
-        layers = st.multiselect('Map layers',['Thermals','Cloud base','Convergence','Wave sites','METAR','Routes','Radar'],
-                                default=['Thermals','Wave sites','METAR','Routes','Radar'])
-        if st.button('Refresh weather',width='stretch'):
-            st.cache_data.clear()
-            st.rerun()
-        st.caption('Thermals are radiation/parcel estimates. Missing data stays unavailable.')
-    day = anchor.astimezone(LOCAL_TIMEZONE).date()+timedelta(days=day_index)
-    when = utc_datetime(datetime.combine(day,time(hour),LOCAL_TIMEZONE))
-    bucket = int(now.timestamp()//900)
+        model_key=st.selectbox('Forecast model',list(MODEL_LABELS),format_func=MODEL_LABELS.get,key='forecast_model',
+            help='Choose one model for the displayed weather and task calculations. UKMO covers about two days; ECMWF provides the longer-range fallback as an explicit selection.')
+        default_day=1 if anchor.astimezone(LOCAL_TIMEZONE).hour>=13 else 0
+        day_index=st.selectbox('Forecast day',list(range(6)),index=default_day,key='forecast_day',
+            format_func=lambda d:f'Day {d} · {(anchor.astimezone(LOCAL_TIMEZONE).date()+timedelta(days=d)):%a %d %b}',
+            help='Select the day to plan. Each date keeps its own saved task; a model that does not cover that day will show missing data.')
+        hour=st.slider('Local time · Europe/London',9,19,13,format='%d:00',key='forecast_hour',
+            help='Select the map and sounding hour, using BST in summer and GMT in winter. Task assessment still checks the whole 10:00–18:00 soaring window.')
+        loading=st.radio('Wing loading',['dry','ballasted'],format_func=lambda v:'Dry · 34 kg/m²' if v=='dry' else 'Ballasted · 43 kg/m²',
+            horizontal=True,key='wing_loading',help='Select the Duo Discus polar used for MacCready cruise and task ground speed. The thermal estimate retains the specified 1.6 kt circling sink.')
+        st.toggle('Thermals on by default',value=default_thermal,key='thermal_default',on_change=thermal_default_changed,
+            help='Choose whether the thermal overlay starts enabled. This preference is stored in the page URL, so bookmarking or reopening that URL preserves it.')
+        layers=st.multiselect('Map layers',['Thermals','Cloud base','Convergence','Wave sites','BGA turnpoints','METAR','Radar'],key='map_layers',
+            help='Toggle weather and BGA layers. Blue-to-red thermals show fixed net-climb values; only your active task is drawn, and convergence requests a larger grid.')
+        mode=st.radio('Map clicks',['Inspect weather','Add to task'],key='map_click_mode',
+            help='Inspect changes the sounding only. Add mode appends a clicked BGA marker or custom coordinate using the builder’s Add as role.')
+        if st.button('Refresh weather',width='stretch',help='Clear weather caches and request fresh data. Forecast retrieval is paced to respect provider quotas.'):
+            st.cache_data.clear(); st.rerun()
+        st.caption('Thermals are radiation/parcel estimates. Hover over controls and column headings for guidance.')
+    day=anchor.astimezone(LOCAL_TIMEZONE).date()+timedelta(days=day_index)
+    when=utc_datetime(datetime.combine(day,time(hour),LOCAL_TIMEZONE))
+    bucket=int(now.timestamp()//900)
+    with st.sidebar:
+        with st.expander('Build / edit this day’s task',expanded=False): task_builder(catalog,day,location='sidebar')
+        if st.session_state.get('task_message'): st.caption(st.session_state['task_message'])
+        if st.session_state.get('task_error'): st.error(st.session_state.pop('task_error'))
+    points=active_task(day)
     if recorded:
-        forecasts = tuple(f for f in recorded.forecasts if f.model==FORECAST_MODELS[model_key].api_name)
-        errors = recorded.errors
+        forecasts=tuple(f for f in recorded.forecasts if f.model==FORECAST_MODELS[model_key].api_name); errors=recorded.errors
     else:
         with st.spinner('Loading regional and ridge forecasts…'):
-            batch = load_sites(model_key,bucket)
-            forecasts,errors = batch.forecasts,tuple(f.message for f in batch.failures)
-    if not forecasts:
-        st.error('No forecast data is available. '+('; '.join(errors[:3]) if errors else 'Choose another model or refresh.'))
-        return
-    aviation = radar = convergence = None
-    if 'METAR' in layers and not recorded:
-        aviation = load_aviation(int(now.timestamp()//60))
-    if 'Radar' in layers and not recorded:
+            batch=load_sites(model_key,bucket)
+            forecasts,errors=batch.forecasts,tuple(f.message for f in batch.failures)
+    if not forecasts: st.warning('No regional forecast is available for this model. The task builder and exports remain available.')
+    assessment=None; task_forecasts=()
+    if len(points)>=2:
         try:
-            radar = load_radar(int(now.timestamp()//300))
-        except (IngestionError,ValueError,KeyError) as exc:
-            st.warning(f'Radar unavailable: {exc}')
+            validate_task(points)
+            with st.spinner('Evaluating your task corridor and launch windows…'):
+                task_forecasts,failures=task_weather(points,forecasts,model_key,bucket,recorded=bool(recorded))
+                errors+=failures
+                assessment=assess_task(points,task_forecasts,day,loading,preference=(FORECAST_MODELS[model_key].api_name,))
+        except (ValueError,IngestionError) as exc: errors+=(f'Task: {exc}',)
+    combined=tuple({(f.location.key,f.model):f for f in (*forecasts,*task_forecasts)}.values())
+    aviation=radar=convergence=None
+    if 'METAR' in layers and not recorded: aviation=load_aviation(int(now.timestamp()//60))
+    if 'Radar' in layers and not recorded:
+        try: radar=load_radar(int(now.timestamp()//300))
+        except (IngestionError,ValueError,KeyError) as exc: st.warning(f'Radar unavailable: {exc}')
     if 'Convergence' in layers:
-        if recorded:
-            grid_forecasts = tuple(f for f in recorded.grid_forecasts if f.model==FORECAST_MODELS[model_key].api_name)
+        if recorded: grid_forecasts=tuple(f for f in recorded.grid_forecasts if f.model==FORECAST_MODELS[model_key].api_name)
         else:
             with st.spinner('Loading the England and Wales convergence grid…'):
-                batch = load_grid(model_key,bucket)
-                grid_forecasts = batch.forecasts
-                errors += tuple(f.message for f in batch.failures)
-        convergence = evaluate_convergence(ForecastBundle(forecasts,grid_forecasts,.5,(),now),when,
-                                           preference=(FORECAST_MODELS[model_key].api_name,))
-        if convergence is None or convergence.valid_surface_cells < .8*convergence.total_cells:
+                batch=load_grid(model_key,bucket); grid_forecasts=batch.forecasts; errors+=tuple(f.message for f in batch.failures)
+        convergence=evaluate_convergence(ForecastBundle(combined,grid_forecasts,.5,(),now),when,
+                                         preference=(FORECAST_MODELS[model_key].api_name,))
+        if convergence is None or convergence.valid_surface_cells<.8*convergence.total_cells:
             st.warning('Convergence coverage is incomplete at this hour.')
-    profile_by_key = {}
-    for forecast in forecasts:
+    profiles={}
+    for forecast in combined:
         try:
-            p = Profile.from_forecast(forecast,when)
-            if p.values.get('temperature_2m') is not None:
-                profile_by_key[forecast.location.key] = p
-        except KeyError:
-            continue
-    local_profile = profile_by_key.get('region:shropshire')
-    local_thermal = evaluate_thermals(local_profile) if local_profile else None
-    metrics = st.columns(4)
-    metrics[0].metric('LONG MYND · NET CLIMB','—' if local_thermal is None or local_thermal.net_climb_knots is None else f'{local_thermal.net_climb_knots:.1f} kt')
-    metrics[1].metric('POTENTIAL CLOUD BASE','—' if local_thermal is None or local_thermal.cloud_base_ft_amsl is None else f'{local_thermal.cloud_base_ft_amsl:,.0f} ft')
-    metrics[2].metric('USABLE MIXING TOP','—' if local_thermal is None or local_thermal.usable_top_ft_amsl is None else f'{local_thermal.usable_top_ft_amsl:,.0f} ft')
-    metrics[3].metric('VALID TIME',when.astimezone(LOCAL_TIMEZONE).strftime('%H:%M %Z'),when.astimezone(LOCAL_TIMEZONE).strftime('%a %d %b'),delta_color='off')
-    if not profile_by_key:
-        st.warning('The selected model does not cover this hour. Choose another forecast day, time or model.')
-    map_tab,task_tab,wave_tab,quality_tab = st.tabs(['Weather map','Task planner','Wave watch','Data quality'])
+            profile=Profile.from_forecast(forecast,when)
+            if profile.values.get('temperature_2m') is not None: profiles[forecast.location.key]=profile
+        except KeyError: continue
+    local=profiles.get('region:shropshire'); thermal=evaluate_thermals(local) if local else None
+    metrics=st.columns(4)
+    metrics[0].metric('LONG MYND · NET CLIMB','—' if thermal is None or thermal.net_climb_knots is None else f'{thermal.net_climb_knots:.1f} kt',
+        help='Estimated convective climb after the 1.6 kt Duo Discus circling sink. Task decisions use the conservative soil-moisture estimate, which may be lower.')
+    metrics[1].metric('POTENTIAL CLOUD BASE','—' if thermal is None or thermal.cloud_base_ft_amsl is None else f'{thermal.cloud_base_ft_amsl:,.0f} ft',
+        help='Hennig condensation-height estimate in feet AMSL. Compare with usable mixing top; cumulus may not form if mixing ends below this height.')
+    metrics[2].metric('USABLE MIXING TOP','—' if thermal is None or thermal.usable_top_ft_amsl is None else f'{thermal.usable_top_ft_amsl:,.0f} ft',
+        help='Lower of the condensation height and mixing top, in feet AMSL. Task assessment subtracts terrain to check usable depth AGL.')
+    metrics[3].metric('VALID TIME',when.astimezone(LOCAL_TIMEZONE).strftime('%H:%M %Z'),when.astimezone(LOCAL_TIMEZONE).strftime('%a %d %b'),delta_color='off',
+        help='Time of the selected forecast column. Radar and METAR have separate observed timestamps, and the task engine assesses the full soaring window.')
+    origin=points[0].point if points and task_forecasts else MONITORING_ZONES['shropshire']
+    wave_signal=any(evaluate_wave(p,WAVE_RIDGES[key.split(':',1)[1]]).complete and
+                    (evaluate_wave(p,WAVE_RIDGES[key.split(':',1)[1]]).score or 0)>=75
+                    for key,p in profiles.items() if key.startswith('ridge:') and distance_bearing(origin,p.forecast.location)[0]<150)
+    classification=classify_day(combined,origin,day,loading,preference=(FORECAST_MODELS[model_key].api_name,),wave_available=wave_signal)
+    st.metric('Cross-country day estimate',classification.label,
+        help='Local weather capacity from conservative thermal climb, usable height and worst-direction wind with a 10% reserve. A 500 km label still requires a separately assessed 500 km corridor.')
+    st.caption(f'{classification.scope} · '+classification.explanation)
+    if not profiles: st.warning('The selected model does not cover this hour. Choose another day, time or model.')
+    map_tab,task_tab,wave_tab,bot_tab,quality_tab=st.tabs(['Weather map','Task planner','Wave watch','Help & Briefing Bot','Data quality'])
     with map_tab:
-        centre = st.session_state.get('map_centre',(53.3,-2.6))
-        map_view,waves = build_map(forecasts,when,layers=layers,aviation=aviation,radar=radar,convergence=convergence,
-                                   centre=centre,zoom=st.session_state.get('map_zoom',6))
-        interaction = st_folium(map_view,height=650,use_container_width=True,key='soaring_map',
-                                returned_objects=['last_clicked','center','zoom'])
-        if interaction.get('last_clicked'):
-            clicked = interaction['last_clicked']
-            coordinate = (round(clicked['lat'],3),round(clicked['lng'],3))
-            if st.session_state.get('inspector_coordinate') != coordinate:
-                st.session_state['inspector_coordinate'] = coordinate
-                st.session_state['inspector_selection'] = 'Map coordinate'
-        if interaction.get('center'):
-            st.session_state['map_centre'] = (interaction['center']['lat'],interaction['center']['lng'])
-        if interaction.get('zoom'):
-            st.session_state['map_zoom'] = interaction['zoom']
-        st.caption('Select layers in the sidebar; click the map to inspect a coordinate. Heatmaps interpolate samples within 75 km; wave bars show indicative lee orientation, not predicted lift. Cloud heights are AMSL.')
-        st.caption('METAR colours: VFR green · MVFR blue · IFR red · LIFR purple · unknown/stale grey. These categories do not replace UK VMC criteria.')
+        map_view,waves=build_map(combined,when,layers=layers,aviation=aviation,radar=radar,convergence=convergence,
+            task=points,turnpoints=catalog.turnpoints)
+        def on_map_change():
+            process_map_event(st.session_state.get('soaring_map',{}),catalog,day,st.session_state.get('map_click_mode','Inspect weather'))
+        interaction=st_folium(map_view,height=650,use_container_width=True,pixelated=False,key='soaring_map',on_change=on_map_change,
+            center=st.session_state.get('map_centre',(53.3,-2.6)),zoom=st.session_state.get('map_zoom',6),
+            returned_objects=['last_clicked','last_object_clicked','last_object_clicked_count','last_object_clicked_tooltip','center','zoom','selected_tags'])
+        # AppTest and initial component defaults do not invoke the browser callback.
+        if interaction and interaction!=st.session_state.get('last_map_event'):
+            old=active_task(day)
+            process_map_event(interaction,catalog,day,mode)
+            if active_task(day)!=old: st.rerun()
+        st.caption('No preset route is loaded automatically. Select Add to task to use BGA markers or map coordinates; numbered points and legs show only your active task.')
+        st.caption('Thermals: blue <1 kt · cyan light lift · yellow about 3 kt · orange strong · red ≥5.5 kt. The continuous colour field is bounded by sampled weather and the coastline.')
         if radar:
-            age = (now-radar['time']).total_seconds()/60
-            st.caption(f'Observed radar {radar["time"].astimezone(LOCAL_TIMEZONE):%H:%M %Z} · {age:.0f} minutes old'+(' · STALE' if age>30 else '')+' · radar time is independent of the forecast slider.')
+            age=(now-radar['time']).total_seconds()/60
+            st.caption(f'Observed radar {radar["time"].astimezone(LOCAL_TIMEZONE):%H:%M %Z} · {age:.0f} minutes old'+(' · STALE' if age>30 else '')+' · independent of the forecast slider.')
     with task_tab:
-        for route in ROUTES.values():
-            result = evaluate_task_day(route,forecasts,day,loading,preference=(FORECAST_MODELS[model_key].api_name,))
-            st.subheader(route.name)
-            st.caption(f'{result.route_distance_km:.0f} km actual route · estimated continuous soaring between 10:00 and 18:00 local')
-            st.dataframe(pd.DataFrame([{'Task':f'{km} km','Verdict':status.replace('_',' ')} for km,status in result.viability.items()]),hide_index=True,width='stretch')
-            with st.expander('Hourly leg speeds and assumptions'):
-                st.dataframe(pd.DataFrame([{'Time':r.valid_at.astimezone(LOCAL_TIMEZONE).strftime('%H:%M'),'Leg':r.leg,
-                                           'Ground km/h':r.groundspeed_kmh,'Cruise km/h':r.cruise_airspeed_kmh,'Net climb kt':r.net_climb_knots,
-                                           'Notes':'; '.join(r.notes)} for r in result.hourly_legs]),hide_index=True)
-                st.caption(' '.join(result.notes))
+        task_result(points,assessment)
+        with st.expander('Build, reorder or clear task',expanded=not points): task_builder(catalog,day,location='planner')
     with wave_tab:
         st.subheader('National wave potential')
-        st.dataframe(pd.DataFrame([{'Site':WAVE_RIDGES[w.site].point.name,'Score':w.score,
-                                   'Evidence':'Complete' if w.complete else 'Provisional','850 hPa ascent kt':w.uplift_850_knots,
-                                   '700 hPa ascent kt':w.uplift_700_knots,'N² s⁻²':w.brunt_vaisala_n2} for w in waves]),hide_index=True,width='stretch')
-        st.caption('A score is a heuristic potential index. Ridge anchors are approximate; low-resolution profiles cannot resolve rotor or individual wave crests.')
+        weather_table([{'Site':WAVE_RIDGES[w.site].point.name,'Score':w.score,'Evidence':'Complete' if w.complete else 'Provisional',
+                        '850 hPa ascent kt':w.uplift_850_knots,'700 hPa ascent kt':w.uplift_700_knots,'N² s⁻²':w.brunt_vaisala_n2} for w in waves],
+            {'Site':'Approximate named ridge anchor; it is not a surveyed wave entry point.','Score':'Heuristic score from flow alignment, shear, stability, Scorer decrease and model ascent.',
+             'Evidence':'Only complete evidence can trigger a wave alert. Missing vertical motion remains provisional.',
+             '850 hPa ascent kt':'Model vertical air motion, positive upward, converted using its returned units.',
+             '700 hPa ascent kt':'Model vertical air motion at 700 hPa; a coarse model cannot resolve individual wave crests.',
+             'N² s⁻²':'Brunt–Väisälä stability between 850 and 700 hPa. Positive values indicate static stability.'})
+        st.caption('Wave signals inform the briefing but do not add assumed lift to a thermal task calculation.')
+    with bot_tab:
+        briefing_panel(catalog,day,loading,model_key,bucket,combined,assessment,classification,waves,recorded=bool(recorded))
     with quality_tab:
-        st.write(f'{len(profile_by_key)}/{len(forecasts)} sites have surface temperature at the selected time.')
-        st.dataframe(pd.DataFrame([{'Location':f.location.name,'Retrieved UTC':f.fetched_at.isoformat(),
-                                   'Available through':str(f.available_through),'Unavailable fields':', '.join(f.unavailable_variables)} for f in forecasts]),hide_index=True)
-        if errors:
-            st.warning('\n'.join(dict.fromkeys(errors)))
+        catalog_panel(catalog)
+        st.divider(); st.subheader('Forecast quality')
+        st.write(f'{len(profiles)}/{len(combined)} sites have surface temperature at the selected time.')
+        weather_table([{'Location':f.location.name,'Retrieved UTC':f.fetched_at.isoformat(),'Available through':str(f.available_through),
+                        'Unavailable fields':', '.join(f.unavailable_variables)} for f in combined],
+            {'Location':'Requested regional, ridge or custom-task sample location.','Retrieved UTC':'API retrieval time, not the model initialization time.',
+             'Available through':'Last non-null surface-temperature hour; other fields may have a shorter usable range.',
+             'Unavailable fields':'Variables missing throughout this model response; calculations retain or explicitly estimate gaps as documented.'})
+        if errors: st.warning('\n'.join(dict.fromkeys(errors)))
         if aviation:
             st.write('METAR unavailable:',', '.join(aviation.missing_metars) or 'None')
             st.write('TAF unavailable:',', '.join(aviation.missing_tafs) or 'None')
-            if aviation.failures:
-                st.warning('; '.join(f.message for f in aviation.failures))
+            if aviation.failures: st.warning('; '.join(f.message for f in aviation.failures))
         st.caption('Use official aviation forecasts, current airspace and the aircraft flight manual for flight decisions.')
     with st.sidebar:
-        st.divider()
-        st.subheader('Sounding inspector')
-        options = ['Map coordinate']+[f.location.key for f in forecasts]
-        labels = {f.location.key:f.location.name for f in forecasts}
-        initial = options.index('region:shropshire') if 'region:shropshire' in options else 1
-        selection = st.selectbox('Waypoint or clicked coordinate',options,
-                                  index=None if 'inspector_selection' in st.session_state else initial,
-                                  format_func=lambda key:labels.get(key,'Map coordinate'),key='inspector_selection')
-        coordinate = st.session_state.get('inspector_coordinate',(52.518,-2.880))
-        if selection == 'Map coordinate':
+        st.divider(); st.subheader('Sounding inspector')
+        choices=[f for f in combined if not f.location.key.startswith('corridor:')]
+        if not choices:
+            st.info('No sounding data for the selected model.'); return
+        options=['Map coordinate']+[f.location.key for f in choices]
+        labels={f.location.key:f.location.name for f in choices}
+        if st.session_state.get('inspector_selection') not in options: st.session_state.pop('inspector_selection',None)
+        initial=options.index('region:shropshire') if 'region:shropshire' in options else 1
+        selection=st.selectbox('Waypoint or clicked coordinate',options,index=None if 'inspector_selection' in st.session_state else initial,
+            format_func=lambda key:labels.get(key,'Map coordinate'),key='inspector_selection',
+            help='Inspect a selected waypoint or the last map click. The plot shows pressure-level temperature/dewpoint and the local-day thermal, cloud, wind and rain evolution.')
+        coordinate=st.session_state.get('inspector_coordinate',(52.518,-2.880))
+        if selection=='Map coordinate':
             st.caption(f'{coordinate[0]:.3f}° N, {abs(coordinate[1]):.3f}° '+('W' if coordinate[1]<0 else 'E'))
-            if not 49 <= coordinate[0] <= 61 or not -9 <= coordinate[1] <= 3:
-                st.info('Select a coordinate in the UK map area.')
-                return
+            if not 49<=coordinate[0]<=61.5 or not -9<=coordinate[1]<=2.5:
+                st.info('Select a coordinate in the UK map area.'); return
             if recorded:
-                chosen = min(forecasts,key=lambda f:(f.location.latitude-coordinate[0])**2+(f.location.longitude-coordinate[1])**2)
-                st.caption('Recorded mode: nearest stored waypoint, not a fresh coordinate forecast.')
+                chosen=min(choices,key=lambda f:distance_bearing(GeoPoint('click','Click',*coordinate),f.location)[0])
+                st.caption('Recorded inspector: nearest stored waypoint, not a fresh coordinate forecast.')
             else:
-                try:
-                    chosen = load_coordinate(*coordinate,model_key,bucket)
+                try: chosen=load_coordinate(*coordinate,model_key,bucket)
                 except IngestionError as exc:
-                    st.error(f'Coordinate forecast unavailable: {exc}')
-                    return
+                    st.error(f'Coordinate forecast unavailable: {exc}'); return
+        elif selection is not None: chosen=next(f for f in choices if f.location.key==selection)
         else:
-            chosen = next(f for f in forecasts if f.location.key==selection)
-        try:
-            selected_profile = Profile.from_forecast(chosen,when)
+            st.info('Choose a sounding location.'); return
+        try: selected_profile=Profile.from_forecast(chosen,when)
         except KeyError:
-            st.info('No sounding at this hour.')
-            return
-        if not selected_profile.levels:
-            st.info('Pressure-level sounding unavailable.')
+            st.info('No sounding at this hour.'); return
+        if not selected_profile.levels: st.info('Pressure-level sounding unavailable.')
         else:
             st.plotly_chart(sounding_figure(selected_profile),width='stretch',key='sounding')
-            st.caption('Skew-T: temperature orange, dewpoint green. Dry/saturated adiabats are guides; hover for actual °C.')
+            st.caption('Skew-T: temperature orange, dewpoint green. Hover for actual °C; dry/saturated adiabats are guides.')
         st.plotly_chart(meteogram_figure(chosen,day),width='stretch',key='meteogram')
-        diagnostic = evaluate_thermals(selected_profile)
         with st.expander('Profile assumptions'):
-            for note in diagnostic.notes:
-                st.write(note)
+            for note in evaluate_thermals(selected_profile).notes: st.write(note)
 
 
-if __name__ == '__main__':
+if __name__=='__main__':
     main()
