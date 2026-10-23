@@ -1,0 +1,151 @@
+name: Soaring watchdog
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'  # 00:17, 06:17, 12:17, 18:17 UTC; GitHub may delay runs.
+  workflow_dispatch:
+    inputs:
+      send:
+        description: Send qualifying notifications (otherwise render a dry-run briefing)
+        type: boolean
+        default: false
+      restore_run_id:
+        description: Optional verified recovery run ID; reconcile later sends before using older state
+        type: string
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: soaring-watchdog-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Find durable alert state
+        id: previous
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          RECOVERY_RUN_ID: ${{ inputs.restore_run_id }}
+        with:
+          script: |
+            const repo = context.repo;
+            const current = context.runId;
+            const workflow = 'soaring_watchdog.yml';
+            const branch = context.payload.repository.default_branch;
+            const runs = (await github.rest.actions.listWorkflowRuns({ ...repo,
+              workflow_id: workflow, branch, per_page: 100 })).data.workflow_runs;
+            const recovery = process.env.RECOVERY_RUN_ID;
+            let candidates;
+            if (recovery) {
+              if (!/^\d+$/.test(recovery)) throw new Error('Recovery run ID must be numeric');
+              const run = (await github.rest.actions.getWorkflowRun({ ...repo, run_id: Number(recovery) })).data;
+              const currentRun = (await github.rest.actions.getWorkflowRun({ ...repo, run_id: current })).data;
+              if (run.workflow_id !== currentRun.workflow_id || run.head_branch !== branch)
+                throw new Error('Recovery state must belong to this workflow and default branch');
+              candidates = [run];
+            } else {
+              // Include this run's previous attempt artifacts when rerunning a job.
+              candidates = runs.filter(r => r.id !== current).sort((a,b) =>
+                Date.parse(b.updated_at) - Date.parse(a.updated_at)).slice(0,1);
+              candidates.push({id: current});
+            }
+            const found = [];
+            for (const run of candidates) {
+              const artifacts = (await github.rest.actions.listWorkflowRunArtifacts({ ...repo,
+                run_id: run.id, per_page: 100 })).data.artifacts;
+              found.push(...artifacts.filter(a => a.name === 'soaring-watchdog-state' && !a.expired)
+                .map(a => ({ ...a, run_id: run.id })));
+            }
+            found.sort((a,b) => Date.parse(b.created_at)-Date.parse(a.created_at));
+            const state = found[0];
+            const previous = candidates.find(r => r.id !== current);
+            if (!state) {
+              if (previous || recovery || Number(process.env.GITHUB_RUN_ATTEMPT || 1) > 1)
+                throw new Error('Previous state unavailable; refusing a fresh alert ledger. Restore a verified state artifact.');
+              core.setOutput('run_id', '');
+              return;
+            }
+            if (!recovery && previous && state.run_id !== previous.id &&
+                Date.parse(state.created_at) < Date.parse(previous.updated_at))
+              throw new Error('A later run has no recoverable ledger; manual reconciliation required');
+            core.setOutput('run_id', String(state.run_id));
+      - name: Restore previous ledger
+        if: steps.previous.outputs.run_id != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: soaring-watchdog-state
+          path: var/restored-state
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.previous.outputs.run_id }}
+      - name: Validate or initialize ledger
+        id: state
+        env:
+          PREVIOUS_RUN_ID: ${{ steps.previous.outputs.run_id }}
+        run: |
+          mkdir -p var
+          if [ -n "$PREVIOUS_RUN_ID" ]; then
+            python scripts/watchdog_state.py verify --database var/restored-state/alerts.sqlite3
+            cp var/restored-state/alerts.sqlite3 var/duo_discus.sqlite3
+          else
+            python scripts/watchdog_state.py initialize
+          fi
+          python scripts/watchdog_state.py verify
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Run offline tests
+        run: python -m unittest discover -s tests -v
+      - name: Evaluate and dispatch
+        env:
+          SEND_NOTIFICATIONS: ${{ github.event_name == 'schedule' || inputs.send }}
+          DUO_ALERT_CHANNELS: ${{ vars.DUO_ALERT_CHANNELS || 'email,whatsapp' }}
+          DUO_EMAIL_TO: ${{ vars.DUO_EMAIL_TO || 'manorhousesurveyors@gmail.com' }}
+          SMTP_USERNAME: ${{ vars.SMTP_USERNAME || 'manorhousesurveyors@gmail.com' }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          DUO_WHATSAPP_TO: ${{ vars.DUO_WHATSAPP_TO || '+447976125887' }}
+          WHATSAPP_PROVIDER: ${{ vars.WHATSAPP_PROVIDER || 'callmebot' }}
+          CALLMEBOT_API_KEY: ${{ secrets.CALLMEBOT_API_KEY }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_WHATSAPP_FROM: ${{ vars.TWILIO_WHATSAPP_FROM }}
+          TWILIO_CONTENT_SID: ${{ vars.TWILIO_CONTENT_SID }}
+        run: |
+          if [ "$SEND_NOTIFICATIONS" = "true" ]; then
+            python alerts.py --send
+          else
+            python alerts.py --dry-run
+          fi
+      - name: Make a consistent SQLite backup
+        id: backup
+        if: always() && steps.state.outcome == 'success'
+        run: python scripts/watchdog_state.py backup
+      - name: Persist delivery ledger even after send errors
+        if: always() && steps.backup.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: soaring-watchdog-state
+          path: var/watchdog-state/
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
+      - name: Save evaluation reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: soaring-briefings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            var/briefings/briefing-*.html
+            var/briefings/briefing-*.json
+          if-no-files-found: ignore
+          retention-days: 14

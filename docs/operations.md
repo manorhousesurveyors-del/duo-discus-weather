@@ -1,0 +1,146 @@
+# Watchdog operations
+
+## Start with a dry run
+
+Install `requirements.txt` in a Python 3.12 virtual environment and run
+`python alerts.py --dry-run`. Reports are written even when no threshold is met.
+Exit 0 means evaluation completed; exit 2 signals a request/configuration/output
+failure, an unavailable regional evaluation, or a failed/uncertain send. The
+reports retain missing fields, incomplete horizons and warnings.
+
+Only `--send` permits delivery. It validates selected-channel credentials before
+fetching. Recorded data older than two hours or future-dated by more than five
+minutes is refused for sending; `--at` is dry-run only. Notification submissions
+are not automatically retried within a run. Accepted means provider acceptance,
+not handset/inbox receipt.
+
+## GitHub configuration
+
+Put all files and `.github/workflows/soaring_watchdog.yml` on the default branch.
+In repository **Settings → Secrets and variables → Actions**:
+
+| Kind | Name | Value/use |
+| --- | --- | --- |
+| Secret | `GMAIL_APP_PASSWORD` | Gmail app password for the sending account |
+| Variable | `SMTP_USERNAME` | Sender, defaults to manorhousesurveyors@gmail.com |
+| Variable | `DUO_EMAIL_TO` | Recipient, defaults to manorhousesurveyors@gmail.com |
+| Variable | `DUO_ALERT_CHANNELS` | `email,whatsapp` default; `email` or `whatsapp` enables only one |
+| Variable | `DUO_WHATSAPP_TO` | E.164 recipient, defaults to +447976125887 |
+| Variable | `WHATSAPP_PROVIDER` | `callmebot` default, or `twilio` |
+| Secret | `CALLMEBOT_API_KEY` | Recipient-authorized CallMeBot key, when selected |
+| Secret | `TWILIO_ACCOUNT_SID` | Twilio account SID, when selected |
+| Secret | `TWILIO_AUTH_TOKEN` | Twilio auth token, when selected |
+| Variable | `TWILIO_WHATSAPP_FROM` | Approved sender in `whatsapp:+number` format |
+| Variable | `TWILIO_CONTENT_SID` | Approved WhatsApp content-template SID (`HX…`) |
+
+Twilio messages outside a 24-hour user-initiated window need an approved
+template. Configure its `{{1}}` variable for the briefing and verify its
+approval/length restrictions with Twilio. The sender supplies `ContentSid`
+and `ContentVariables`, not free-form `Body`. CallMeBot requires recipient
+opt-in/key and offers no delivery guarantee. Gmail requires app-password
+support. Keep credentials in the secret store, never in files, logs or chat.
+
+Twilio's variable is flattened to one line and limited to 900 characters to
+leave room for the approved template's fixed text within its body limit.
+
+Run the workflow manually first with **send = false**, inspect HTML briefings
+and data quality, then provision credentials. Scheduled runs at `17 */6 * * *`
+UTC send automatically. GitHub may delay jobs and disable inactive public-repo
+schedules; monitor Actions. The workflow is limited to the default branch,
+uses pinned actions and read-only permissions, and serializes jobs with
+`cancel-in-progress: false`.
+
+## Durable state and recovery
+
+The WAL SQLite ledger is `var/duo_discus.sqlite3`. The workflow restores the most
+recent preceding run's `soaring-watchdog-state` artifact (or a newer artifact
+from the current rerun), validates integrity/schema, then runs tests/watchdog.
+Only the first attempt of the first-ever run may initialize a fresh ledger. Missing, expired or
+corrupt preceding state stops delivery.
+
+After state validation, an `always()` step makes a consistent SQLite backup,
+including WAL transactions, and uploads it for 90 days even if installation,
+tests or delivery fail. Reports are retained 14 days. Organization/repository
+retention limits can shorten this period. Artifacts include recipient addresses
+and forecast results; repository access controls apply. Weather bundles remain
+local runtime files and are not uploaded by the workflow.
+
+Deduplication key: target **London local date**, 2/5-day horizon, `briefing`,
+`national`, channel and canonical recipient. A changed payload/provider does not
+bypass it. Each channel independently succeeds or retries a confirmed rejection.
+After acceptance, later conditions for that date/horizon appear only in reports;
+there is no second notification.
+
+The ledger reserves an alert, records `sending` before submission, then marks
+`sent`, `failed` or `uncertain`. Expired unstarted reservations can be reclaimed.
+Started/uncertain sends are held until an operator verifies the outcome. This
+favors avoiding duplicates over automatically recovering ambiguous sends.
+
+Inspect/reconcile a downloaded database locally:
+
+```python
+from database import DatabaseManager
+db = DatabaseManager('var/duo_discus.sqlite3')
+for row in db.list_alerts():
+    print(row['id'], row['status'], row['forecast_date'], row['channel'])
+# After the old sender stops and provider evidence is checked:
+# db.reconcile_delivery(alert_id, delivered=True, evidence='Provider accepted ID …')
+# delivered=False permits retry; use only when confirmed not delivered.
+```
+
+If persistence fails after a send, do not initialize a fresh ledger. Recover the
+last state and reconcile later deliveries from provider records. Manual input
+`restore_run_id` selects a verified artifact from this workflow/default branch.
+Older state without reconciliation can duplicate alerts. Keep an independent
+backup for long shutdowns. SMTP/WhatsApp, SQLite and artifact upload cannot share
+one atomic transaction, so exactly-once delivery is not guaranteed. Cancellation
+before backup also requires review.
+
+A persistent VM can instead use:
+
+```cron
+17 */6 * * * cd /srv/duo-discus-weather && .venv/bin/python alerts.py --send >> var/watchdog.log 2>&1
+```
+
+Provision secrets through the service environment, retain SQLite, configure log
+rotation and avoid overlapping schedulers. Do not run VM and GitHub schedules
+against separate ledgers for the same recipients.
+
+## API quota and networking
+
+Open-Meteo batches reduce HTTP overhead, not weighted API cost. Pacing uses
+coordinate count × max(1, hourly variables × models / 10 × max(1, days/14)),
+with a default 300 weighted calls/minute. A 429 without `Retry-After` causes a
+shared 60-second cooldown. Caches/limiters are per process; dashboard sessions
+and runners behind one IP can share the upstream quota without sharing the
+limiter. Lower `DUO_OPEN_METEO_CALLS_PER_MINUTE` when necessary.
+
+The default watchdog costs roughly 990 weighted calls/run, around 4,000/day,
+before retries/dashboard usage. Consult [Open-Meteo pricing](https://open-meteo.com/en/pricing)
+for the free tier's usage/license terms. Retain the 0.5° grid unless budget and
+provider plan support more points.
+
+Weather HTTPS hosts: `api.open-meteo.com`, `aviationweather.gov`.
+Map HTTPS hosts: `api.rainviewer.com`, `tilecache.rainviewer.com`,
+`tile.openstreetmap.org`, `a.tile.opentopomap.org`, `cdn.jsdelivr.net`.
+Notification HTTPS hosts: `api.callmebot.com` or `api.twilio.com`.
+Email uses `smtp.gmail.com` **TCP 465**, not HTTPS. Keep certificate verification
+enabled; an HTTPS credential proxy cannot inject SMTP passwords. Credentials
+are ordinary secure runtime environment values on the delivery host. Preserve
+map attribution and observe provider usage policies. Avoid bulk tile downloads;
+use a hosted tile service if deployment traffic exceeds public-service limits.
+
+## Dashboard and cloud startup
+
+Run `.venv/bin/python -m streamlit run app.py` from the checkout. Configuration
+binds to loopback port 8501 with analytics disabled. Use an authenticated TLS
+reverse proxy for external hosting. Weather browsing needs no alert credentials.
+
+Check local `/_stcore/health`, then verify map/metrics/inspector; HTTP health alone
+does not prove weather/tile access. Data quality shows ages and unavailable
+fields. Radar has its own observed timestamp, independent of forecast sliders.
+Snapshots are labelled and never silently substituted after an outage.
+
+Cloud setup saves install/start instructions and domains in the configuration
+draft. Review/save in environment settings and publish to apply it. GitHub
+schedule activation and secret provisioning are separate deployment steps.
