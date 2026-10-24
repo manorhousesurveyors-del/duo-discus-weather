@@ -172,7 +172,10 @@ provider plan support more points.
 
 Weather HTTPS hosts: `api.open-meteo.com`, `aviationweather.gov`.
 Map HTTPS hosts: `api.rainviewer.com`, `tilecache.rainviewer.com`,
-`tile.openstreetmap.org`, `a.tile.opentopomap.org`, `cdn.jsdelivr.net`.
+`tile.openstreetmap.org`, `a.tile.opentopomap.org`, `cdn.jsdelivr.net`,
+`server.arcgisonline.com`. Terrain refresh uses `s3.amazonaws.com`.
+OGN uses `live.glidernet.org` and `ddb.glidernet.org` over verified HTTPS;
+no APRS TCP port, API key or new GitHub secret is required.
 Notification HTTPS hosts: `ntfy.sh`, plus optional `api.callmebot.com` or `api.twilio.com`.
 Email uses `smtp.gmail.com` **TCP 465**, not HTTPS. Keep certificate verification
 enabled; an HTTPS credential proxy cannot inject SMTP passwords. Credentials
@@ -202,3 +205,23 @@ hosts. UK airspace snapshots were verified from `asselect.uk` and the publisher'
 `ahsparrow/airspace` GitHub repository. The new `ntfy.sh` entry was saved to the
 cloud network draft and requires publication for cloud connectivity. GitHub-hosted
 Actions have their own network access; that draft does not configure GitHub Secrets.
+
+
+## Star alerts and live traffic
+
+A supported three-, four- or five-star region is an additional alert trigger.
+Email includes the stars in its subject/body and high-priority headers; ntfy
+uses `Priority: high`. The existing per-day/horizon delivery ledger still
+suppresses duplicates. A later rating upgrade does not resend an accepted alert.
+
+OGN uses one daemon worker per Streamlit process, with a 20-second feed cadence
+and a 24-hour device registry cache. It writes `static/ogn/uk.json` atomically;
+`server.enableStaticServing = true` must remain enabled. Browser requests use
+the app's own `/app/static/ogn/uk.json` path, including a configured URL prefix.
+The static file contains only the filtered current public reports, not a flight
+history. Both static snapshots and `var/ogn-devices.json` are ignored by Git.
+
+Bundled wave terrain needs no elevation download during normal map use.
+To reproduce or refresh it, run `.venv/bin/python scripts/update_wave_terrain.py`.
+Inspect the metadata/hashes and rerun tests before committing the new archive.
+This makes a bounded 34-tile elevation download, not a basemap scrape.

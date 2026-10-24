@@ -96,3 +96,29 @@ not publish or commit automatically. Reproduce the present current snapshot:
 Explicit OpenAir/GeoJSON uploads override bundled data and remain under ignored
 `var/`. Uploads without AIRAC dates are labelled for verification. Nearby airport
 radii are advisory proximity checks, never substituted for airspace boundaries.
+
+
+## Wave terrain elevations
+
+`uk_wave_terrain.npz` contains sixteen 256 × 256 elevation grids at 500 m
+spacing. `uk_wave_terrain.json` records each grid's bounds, centre, shape, tile
+provenance, verified HTTPS retrieval time and SHA-256 hashes. The archive hash is
+`7c8b350c2008a3348a741387f7e1969ebf13d7c35a8918455f3843e50de538e8`.
+
+Source: [Mapzen Terrain Tiles on AWS](https://registry.opendata.aws/terrain-tiles/),
+34 zoom-8 Terrarium PNG tiles from `elevation-tiles-prod/terrarium`. Attribution:
+Mapzen / AWS Terrain Tiles and the underlying SRTM, GMTED and other attributed
+sources; see [Mapzen source attribution](https://github.com/tilezen/joerd/blob/master/docs/attribution.md).
+The Terrarium formula is `R*256 + G + B/256 − 32768` metres. Bilinear resampling
+forms the grids; negative sea/bathymetric heights are set to zero for this
+land-based diagnostic. No hand-drawn or synthetic hill shapes are substituted.
+
+[scripts/update_wave_terrain.py](../scripts/update_wave_terrain.py) reproduces the
+archive and records hashes of every input tile. The loader verifies the archive
+hash and numerical bounds before use. 500 m terrain samples are not obstacle
+clearance data, and do not confer 500 m atmospheric forecast accuracy.
+
+OGN traffic is fetched live from [OGN / SpotTheGlider](https://live.glidernet.org/)
+and the [OGN device registry](https://ddb.glidernet.org/download/?j=1). Reports
+are not bundled in the repository. Registration visibility follows the registry's
+tracking/identification flags; missing or mismatched identities remain anonymous.

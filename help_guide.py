@@ -19,8 +19,24 @@ TOPICS = (
         ('Step 3 · Radar', 'The blue radar picture shows recent rain. Click for a model’s hourly rain estimate. The coloured bar marks this estimate. It uses your chosen forecast hour.'))),
     ('📍 How to Build a Glider Task on the Map', (
         ('Step 1 · Start your route', 'Open Route Forecast Planner. Zoom in. Click a BGA marker for your start.'),
-        ('Step 2 · Add turning points', 'Click more BGA markers in order. Each line becomes one leg of your task. Undo removes your last choice.'),
+        ('Step 2 · Follow the dashed line', 'Move your mouse. The dashed line shows distance and direction. Click your next point. Undo removes your last choice.'),
         ('Step 3 · Finish and check', 'Choose Finish here or Return home. Read the verdict and start window. Your task sheet opens below the map.'))),
+    ('🗺 Find Lift While You Plan', (
+        ('Step 1 · Open Layers', 'Use the button at the top right of the Task Map. Choose Speed to Fly.'),
+        ('Step 2 · Compare the colours', 'Hover near a weather sample. STF means the suggested speed between climbs. PFD means possible flight distance.'),
+        ('Step 3 · Save your choices', 'Map clicks change your browser draft straight away. Finish or Analyse saves it. Tables below describe the last saved route.'))),
+    ('★ Read the Day’s Stars', (
+        ('Step 1 · One or two stars', 'One star means very poor thermal flying. Two stars suggest local soaring or short tasks.'),
+        ('Step 2 · Three to five stars', 'Three stars suggest 200–300 kilometres. Four suggest 350–500 kilometres. Five need strong conditions for 500 kilometres or more.'),
+        ('Step 3 · Check the details', 'Weak lift, low clouds and short windows reduce stars. Wave potential is separate. These are estimates, not promises.'))),
+    ('〰 Read Wave Lift and Sink', (
+        ('Step 1 · Choose your height', 'Open Wave watch. Click a height on the left. Its badge shows the strongest estimate nearby.'),
+        ('Step 2 · Read both colours', 'Blue means sinking air. Yellow, orange and red mean rising air. Clear areas may be neutral or unknown.'),
+        ('Step 3 · Look through the wave', 'Click a hill for a side view. Use Draw Wave X-Section to drag your own line. The model cannot locate safe wave entry or rotor.'))),
+    ('✈ Watch Live Gliders', (
+        ('Step 1 · Open glider traffic', 'Open Live OGN Glider Radar. Or choose Live OGN Gliders in a map’s Layers menu.'),
+        ('Step 2 · Read a glider', 'Hover for height, speed and climb. Yellow outlines mark G-CKML. Choose a 15, 20 or 30 second refresh.'),
+        ('Step 3 · Check Live or Demo', 'Demo shows pretend gliders for practice. Live hides old reports. Coverage has gaps. Never use this map to avoid other aircraft.'))),
     ('💧 What Wing Loading to Pick', (
         ('Step 1 · Dry means no water ballast', 'Dry uses 34 kilograms per square metre. This is the lighter glider setting.'),
         ('Step 2 · Water makes the glider heavier', 'Ballasted uses 43 kilograms per square metre. Strong lift may support faster cruising.'),

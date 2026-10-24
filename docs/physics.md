@@ -78,9 +78,53 @@ Vertical velocity in m/s is preserved. Pressure velocity uses
 first. Positive w means upward. A model-supplied zero/descent is distinct from
 missing motion and can leave a complete score of 90 when all core tests pass.
 
-The grid cannot resolve rotor, crests, mountain-scale drag or safe entry/exit.
-The dashboard's lee bars indicate downwind orientation and `2π/sqrt(l²)` scale
-only. Summit anchors are approximate and the scores are not probabilities.
+The regional score cannot resolve rotor, crests or safe entry/exit. Its summit
+anchors are approximate and scores are not probabilities. Wave Watch uses the
+separate terrain calculation below; it does not add assumed lift to XC tasks.
+
+## Terrain-forced Wave Watch
+
+Mapzen Terrarium elevations are sampled on sixteen 256 × 256 grids at 500 m.
+After light spatial smoothing, terrain slope forces vertical velocity through
+`w0 = U dh/dx + V dh/dy`. Reported U⊥ is the RMS slope-normal wind component;
+the Fourier forcing itself uses the local two-dimensional gradient.
+
+Potential temperature gradients establish `N² = g/theta dtheta/dz`. The along-flow
+Scorer profile includes curvature, `l² = N²/U² − U''/U`. A lower positive Scorer
+value yields `lambda = 2π/sqrt(l²)`; decreasing values aloft indicate possible
+trapping. Diagnosed wavelengths are not clamped into the suggested 5–18 km range.
+
+A windowed, reflect-padded Fourier transform retains horizontal wavelengths of
+2–40 km. A damped causal harmonic response favours the diagnosed wavelength;
+its assumed spatial decay has an e-folding length of four wavelengths (successive
+bounce factors approximately 0.779, 0.607, 0.472, 0.368). A WKB transfer integrates
+vertical phase and evanescent attenuation using the forecast profile. Nonpositive
+stability, reversing or very weak flow blocks upward propagation. No extrapolation
+beyond the profile, below-ground wave values or invented missing terrain is used.
+
+This approximates both signed phases; damping, linearity and horizontal uniformity
+of each atmospheric column are assumptions. It is not a terrain-resolving NWP
+solver and has not been calibrated against observed UK wave climbs. The displayed
+500 m detail and interpolated sections must not imply equivalent forecast skill.
+
+## Independent UK RASP-style day stars
+
+Distance bands begin at 0 / 50 / 180 / 350 / 500 km for 1–5 stars. The same
+conservative local PFD calculation used by the dashboard supplies distance.
+All eight 10:00–18:00 local intervals require climb, usable height, rain and
+spread-out evidence, otherwise the rating is unavailable.
+
+Quality caps use median net climb, median usable height AGL and the longest
+continuous soarable window. Three/four/five stars require respectively at least
+1.5/2.5/3.5 kt, 1,800/3,000/4,500 ft AGL and 3/4.5/6 hours. Rain ≥1 mm/h or
+usable depth <500 m excludes an interval. Spread-out in at least 25% of usable
+hours caps at three stars; 50% caps at two. Wave potential is labelled separately
+and does not upgrade the thermal XC rating.
+
+These are explicit screening thresholds chosen for the requested UK distance
+categories, not the official RASP algorithm or observed-flight calibration.
+The selected origin's rating appears on the dashboard; alerts show rated regions
+and use high priority when any fully supported region reaches three stars.
 
 ## MacCready route capacity
 

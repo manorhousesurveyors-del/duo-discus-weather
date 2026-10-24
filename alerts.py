@@ -33,6 +33,7 @@ from config import (DEFAULT_EMAIL_RECIPIENT, DEFAULT_WHATSAPP_RECIPIENT, FORECAS
 from data_ingestion import (Forecast, IngestionError, OpenMeteoClient, _json_default, _write_json,
                             forecast_from_snapshot, utc_datetime)
 from database import AlertKey, DatabaseManager
+from day_rating import DayRating,rate_day,best_rating
 from soaring_physics import (ConvergenceResult, Profile, TaskDay, ThermalResult, WaveResult,
                              detect_convergence, evaluate_task_day, evaluate_thermals,
                              evaluate_wave, rank_wave_sites, select_forecast)
@@ -149,6 +150,7 @@ class Briefing:
     convergence: ConvergenceResult | None
     triggers: tuple[str, ...]
     warnings: tuple[str, ...]
+    ratings: tuple[DayRating,...] = ()
 
 
 def build_briefing(bundle: ForecastBundle, horizon_days: int, *, now: datetime | None = None) -> Briefing:
@@ -200,8 +202,13 @@ def build_briefing(bundle: ForecastBundle, horizon_days: int, *, now: datetime |
                      'Wave rankings and route capacity are planning estimates; use official aviation briefings and operating limits'))
     routes = tuple(evaluate_task_day(route, bundle.forecasts, target.astimezone(LOCAL_TIMEZONE).date(), preference=preference)
                    for route in ROUTES.values())
+    ratings=tuple(rate_day(bundle.forecasts,p,target.astimezone(LOCAL_TIMEZONE).date(),preference=preference)
+                  for p in MONITORING_ZONES.values())
+    for rating in ratings:
+        if rating.stars is not None and rating.stars>=3:
+            triggers.append(f'{rating.symbols} {rating.stars}-Star day: {rating.scope} · {rating.distance_km:.0f} km local PFD')
     return Briefing(horizon_days, target, now, tuple(regions), routes, rank_wave_sites(waves), convergence,
-                    tuple(triggers), tuple(dict.fromkeys(warnings)))
+                    tuple(triggers), tuple(dict.fromkeys(warnings)),ratings)
 
 
 def _display(value, suffix='', digits=1):
@@ -240,6 +247,9 @@ def render_html(briefing: Briefing) -> str:
             f'<p>Target: {escape(briefing.target_time.astimezone(LOCAL_TIMEZONE).strftime("%A %d %B %Y, %H:%M %Z"))}. '
             f'Generated {escape(briefing.generated_at.isoformat())}.</p><h2>Triggers</h2><ul>'+
             ''.join(f'<li>{escape(t)}</li>' for t in briefing.triggers or ('No thresholds reached; check data coverage below.',))+'</ul>'+
+            '<h2>UK RASP-style day ratings</h2>'+table(('Region','Rating','Local PFD','Net climb','Usable height AGL','Window','Notes'),
+              [(r.scope,r.symbols+' · '+r.label,_display(r.distance_km,' km',0),_display(r.climb_knots,' kt'),_display(r.base_agl_ft,' ft',0),_display(r.window_hours,' h'),'; '.join(r.reasons)) for r in briefing.ratings])+
+            '<p>Independent distance bands with weather quality caps; not an official RASP product or a verified remote task.</p>'+
             '<h2>Regional thermals</h2>'+table(('Region','Model','Net climb','Conservative climb','Potential cloud base AMSL','Usable top AMSL','Spread-out risk'),rows)+
             '<h2>Task capacity · 10:00–18:00 local</h2>'+table(('Route','Actual length','250 km','300 km','500 km','750 km','Actual route'),route_rows)+
             '<p>Distance variants scale the route legs; supported means idealized continuous soaring capacity, not a cleared flight plan.</p>'+
@@ -251,8 +261,10 @@ def render_html(briefing: Briefing) -> str:
 
 
 def render_whatsapp(briefing: Briefing) -> str:
+    best=best_rating(briefing.ratings)
     text = (f'G-CKML {briefing.horizon_days}-day watch: '
             f'{briefing.target_time.astimezone(LOCAL_TIMEZONE):%a %d %b %H:%M %Z}\n'+
+            (f'{best.symbols} {best.label} · {best.scope} · {best.distance_km:.0f} km local PFD\n' if best else 'Day rating unavailable\n')+
             '\n'.join(briefing.triggers[:5])+'\n'+
             '\n'.join(f'Route {r.route}: '+', '.join(f'{km}k {status.replace("_"," ")}' for km,status in r.viability.items()) for r in briefing.routes)+
             '\nPlanning estimates; see email briefing for model gaps and assumptions.')
@@ -341,8 +353,12 @@ class _NoRedirect(HTTPRedirectHandler):
 
 def send_email(settings: DeliverySettings, briefing: Briefing, delivery_id: str) -> str:
     message = EmailMessage()
+    rating=best_rating(briefing.ratings)
     message['From'], message['To'] = settings.smtp_username, settings.email_to
     message['Subject'] = f'G-CKML: {briefing.horizon_days}-day soaring watch · {briefing.target_time:%d %b}'
+    if rating:
+        message.replace_header('Subject',f'G-CKML: {rating.stars}-Star day · {briefing.horizon_days}-day watch · {briefing.target_time:%d %b}')
+        if rating.stars>=3:message['X-Priority']='1';message['Importance']='high'
     message['Message-ID'] = f'<{delivery_id}@duo-discus-weather.local>'
     message.set_content(render_whatsapp(briefing))
     message.add_alternative(render_html(briefing), subtype='html')
@@ -402,7 +418,7 @@ def send_ntfy(settings: DeliverySettings, briefing: Briefing, delivery_id: str) 
     request=Request(settings.ntfy_url,data=message,method='POST',
         headers={'Content-Type':'text/plain; charset=utf-8','User-Agent':'duo-discus-weather/1.0',
                  'Title':f'G-CKML: {briefing.horizon_days}-day soaring watch','Tags':'airplane',
-                 'Priority':'default'})
+                 'Priority':'high' if (best_rating(briefing.ratings) and best_rating(briefing.ratings).stars>=3) else 'default'})
     try:
         opener=build_opener(HTTPSHandler(context=ssl.create_default_context()),_NoRedirect())
         with opener.open(request,timeout=30) as response:

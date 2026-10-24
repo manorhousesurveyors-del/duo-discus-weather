@@ -1,18 +1,13 @@
 """Multi-altitude wave diagnostics from actual profiles, with explicit limits."""
-from pathlib import Path
 import base64
 import io
-import json
 import math
 import numpy as np
 from PIL import Image
-from folium.utilities import mercator_transform
-from branca.element import MacroElement,Template
-from config import WAVE_RIDGES,METRES_TO_FEET,MPS_TO_KNOTS
-from soaring_physics import Profile,evaluate_wave,wind_direction
 
-ALTITUDES_FT=(3000,10000,12000,16000,20000,25000)
-COLOURS=('#ffe44a','#ffa12b','#ee3b26','#a31232','#7926ad')
+ALTITUDES_FT=(3000,7000,10000,12000,13000,16000,20000,23000,25000)
+WAVE_BANDS=((-1000,-4,'#153c92'),(-4,-2,'#277ad1'),(-2,-.5,'#5acde2'),(.5,2,'#fff4a1'),(2,4,'#ffe234'),(4,6,'#ff992b'),(6,8,'#e8392e'),(8,1000,'#7a164b'))
+COLOURS=tuple(b[2] for b in WAVE_BANDS)
 
 
 def at_height(profile,height_m):
@@ -36,60 +31,84 @@ def destination(lat,lon,bearing,km):
     return math.degrees(latitude),math.degrees(longitude)
 
 
-def wave_payload(forecasts,when):
-    profiles={}
-    for f in forecasts:
-        if not f.location.key.startswith('ridge:'):continue
-        try:profiles[f.location.key.split(':',1)[1]]=Profile.from_forecast(f,when)
-        except KeyError:continue
-    lat=np.linspace(49.8,59.,100);lon=np.linspace(-8.5,2.,100);xx,yy=np.meshgrid(lon,lat)
-    from global_land_mask import globe
-    land=globe.is_land(yy,xx);frames=[]
-    for altitude in ALTITUDES_FT:
-        total=np.zeros_like(xx);weights=np.zeros_like(xx);bars=[];sites=[]
-        for key,ridge in WAVE_RIDGES.items():
-            p=profiles.get(key);level=at_height(p,altitude/METRES_TO_FEET) if p else None
-            wave=evaluate_wave(p,ridge) if p else None
-            direction=wind_direction(level['u'],level['v']) if level and level['u'] is not None and level['v'] is not None else None
-            uplift=level['w']*MPS_TO_KNOTS if level and level['w'] is not None else None
-            supported=bool(wave and wave.components.get('cross_ridge_flow',0)>0 and wave.components.get('static_stability',0)>0)
-            sites.append({'name':ridge.point.name,'lat':ridge.point.latitude,'lon':ridge.point.longitude,
-                'uplift':uplift,'wind_from':direction,'score':wave.score if wave else None,'complete':bool(wave and wave.complete),
-                'lower':wave.scorer_lower_m2 if wave else None,'upper':wave.scorer_upper_m2 if wave else None,
-                'available':bool(level),'supported':supported})
-            if supported and uplift is not None:
-                distance=np.hypot((xx-ridge.point.longitude)*111*np.cos(np.deg2rad(yy)),(yy-ridge.point.latitude)*111)
-                weight=np.exp(-.5*(distance/25)**2)*(distance<=65)
-                total+=max(0,uplift)*weight;weights+=weight
-            if supported and direction is not None and wave.characteristic_scale_km and wave.scorer_lower_m2>0:
-                spacing=min(30,max(2,wave.characteristic_scale_km))
-                for n in (1,2,3):
-                    centre=destination(ridge.point.latitude,ridge.point.longitude,direction+180,n*spacing)
-                    ends=[destination(*centre,direction+side,12) for side in (-90,90)]
-                    bars.append({'points':ends,'name':ridge.point.name,'order':n,'spacing':round(spacing,1),
-                        'resonance':wave.scorer_upper_m2 is not None and wave.scorer_upper_m2<wave.scorer_lower_m2})
-        field=np.divide(total,weights,out=np.zeros_like(total),where=weights>0)
-        rgba=np.zeros((*field.shape,4),dtype=np.uint8)
-        for low,high,colour in zip((0,.5,1,2,4),(.5,1,2,4,float('inf')),COLOURS):
-            selected=(weights>0)&land&(field>low)&(field<=high)
-            rgba[selected,:3]=[int(colour[i:i+2],16) for i in (1,3,5)];rgba[selected,3]=165
-        image=np.rint(mercator_transform(rgba,(49.8,59.),origin='lower')).astype(np.uint8)
-        stream=io.BytesIO();Image.fromarray(np.flipud(image)).save(stream,format='PNG')
-        frames.append({'altitude':altitude,'image':'data:image/png;base64,'+base64.b64encode(stream.getvalue()).decode(),
-                       'bars':bars,'sites':sites,'positive_cells':int(np.count_nonzero(rgba[:,:,3]))})
-    return {'when':when.isoformat(),'bounds':[[49.8,-8.5],[59,2]],'frames':frames,'colours':COLOURS,
-        'source':'Open-Meteo ridge profiles · interpolated positive model vertical air motion where stable cross-ridge flow supports wave potential',
-        'limits':'Regional diagnostic, not a resolved wave forecast. Bars show downwind Scorer-scale guides, not confirmed crests, rotor or clearance. Blank areas can mean no signal or missing data.'}
+def _png(rgba):
+    stream=io.BytesIO();Image.fromarray(np.flipud(rgba)).save(stream,format='PNG')
+    return 'data:image/png;base64,'+base64.b64encode(stream.getvalue()).decode()
+
+
+def _packed(array):
+    import zlib
+    values=np.where(np.isfinite(array),np.clip(np.rint(array),-32767,32767),-32768).astype('<i2')
+    return base64.b64encode(zlib.compress(values.tobytes(),6)).decode()
+
+
+def wave_payload(forecasts,when,*,terrain=None):
+    from terrain_wave import load_terrain,profile_for_domain,solve_field,mercator_y,inverse_y
+    terrain=load_terrain() if terrain is None else terrain
+    frames=[{'altitude':a,'tiles':[],'positive_cells':0,'negative_cells':0,'peak':None,'bars':[],'sites':[]} for a in ALTITUDES_FT]
+    domains=[]
+    for d in terrain:
+        distance,profile=profile_for_domain(forecasts,when,d)
+        heights=d['heights'];south,west=d['bounds'][0];north,east=d['bounds'][1]
+        lat=np.array([inverse_y(y) for y in np.linspace(mercator_y(south),mercator_y(north),heights.shape[0])])
+        lon=np.linspace(west,east,heights.shape[1]);xx,yy=np.meshgrid(lon,lat)
+        mine=((yy-d['latitude'])*111)**2+((xx-d['longitude'])*66)**2;owned=np.ones(heights.shape,dtype=bool)
+        for other in terrain:
+            if other['key']==d['key']:continue
+            os,ow=other['bounds'][0];on,oe=other['bounds'][1]
+            closer=((yy-other['latitude'])*111)**2+((xx-other['longitude'])*66)**2<mine
+            owned &= ~(closer&(yy>=os)&(yy<=on)&(xx>=ow)&(xx<=oe))
+        fields,diag=solve_field(heights,d['spacing_m'],profile,ALTITUDES_FT) if profile else ([None]*len(ALTITUDES_FT),{'reason':'No nearby atmospheric profile'})
+        gy,gx=np.gradient(heights,d['spacing_m']);shade=np.clip((.7+.5*(-gx+gy))/np.sqrt(1+gx*gx+gy*gy),0,1)
+        grey=np.rint(150+95*shade).astype(np.uint8);relief=np.zeros((*heights.shape,4),dtype=np.uint8)
+        relief[:,:,:3]=grey[:,:,None];relief[:,:,3]=np.where(owned&(heights>0),190,0)
+        def coarse_grid(array):
+            # Cell-centred 1 km samples; keep unsupported cells unavailable.
+            return array.reshape(array.shape[0]//2,2,array.shape[1]//2,2).mean(axis=(1,3))
+        encoded=[];coarse=coarse_grid(heights)
+        for i,field in enumerate(fields):
+            rgba=np.zeros((*heights.shape,4),dtype=np.uint8);frame=frames[i]
+            if field is not None:
+                selected=owned&np.isfinite(field)
+                for low,high,colour in WAVE_BANDS:
+                    mask=selected&(field>=low)&(field<high)
+                    rgba[mask,:3]=[int(colour[j:j+2],16) for j in (1,3,5)];rgba[mask,3]=180
+                frame['positive_cells']+=int(np.count_nonzero(selected&(field>=.5)))
+                frame['negative_cells']+=int(np.count_nonzero(selected&(field<=-.5)))
+                peak=float(np.nanmax(np.where(selected,field,np.nan))) if selected.any() else None
+                if peak is not None:frame['peak']=max(frame['peak'] or 0,peak)
+                encoded.append(_packed(coarse_grid(field)*100))
+            else:peak=None;encoded.append(None)
+            wind=at_height(profile,frame['altitude']*.3048) if profile else None
+            tile={'key':d['key'],'image':_png(rgba),'bounds':d['bounds'],'peak':None if peak is None else round(max(0,peak),1),
+                  'wind':None if not wind or wind['u'] is None or wind['v'] is None else [wind['u'],wind['v']]}
+            frame['tiles'].append(tile)
+            frame['sites'].append({'name':d['name'],'lat':d['latitude'],'lon':d['longitude'],'available':field is not None,'peak':tile['peak']})
+        domains.append({k:d[k] for k in ('key','name','latitude','longitude','bounds','spacing_m')}|{'relief':_png(relief),
+            'rows':coarse.shape[0],'cols':coarse.shape[1],'terrain':_packed(coarse),'fields':encoded,'diagnostics':diag,
+            'weather_distance_km':None if distance is None else round(distance,1),'weather_model':profile.forecast.model if profile else None})
+    return {'when':when.isoformat(),'frames':frames,'domains':domains,'bands':WAVE_BANDS,'encoding':'zlib-i16le-base64',
+        'source':'500 m terrain-forced linear wave estimate · Mapzen elevation / Open-Meteo atmospheric profiles',
+        'limits':'Both lift and sink are modelled, not observed. Atmospheric spacing is much coarser than the terrain. Trapping, rotor, nonlinear flow and exact crest positions are uncertain. Cross-sections interpolate solved height bands.',
+        'terrain_status':'Verified elevation grids loaded' if terrain else 'Terrain unavailable: run scripts/update_wave_terrain.py; no hill-specific field is fabricated.'}
 
 
 def add_wave_map(map_view,forecasts,when):
     import streamlit as st
     from streamlit.runtime.scriptrunner import get_script_run_ctx
+    from client_map import script,reorder_layer_control
+    from airspace import load_airspace,display_airspace
+    from config import LOCAL_TIMEZONE
+    import folium,html
     key=(when.isoformat(),tuple((f.location.key,f.model,f.fetched_at.isoformat()) for f in forecasts))
     cache=st.session_state.setdefault('_wave_products',{}) if get_script_run_ctx(suppress_warning=True) else {}
-    if key not in cache:
-        cache.clear();cache[key]=wave_payload(forecasts,when)
-    element=MacroElement();element.payload=json.dumps(cache[key],separators=(',',':'),allow_nan=False).replace('<','\\u003c')
-    script=Path(__file__).with_name('assets').joinpath('wave_map.js').read_text()
-    element._template=Template('{% macro script(this, kwargs) %}\n'+script+'\ninstallDuoWave({{this._parent.get_name()}},{{this.payload|safe}});\n{% endmacro %}')
-    element.add_to(map_view)
+    if key not in cache:cache.clear();cache[key]=wave_payload(forecasts,when)
+    script(map_view,'wave_map.js','installDuoWave',cache[key])
+    body=load_airspace(when.astimezone(LOCAL_TIMEZONE).date())
+    if body:
+        display=display_airspace(body)
+        display={**display,'features':[{**f,'properties':{k:html.escape(v) if isinstance(v,str) else v for k,v in f['properties'].items()}} for f in display['features']]}
+        folium.GeoJson(display,name='Airspace boundaries · simplified display',show=False,
+            style_function=lambda _:dict(color='#a52a49',weight=.8,fillOpacity=.02),
+            tooltip=folium.GeoJsonTooltip(fields=['name','floor','ceiling'],aliases=['Name','Lower','Upper'])).add_to(map_view)
+    reorder_layer_control(map_view)

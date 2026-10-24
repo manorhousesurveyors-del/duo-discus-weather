@@ -131,6 +131,26 @@ def airspace_date_warning(body,on_date):
     return None
 
 
+_display_cache={}
+def display_airspace(body,tolerance_m=100):
+    """Simplify drawing only; the obstacle checker retains original geometry."""
+    from shapely.geometry import shape,mapping
+    from shapely.affinity import scale
+    key=(body.get('content_hash'),tolerance_m)
+    if key[0] and key in _display_cache:return _display_cache[key]
+    features=[]
+    for f in body['features']:
+        metres=scale(shape(f['geometry']),xfact=66000,yfact=111195,origin=(0,0))
+        simplified=metres.simplify(tolerance_m,preserve_topology=True)
+        geometry=scale(simplified,xfact=1/66000,yfact=1/111195,origin=(0,0))
+        features.append({**f,'geometry':mapping(geometry)})
+    result={**body,'features':features}
+    if key[0]:
+        if len(_display_cache)>3:_display_cache.clear()
+        _display_cache[key]=result
+    return result
+
+
 def _inside(point,ring):
     x,y=point;inside=False
     for a,b in zip(ring,ring[1:]):

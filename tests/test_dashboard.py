@@ -58,8 +58,8 @@ class DashboardTests(unittest.TestCase):
             with patch.dict('os.environ',{'DUO_DASHBOARD_SNAPSHOT':str(path),'DUO_TASK_STORE':directory+'/tasks'}):
                 at=AppTest.from_file(str(Path(app.__file__)),default_timeout=30).run()
                 self.assertFalse(at.exception)
-                self.assertEqual([tab.label for tab in at.tabs],['Weather map','Task planner','Help Guide','Wave watch','Help & Briefing Bot','Data quality'])
-                self.assertEqual(len(at.metric),7)
+                self.assertEqual([tab.label for tab in at.tabs],['Weather map','Task planner','Help Guide','Wave watch','Live OGN Glider Radar','Help & Briefing Bot','Data quality'])
+                self.assertEqual(len(at.metric),12)
                 self.assertEqual(len(at.get('plotly_chart')),2)
                 at.slider(key="forecast_hour").set_value(16).run()
                 self.assertFalse(at.exception)

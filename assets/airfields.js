@@ -3,7 +3,7 @@ function installDuoAirfields(map,data) {
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const val=(v,n=1)=>typeof v==='number'&&Number.isFinite(v)?v.toFixed(n):'unavailable';
   const time=t=>t?new Date(typeof t==='number'?t*1000:t).toLocaleString('en-GB',{timeZone:'Europe/London',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',timeZoneName:'short'}):'unavailable';
-  const group=L.featureGroup().addTo(map),cache=new Map(),pending=new Map();
+  const cache=new Map(),pending=new Map();let hoverTimer=0,popup=null,popupAirfield=null;
   const style=document.createElement('style');style.textContent='.duo-airfield-popup .leaflet-popup-content-wrapper,.duo-airfield-popup .leaflet-popup-tip{background:#172532;color:#f4f7fa}.duo-airfield-popup .leaflet-popup-content{font:13px/1.5 Arial;max-width:410px}.duo-airfield-popup pre{white-space:pre-wrap;font:11px/1.5 monospace}.duo-airfield-popup table{width:100%;font-size:11px}.duo-airfield-popup td{padding:3px}.duo-airfield-popup small{display:block;margin:5px 0}.duo-airfield-popup summary{cursor:pointer}.duo-airfield-popup button{padding:8px;background:#267d84;color:white;border:0;border-radius:7px}';map.getContainer().appendChild(style);
   function currentHtml(a,response){
     if(!response)return data.live?'Hover or click to load the current model report…':'Recorded mode: live airfield queries disabled.';
@@ -33,20 +33,18 @@ function installDuoAirfields(map,data) {
       cache.set(a.ident,{at:Date.now(),body});return body;
     }catch(e){return {error:'Current model report unavailable: '+e.message};}finally{clearTimeout(timer);pending.delete(a.ident);}})();pending.set(a.ident,promise);return promise;
   }
-  for(const a of data.airfields){
-    const colour=a.kind==='former_gliding_airfield'?'#727c84':a.kind==='gliding_airfield'?'#007e88':a.metar?'#743fa1':'#195b9b';
-    const marker=L.circleMarker([a.latitude,a.longitude],{radius:a.kind==='gliding_airfield'?7:5,weight:2,color:'#fff',fillColor:colour,fillOpacity:1,airfieldId:a.ident,bubblingMouseEvents:false}).addTo(group);
-    marker.bindTooltip('✈ '+esc(a.label)+' · '+esc(a.icao||a.ident)+' · '+val(a.elevation_ft,0)+' ft AMSL. Hover for wind; click for METAR/TAF and six-hour model trend.',{sticky:true});
-    marker.bindPopup(()=>{const el=document.createElement('div');el.innerHTML=markup(a,cache.get(a.ident)?.body);return el;},{className:'duo-airfield-popup',maxWidth:430,maxHeight:430});
-    let hoverTimer;
-    function refresh(body){
-      const r=data.reports[a.icao]||data.reports[a.nearest],w=r?.wind;
-      marker.setTooltipContent('<b>✈ '+esc(a.label)+'</b><br>'+val(a.elevation_ft,0)+' ft AMSL · '+a.runways.map(r=>esc(r.ends)).join(', ')+(w?'<br>METAR '+esc(a.icao||a.nearest)+': '+val(w.speed)+' kt / '+val(w.direction,0)+'° · gust '+val(w.gust)+' kt'+(r.stale?' · STALE':''):'')+'<br>'+currentHtml(a,body)+'<br>Click for full METAR/TAF and runway details.');
-      if(marker.isPopupOpen()){const el=document.createElement('div');el.innerHTML=markup(a,body);marker.setPopupContent(el);el.querySelectorAll('details').forEach(d=>d.ontoggle=()=>marker.getPopup().update());}
-    }
-    marker.on('mouseover',()=>{hoverTimer=setTimeout(()=>fetchSurface(a).then(refresh),300);});marker.on('mouseout',()=>clearTimeout(hoverTimer));
-    marker.on('click',()=>{fetchSurface(a).then(refresh);if(window.duoMapEvent)window.duoMapEvent(data.route?'airfield':'airfield_report',a.ident,marker.getLatLng());});
-    if(data.selected===a.ident){marker.openPopup();fetchSurface(a).then(refresh);}
-  }
-  L.control.layers(null,{'✈ UK airfields · hover for live weather':group},{collapsed:true,position:'topright'}).addTo(map);
+  const records=data.airfields.map(a=>({...a,lat:a.latitude,lon:a.longitude,code:a.ident,kind:'airfield',airfieldKind:a.kind,
+    colour:a.kind==='former_gliding_airfield'?'#727c84':a.kind==='gliding_airfield'?'#007e88':a.metar?'#743fa1':'#195b9b',
+    priority:a.aliases?.some(x=>['Long Mynd','Denbigh','Talgarth','Shobdon'].includes(x))}));
+  function open(a){popupAirfield=a.ident;const content=document.createElement('div');content.innerHTML=markup(a,cache.get(a.ident)?.body);
+    popup=L.popup({className:'duo-airfield-popup',maxWidth:430,maxHeight:430}).setLatLng([a.latitude,a.longitude]).setContent(content).openOn(map);
+    fetchSurface(a).then(body=>{if(popupAirfield!==a.ident)return;content.innerHTML=markup(a,body);content.querySelectorAll('details').forEach(d=>d.ontoggle=()=>popup.update());popup.update();});}
+  const group=new DuoCanvasPoints(records,{
+    tooltip:a=>'✈ '+esc(a.label)+' · '+esc(a.icao||a.ident)+' · '+val(a.elevation_ft,0)+' ft AMSL. Hover for wind; click for details or add to the task.',
+    onHover:(a,tip)=>{clearTimeout(hoverTimer);hoverTimer=setTimeout(()=>fetchSurface(a).then(body=>{if(group.hovered===a)tip.setContent('<b>✈ '+esc(a.label)+'</b><br>'+currentHtml(a,body));}),350);},
+    onLeave:()=>clearTimeout(hoverTimer),
+    onClick:a=>{if(map._duoTask)map._duoTask.add({code:a.ident,name:a.label,lat:a.latitude,lon:a.longitude,elevation_m:a.elevation_ft===null?null:a.elevation_ft*.3048});else open(a);}
+  }).addTo(map);
+  map._duoAirfields=group;duoRegisterLayer(map,'✈ UK airfields · canvas / live reports',group);
+  if(data.selected){const selected=records.find(a=>a.ident===data.selected);if(selected)open(selected);}
 }

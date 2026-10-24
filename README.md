@@ -88,9 +88,20 @@ STF/XC speeds, sampled terrain margins, coastal/rain warnings and candidate
 energy lines. Bundled ASSelect airspace boundaries are selected by the forecast date, with
 AIRAC validity shown. Current OpenAir/GeoJSON uploads can override them.
 
-**Wave watch** includes Denbigh/Lleweni Parc and the Cambrian Mountains, with
-six altitude buttons from 3,000 to 25,000 ft. Model ascent colours and three
-Scorer-based lee-wave guides are indicative, not resolved wave crests.
+**Task planner** draws browser-local routes with a cursor-following dashed leg,
+distance/bearing labels and STF, thermal and PFD overlays. Finish or Analyse
+saves the draft; individual clicks do not reload the forecast. BGA points and
+airfields share viewport-culled canvas layers over fast terrain tiles.
+
+**Wave watch** uses verified 500 m terrain across 16 ridge areas, with nine
+locally switched heights from 3,000 to 25,000 ft, signed lift/sink colours,
+wind arrows and clickable or dragged vertical cross-sections. This is an
+experimental terrain-forced linear estimate, not an exact SkySight forecast.
+
+**Day stars** combine distance, climb, usable height, window and spread-out
+risk; 3–5 stars qualify for high-priority email/ntfy alerts. Wave potential
+stays separate. **Live OGN Glider Radar** adds fresh public glider reports to
+Weather and Task maps, with 15–30 second polling and explicit demo playback.
 See [map and analysis methods](docs/map-upgrades.md) for coverage and limits.
 
 ## Evaluate without sending

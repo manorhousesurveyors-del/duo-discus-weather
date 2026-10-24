@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+import json
 import re
 
 import pandas as pd
@@ -216,6 +217,29 @@ def process_map_event(interaction,catalog,day,mode,*,event_key='last_map_event',
     clicked=interaction.get('last_object_clicked') or {}
     if clicked.get('duo') and clicked!=previous.get('last_object_clicked'):
         command=clicked['duo'];kind=command.get('kind');value=command.get('value','')
+        if kind=='task_sync':
+            from uk_airfields import airfield_by_id
+            from route_tools import complete_task
+            try:
+                if len(value)>20000:raise ValueError('Task message is too large')
+                draft=json.loads(value)
+                if not isinstance(draft,dict):raise ValueError('Invalid task draft')
+                if draft.get('date')!=day.isoformat():raise ValueError('Draft belongs to another forecast day')
+                if not isinstance(draft.get('points'),list) or len(draft['points'])>20:raise ValueError('Maximum 20 task points')
+                selected=[]
+                for item in draft['points']:
+                    point=catalog.by_code.get(item['code'])
+                    if point is None:
+                        airfield=airfield_by_id(item['code'])
+                        point=airfield.turnpoint if airfield else coordinate_turnpoint(float(item['lat']),float(item['lon']))
+                    selected.append(point)
+                validate_task(selected,allow_incomplete=True)
+                set_task(day,selected,rerun=False)
+                if draft.get('complete') and len(selected)>=2:complete_task(day,selected)
+                if draft.get('action')=='analyse':st.session_state['analyse_client_task']=True
+                if draft.get('action')=='optimize':st.session_state['open_optimizer']=True
+            except (ValueError,TypeError,KeyError,OSError) as exc:st.session_state['task_error']=str(exc)
+            return
         if kind=='airfield_report':
             from uk_airfields import airfield_by_id
             if airfield_by_id(value):st.session_state['airfield_popup:'+event_key]=value

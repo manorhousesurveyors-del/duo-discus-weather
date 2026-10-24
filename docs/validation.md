@@ -432,3 +432,78 @@ The new `ntfy.sh` cloud allowlist entry is saved in a draft pending publication.
 GitHub-hosted Actions use their own network access. Subscription steps appear in
 the Help Guide; only `GMAIL_APP_PASSWORD` is required for the default Gmail plus
 ntfy configuration, with no CallMeBot key.
+
+## Canvas planning, terrain wave fields, day stars and OGN · 24 October 2026
+
+The full offline suite passes **192 tests**. Added coverage checks the star
+bands and weather caps, missing-hour/precipitation handling, high-priority email
+and ntfy headers, OGN schema/units/freshness/privacy/midnight handling, atomic
+empty traffic snapshots, deliberate route commits, and display-only airspace
+simplification without altering obstacle geometry. Notification transports are
+mocked; no live email, WhatsApp or ntfy message was sent.
+
+Terrain tests verify a flat DEM cannot generate wave, an isolated hill produces
+both phases, a sustained lee train appears downwind for both westerly and easterly
+flow, reversing flow blocks propagation, and unsupported heights stay unknown.
+All sixteen bundled elevation grids pass shape/range/hash checks. The download
+used 34 verified HTTPS Terrarium tiles, with source and archive hashes retained.
+This verifies the data and implementation, not exact crest locations or forecast
+accuracy against observed flying.
+
+`scripts/verify_client_maps.py` runs real Chromium pointer interactions against
+an already-running recorded dashboard. Use an isolated `DUO_TASK_STORE`, since
+it deliberately saves MYN–BIE–MYN. Install Playwright as a development dependency
+outside the production requirements, then run:
+
+```bash
+python scripts/verify_client_maps.py --url http://127.0.0.1:8504 --proxy-assets
+```
+
+`--proxy-assets` is optional and preserves verified TLS using Python's trusted
+client where Chromium lacks the managed proxy CA. Screenshots and JSON evidence
+are saved under ignored `var/client-map-validation/`.
+
+The final recorded-weather browser pass loaded **1,390 BGA points and 1,098
+airfields**, drew the dashed cursor leg, toggled STF/PFD/thermal overlays,
+closed at Start, reopened the task sheet, saved again after a rerender and used
+Return home. Point clicks, cursor motion and layer changes sent **zero Streamlit
+updates**. Each deliberate completion sent exactly one update. The wave check
+switched all nine heights, clicked a hill, dragged a cross-section and panned;
+these also sent zero updates. Explicit OGN demo playback refreshed locally.
+There were no JavaScript errors, Streamlit exceptions or failed external assets.
+The pointer check also asserts coordinate agreement: a requested 52.92°N,
+3.70°W click resolved within one screen pixel. It caught Leaflet focusing a tall
+iframe and scrolling the parent between mouse-down and mouse-up; the bridge now
+uses preventScroll while retaining keyboard focus.
+
+Representative measured handler/canvas work on this cloud Chromium instance:
+
+| Interaction | Measured time |
+| --- | ---: |
+| Task redraw | 2.2 ms |
+| Cursor dashed leg | 0.3 ms |
+| BGA / airfield canvas draw | 1.8 / 1.2 ms |
+| Wave altitude selection, nine bands | 0.7–2.8 ms |
+| Clicked / dragged cross-section | 12.7 / 2.9 ms |
+| Seven demo traffic icons | 0.4 ms |
+
+These are local handler/draw timings after load, not an end-to-end network or
+input-to-photon guarantee on all devices. The initial wave bundle takes roughly
+seven seconds to compute in the fixture and about 5–6 MB before transport
+compression. Forecast fetches, first asset downloads and explicit save/analysis
+still take time. Visual inspection rejected a nominally successful tile provider
+that returned API-key-required images; the final keyless Esri greyscale and
+shaded-relief tiles were inspected in Chromium.
+
+A separate live-traffic browser check reached the actual same-origin snapshot
+backed by OGN's HTTPS UK feed. At 11:42 and 11:47 UTC there were no fresh moving
+UK glider reports. The DDB registry identified G-CKML (CN KA); no claim of a live
+G-CKML sighting is made. A clearly identified **TEST FIXTURE**, intercepted only
+inside the browser test, verified heading, 5,000 ft / 60 kt / +3.2 kt popup units,
+local click handling and removal after 120 seconds with auto-refresh paused.
+No test aircraft was written to the live snapshot or upstream OGN service.
+
+All JavaScript assets parse with Node, Python compilation and dependency checks
+pass, both unchanged workflows pass actionlint 1.7.7, and `git diff --check` is
+clean. Required HTTPS hosts were saved in the environment draft; actual OGN,
+registry, elevation and Esri access succeeded with certificate verification.

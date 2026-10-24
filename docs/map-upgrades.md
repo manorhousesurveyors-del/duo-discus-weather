@@ -2,7 +2,7 @@
 
 ## Responsive maps and wind coverage
 
-All three map components use Leaflet canvas rendering and return exactly
+Weather, Task, Wave and Traffic maps use Leaflet canvas rendering and return exactly
 `last_object_clicked` and `last_clicked` to Streamlit. Panning, zooming and
 wind/wave altitude selection do not call Python. Views persist separately in
 browser session storage. A click bridge preserves the selected waypoint or
@@ -29,8 +29,9 @@ stations, blue other fields and grey former gliding sites. Layer controls can
 hide them. See [data provenance](../data/README.md).
 
 Hover fetches Open-Meteo current surface weather on demand, cached five minutes
-in the map. Clicking refreshes the server-cached NOAA reports (60-second TTL)
-and reopens the selected airfield's popup. Reports include runway/elevation,
+in the map. Clicking opens a browser-local popup containing the current surface
+request and the NOAA reports bundled when the map was built. NOAA server
+requests have a 60-second TTL; rebuilding the map refreshes that bundle. Reports include runway/elevation,
 wind/gust, temperature/dewpoint, mean sea-level pressure, visibility and a
 six-hour model trend. Temperature/dewpoint gives an estimated cloud base;
 it is not a measured ceiling. Live surface reports use Open-Meteo's current
@@ -45,8 +46,19 @@ is required; NOAA is fetched server-side because its API does not allow CORS.
 ## Task map, imports and analysis
 
 The dedicated Task planner map shows all 1,390 BGA points and the airfields.
-Click Start, subsequent points, then **Finish here** or **Return home**. Undo
-and Clear update only that date's route. CUP import requires exactly one
+Canvas viewport culling replaces thousands of marker objects. Fast Esri terrain
+is the default; OpenTopoMap remains optional. Airspace display geometry alone
+is simplified by approximately 100 m; obstacle tests retain every original
+boundary. STF, PFD and thermal layers draw below the waypoint/airfield canvases.
+
+Click Start and watch the dashed leg follow the cursor with km/°T labels.
+Each point locks in a leg. Clicking Start again, **Finish here** or **Return
+home** hides the dashed line immediately and makes one explicit save request.
+**Analyse / save** and **Optimise** also deliberately call the server. Other
+clicks, Undo, Clear, hovering, layer changes and panning remain browser-local.
+A per-day session-storage draft survives iframe rerenders while its saved base
+route is unchanged. Tables and exports describe the last saved route until
+the draft is committed. Clearing requires Analyse / save to persist. CUP import requires exactly one
 Related Tasks declaration; a waypoint list has no reliable route order and is
 rejected. XCSoar TSK import requires Start and Finish. Import retains waypoint
 sequence/coordinates, not arbitrary instrument-specific observation-zone rules;
@@ -89,18 +101,48 @@ Current NOTAM activation and legal clearance need official sources.
 
 ## Wave Watch
 
-Fourteen ridge anchors include Denbigh/Lleweni Parc (Clwydian ridge) and
-Plynlimon/Cambrian Mountains. Buttons select 3,000 / 10,000 / 12,000 / 16,000 /
-20,000 / 25,000 ft AMSL. All six layers are prepared together and switched locally.
-Pressure profiles now include 400 and 300 hPa to bracket higher altitudes.
+The previous regional positive-motion interpolation and lee bars are replaced
+by signed terrain-forced fields over 16 overlapping 128 km computational windows.
+Real 500 m elevation samples cover the named Welsh, Shropshire, English and
+Scottish ridges. These windows define calculation coverage; their shapes are
+not wave polygons. The nearest available ridge atmosphere must be within 160 km.
 
-The overlay uses positive model vertical motion at the selected height, gated
-by stable cross-ridge flow, interpolated around supported ridge sites. Colours
-progress through yellow, orange, red, dark red and purple; unsupported areas
-stay transparent. This is interpolated wave potential, not resolved lift over
-every mountain. No model vertical motion means no positive lift estimate.
+Nine buttons select 3,000 / 7,000 / 10,000 / 12,000 / 13,000 / 16,000 / 20,000 /
+23,000 / 25,000 ft AMSL. All raster layers, wind vectors and section samples are
+bundled and decoded once. Altitude switches, pan/zoom, hill clicks and dragged
+cross-sections need no forecast requests or Python reruns. Each badge gives the
+peak positive estimate for computational regions intersecting the current view.
+It is not the strength at every point in that height band.
 
-Three downwind guides are oriented across the selected-height wind, spaced
-from the Scorer wavelength (bounded 2–30 km). Labels show lower/upper Scorer
-parameters and evidence completeness. They are indicative primary/secondary/
-tertiary guides, not predictions of exact crest positions or usable climb.
+Blue/cyan show sink; pale yellow through purple show lift. Values between
+−0.5 and +0.5 kt, below-ground cells and unsupported data are transparent.
+Regular black arrows show flow towards the wind's destination. A hill click
+selects 20 km upwind to 70 km downwind; Draw Wave X-Section permits any dragged
+track. The chart spans the surface to 25,000 ft, samples terrain at 1 km and
+interpolates the nine solved levels. Unsupported heights remain grey.
+
+The 500 m terrain spacing does not make the coarse atmospheric forecast equally
+precise. The damped linear Fourier/WKB model cannot establish exact crests,
+rotor, nonlinear breaking, usable climb or a safe entry point. It is an
+independent diagnostic, not SkySight data or a replica of its forecast model.
+See [physics](physics.md) and [elevation provenance](../data/README.md).
+
+## Live OGN gliders
+
+**Live OGN Gliders (FLARM)** appears in Weather and Task layer menus; the
+**Live OGN Glider Radar** tab enables it initially. A shared server worker reads
+OGN/SpotTheGlider's HTTPS UK snapshot every 20 seconds and publishes a same-origin
+static JSON file. Browser timers poll at 15, 20 or 30 seconds without rerunning
+Streamlit. Public device metadata supplies registration/CN and highlights G-CKML.
+
+Reports must be type 1 gliders, inside the UK bounds, at most 120 seconds old and
+moving at least 25 km/h. Movement is only an airborne proxy. Device registration
+privacy flags are respected; unverified identities are anonymous. Headings rotate
+canvas icons; popups convert altitude to feet and speed/vario to knots. Vario is
+GNSS-derived, not a total-energy/netto instrument measurement.
+
+Snapshots older than 60 seconds and reports older than two minutes are hidden,
+even with refresh paused. No reports or a provider failure never substitutes
+fake live aircraft. **Demo** explicitly shows seven fictional gliders and can
+be switched back to Live. Recorded weather disables live traffic requests.
+OGN reception is incomplete and unsuitable for collision avoidance.

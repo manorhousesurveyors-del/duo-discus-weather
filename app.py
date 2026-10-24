@@ -13,7 +13,6 @@ from pathlib import Path
 import re
 
 import folium
-from folium.plugins import FastMarkerCluster
 from folium.utilities import mercator_transform
 from branca.colormap import LinearColormap
 from branca.element import MacroElement, Template
@@ -312,11 +311,19 @@ def build_map(forecasts, when, *, layers, aviation=None, radar=None, convergence
         layers=['BGA turnpoints'] if visual_mode=='route' else []
     map_view=folium.Map(location=centre,zoom_start=zoom,tiles=None,control_scale=True,prefer_canvas=True)
     from map_bridge import add_click_bridge
+    from client_map import install_canvas,add_waypoints,add_task_editor,finish_layer_control
+    install_canvas(map_view)
     add_click_bridge(map_view,map_identity)
     map_view.default_js=[('leaflet','https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js'),
                          ('jquery','https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js')]
     map_view.default_css=[('leaflet_css','https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css')]
-    folium.TileLayer('https://a.tile.opentopomap.org/{z}/{x}/{y}.png',name='Topography',
+    folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',name='Fast terrain · Esri',
+        attr='Tiles © Esri, HERE, Garmin, USGS, OpenStreetMap contributors',max_zoom=19,show=map_identity!='wave').add_to(map_view)
+    folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',name='Greyscale · Esri',
+        attr='Tiles © Esri, HERE, Garmin, OpenStreetMap contributors',max_native_zoom=16,max_zoom=19,show=map_identity=='wave').add_to(map_view)
+    folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',name='Shaded relief',
+        attr='Tiles © Esri',class_name='duo-relief-tiles',max_native_zoom=13,max_zoom=19,overlay=True,opacity=.4,show=map_identity=='wave').add_to(map_view)
+    folium.TileLayer('https://a.tile.opentopomap.org/{z}/{x}/{y}.png',name='Topography · OpenTopoMap',show=False,
         attr='Map data © OpenStreetMap contributors, SRTM | Map style © OpenTopoMap (CC-BY-SA)',max_zoom=17).add_to(map_view)
     folium.TileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',name='OpenStreetMap',
         attr='© OpenStreetMap contributors',max_zoom=19,show=False).add_to(map_view)
@@ -371,7 +378,7 @@ def build_map(forecasts, when, *, layers, aviation=None, radar=None, convergence
             window.duoMapEvent('thermals',event.type === 'overlayadd' ? 'on' : 'off');
         });
     {% endmacro %}''')
-    synchronizer.add_to(map_view)
+    if map_identity=='weather' and visual_mode in (None,'extras'):synchronizer.add_to(map_view)
     cloud_colour=LinearColormap(['#e6f5f6','#77bdc8','#2b82a3','#344781'],vmin=1500,vmax=8000)
     if 'Cloud base' in layers:
         for lat,lon,value in interpolate_map_samples(cloud_samples):
@@ -379,41 +386,10 @@ def build_map(forecasts, when, *, layers, aviation=None, radar=None, convergence
                 fill_color=cloud_colour(value),tooltip=folium.Tooltip(f'Potential cloud base {value:.0f} ft AMSL. Compare with the mixing top; blue thermals may stop below this height.')).add_to(cloud_group)
         add_colour_legend(map_view,'Potential cloud base · ft AMSL',['#e6f5f6','#77bdc8','#2b82a3','#344781'],1500,8000)
     cloud_group.add_to(map_view); wave_group.add_to(map_view)
-    if 'BGA turnpoints' in layers and turnpoints:
-        catalog_layer=folium.FeatureGroup(name='BGA turnpoints · click to select')
-        marker_data=[]
-        for point in turnpoints:
-            elevation='unknown elevation' if point.elevation_m is None else f'{point.elevation_m:.0f} m AMSL'
-            label=html.escape(f'{"BGA" if point.official else "Imported"} {point.code} · {point.name}')
-            marker_data.append([point.latitude,point.longitude,point.code,label,elevation])
-        # One compact dataset avoids rendering thousands of Python/Jinja marker
-        # objects on every Streamlit rerun; Leaflet still creates each tooltip.
-        cluster=FastMarkerCluster(marker_data,name='BGA marker clusters',control=False,
-            options={'disableClusteringAtZoom':10},callback="""function(row) {
-                var marker = L.marker([row[0], row[1]], {bgaCode: row[2],
-                    icon: L.divIcon({className: 'empty', iconSize: [12,12], iconAnchor: [6,6],
-                        html: '<div data-bga-code="' + row[2] + '" aria-label="' + row[3] +
-                            '" style="width:8px;height:8px;border:2px solid white;border-radius:50%;background:#395b75"></div>'})});
-                marker.bindTooltip(row[3] + ' · ' + row[4] +
-                    '. In Add to task mode, click to use this point as the selected task role.', {sticky: true});
-                return marker;
-            }""")
-        cluster.default_js=[('markerclusterjs','https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js')]
-        cluster.default_css=[('markerclustercss','https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/MarkerCluster.css'),
-                             ('markerclusterdefaultcss','https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css')]
-        cluster.add_to(catalog_layer); catalog_layer.add_to(map_view)
-        # MarkerCluster can replace the event's source layer as events bubble.
-        # Carry the selected catalog identifier inside the returned click object.
-        marker_events=MacroElement(); marker_events.cluster=cluster
-        marker_events._template=Template('''{% macro script(this, kwargs) %}
-            {{this.cluster.get_name()}}.eachLayer(function(marker) {
-                marker.on('click', function() {
-                    if(window.duoMapEvent)window.duoMapEvent('point',marker.options.bgaCode,marker.getLatLng());
-                });
-            });
-        {% endmacro %}''')
-        marker_events.add_to(map_view)
-    if task:
+    if turnpoints and ('BGA turnpoints' in layers or map_identity=='wave'):
+        add_waypoints(map_view,turnpoints,show=True)
+    if visual_mode=='route':add_task_editor(map_view,task,when,forecasts,loading)
+    if task and visual_mode!='route':
         active=folium.FeatureGroup(name=f'Active task · {task_distance(task):.0f} km')
         if len(task)>1:
             folium.PolyLine([(p.latitude,p.longitude) for p in task],color='#223c58',weight=4,
@@ -456,13 +432,16 @@ def build_map(forecasts, when, *, layers, aviation=None, radar=None, convergence
     if radar and visual_mode in (None,'extras'):
         folium.TileLayer(radar['url'],name='RainViewer observed radar',attr='Radar © RainViewer',overlay=True,
             opacity=.55,max_native_zoom=7,max_zoom=17,show='Radar' in layers).add_to(map_view)
-    folium.LayerControl(collapsed=True,position='bottomright').add_to(map_view)
     if visual_mode is not None and include_modes:
         from map_modes import add_map_modes
         add_map_modes(map_view,forecasts,when,anchor or when,loading,mode=visual_mode,radar=radar,task=task,rate_grid=rate_grid,radar_point=radar_point,hide_menu=map_identity!="weather")
     if show_airfields:
         from uk_airfields import add_airfields
         add_airfields(map_view,aviation,live=live_airfields,route=map_identity=="planner" or visual_mode=="route",selected=selected_airfield)
+    from ogn_traffic import add_traffic
+    add_traffic(map_view,show=map_identity=='traffic',recorded=not live_airfields)
+    control=folium.LayerControl(collapsed=True,position='topright').add_to(map_view)
+    finish_layer_control(map_view,control)
     return map_view,rank_wave_sites(waves)
 
 
@@ -603,9 +582,27 @@ def main():
     st.metric('Cross-country day estimate',classification.label,
         help='Local weather capacity from conservative thermal climb, usable height and worst-direction wind with a 10% reserve. A 500 km label still requires a separately assessed 500 km corridor.')
     st.caption(f'{classification.scope} · '+classification.explanation)
+    from day_rating import rate_day
+    rating_key=(origin.key,loading,model_key,anchor.date().isoformat(),tuple((f.location.key,f.model,f.fetched_at.isoformat()) for f in combined))
+    rating_cache=st.session_state.setdefault('_day_ratings',{})
+    if rating_key not in rating_cache:
+        rating_cache.clear()
+        rating_cache[rating_key]=tuple(rate_day(combined,origin,anchor.astimezone(LOCAL_TIMEZONE).date()+timedelta(days=i),loading,
+            preference=(FORECAST_MODELS[model_key].api_name,)) for i in range(5))
+    day_ratings=rating_cache[rating_key];rating=day_ratings[day_index]
+    st.subheader(f'{rating.symbols} · {rating.label}',help='Local PFD distance band capped by conservative thermal climb, usable height, sustained window and spread-out risk. Missing evidence stays unavailable; wave does not inflate the thermal rating.')
+    st.caption('UK RASP-style local day rating · '+origin.name+' · Independent distance bands with weather quality caps. '+
+        ' '.join(rating.reasons)+(' Wave potential is shown separately.' if wave_signal else ''))
+    cards=st.columns(5)
+    for i,r in enumerate(day_ratings):
+        with cards[i]:
+            st.metric(datetime.fromisoformat(r.day).strftime('%a %d %b'),r.symbols,
+                help='Independent UK RASP-style rating at the task start / Long Mynd. Distances are local weather capacity; check your full route separately. '+' '.join(r.reasons))
+            st.caption(r.label+(' · '+str(round(r.distance_km))+' km' if r.distance_km is not None else ''))
+            st.caption('Window '+('unavailable' if r.window_hours is None else f'{r.window_hours:g} h'))
     if not profiles: st.warning('The selected model does not cover this hour. Choose another day, time or model.')
     waves=rank_wave_sites([evaluate_wave(p,WAVE_RIDGES[key.split(':',1)[1]]) for key,p in profiles.items() if key.startswith('ridge:')])
-    map_tab,task_tab,help_tab,wave_tab,bot_tab,quality_tab=st.tabs(['Weather map','Task planner','Help Guide','Wave watch','Help & Briefing Bot','Data quality'],key='dashboard_tabs',on_change='rerun')
+    map_tab,task_tab,help_tab,wave_tab,traffic_tab,bot_tab,quality_tab=st.tabs(['Weather map','Task planner','Help Guide','Wave watch','Live OGN Glider Radar','Help & Briefing Bot','Data quality'],key='dashboard_tabs',on_change='rerun')
     with map_tab:
         if map_tab.open:
             map_view,waves=build_map(map_forecasts,when,layers=layers,aviation=aviation,radar=radar,convergence=convergence,
@@ -639,13 +636,13 @@ def main():
     with help_tab:
         render_help(catalog,assessment,classification,waves)
     with wave_tab:
-        st.subheader('National wave potential')
+        st.subheader('Terrain-forced wave lift and sink')
         if wave_tab.open:
             from wave_map import add_wave_map
-            wave_map,_=build_map(combined,when,layers=[],visual_mode='clean',include_modes=False,map_identity='wave',aviation=aviation,show_airfields=show_airfields,live_airfields=not bool(recorded),selected_airfield=st.session_state.get('airfield_popup:last_wave_event'))
+            wave_map,_=build_map(combined,when,layers=[],visual_mode='clean',include_modes=False,map_identity='wave',turnpoints=catalog.turnpoints,aviation=aviation,show_airfields=show_airfields,live_airfields=not bool(recorded),selected_airfield=st.session_state.get('airfield_popup:last_wave_event'))
             add_wave_map(wave_map,combined,when)
             def on_wave_click():process_map_event(st.session_state.get('wave_map',{}),catalog,day,'Inspect weather',event_key='last_wave_event',visual_override='wave')
-            st_folium(wave_map,height=650,use_container_width=True,pixelated=False,key='wave_map',on_change=on_wave_click,wrap_longitude=False,returned_objects=['last_object_clicked','last_clicked'])
+            st_folium(wave_map,height=820,use_container_width=True,pixelated=False,key='wave_map',on_change=on_wave_click,wrap_longitude=False,returned_objects=['last_object_clicked','last_clicked'])
         weather_table([{'Site':WAVE_RIDGES[w.site].point.name,'Score':w.score,'Evidence':'Complete' if w.complete else 'Provisional',
                         '850 hPa ascent kt':w.uplift_850_knots,'700 hPa ascent kt':w.uplift_700_knots,'N² s⁻²':w.brunt_vaisala_n2} for w in waves],
             {'Site':'Approximate named ridge anchor; it is not a surveyed wave entry point.','Score':'Heuristic score from flow alignment, shear, stability, Scorer decrease and model ascent.',
@@ -656,6 +653,14 @@ def main():
         st.caption('Wave signals inform the briefing but do not add assumed lift to a thermal task calculation.')
     with bot_tab:
         briefing_panel(catalog,day,loading,model_key,bucket,combined,assessment,classification,waves,recorded=bool(recorded))
+    with traffic_tab:
+        if traffic_tab.open:
+            st.subheader('Live OGN Glider Radar')
+            st.caption('Current glider reports refresh independently of the forecast. Stale reports disappear after two minutes. Use the map’s Demo button for clearly labelled playback.')
+            traffic_map,_=build_map(combined,when,layers=[],visual_mode='clean',include_modes=False,map_identity='traffic',
+                turnpoints=catalog.turnpoints,aviation=aviation,show_airfields=True,live_airfields=not bool(recorded))
+            st_folium(traffic_map,height=700,use_container_width=True,key='traffic_map',pixelated=False,wrap_longitude=False,
+                returned_objects=['last_object_clicked','last_clicked'])
     with quality_tab:
         catalog_panel(catalog)
         st.divider(); st.subheader('Forecast quality')

@@ -1,0 +1,319 @@
+{
+  "schema": 1,
+  "source": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png",
+  "zoom": 8,
+  "retrieved_at": "2026-10-24T11:21:50.237227+00:00",
+  "sha256": "7c8b350c2008a3348a741387f7e1969ebf13d7c35a8918455f3843e50de538e8",
+  "tile_sha256": {
+    "(123, 77)": "ba1c24477e9107b201b2d4074e84b3655b91a45ffb7437b44c1a2f3dd6b459c5",
+    "(123, 78)": "4b275251b9b26a9f4c3ca97e52e2c671d8e499dee2a359964b49ac94a5330e55",
+    "(123, 79)": "3b103e5124775ca77b93ec98b98109d7f15c169c7f8c09d2a26a80a43163a395",
+    "(124, 77)": "d1e0451f867b9bbf0fa2e7baedae717995ea73ebc4e4302b42f4a61ee3896c6c",
+    "(124, 78)": "c62cdf90d47f8c09f7422926c4833a10f17d66bb0d7455845344bfab8a3a25d7",
+    "(124, 79)": "84bde82f616fbad67c290e2a4b0b7ab4e0d24bb90f7ea0ad37ae7ebf49bdf316",
+    "(124, 80)": "e4006ef9806c678dd6e7ff29b3635569a6bba972c450eccc72f0b3cb4f5e1b95",
+    "(124, 82)": "aefb84afe1dea4e9ccfaf0c5d3659cc7d5f7f4faa293013fc283c68c5a677e1a",
+    "(124, 83)": "0612a3e18a6262c7ce03ab6d984358aba94095fc6d5042dad9a6c13801fe83bc",
+    "(124, 84)": "3ca34903cb6250844e2d2386e2e8091b3ec620700eb848ac1fa6b4273906463b",
+    "(124, 85)": "eb7f038ebe21402da3b7a55e2343cf78d70fceba0483ea8219e637b9f3cd4ce0",
+    "(125, 77)": "ed28d0d5e8db04e57c8d9298bdc7615219e07f3d53aedcc71c647765a1998a07",
+    "(125, 78)": "8d23228f7d0d95398e4cfc7170fe62690f477a4a8930320eaa523f1397fdfe52",
+    "(125, 79)": "ef5453043beb7b445800af199e80ac1f6fe5643b535216984e3f1d15b4863299",
+    "(125, 80)": "29b11a170402829ffd6804cabd78570cbc92fcef60a201d62753cbe466d4110e",
+    "(125, 81)": "c74eaa6af8a08ec83be2d173ee72739edd39b1d3140ce962ef57ebaa76ec3e34",
+    "(125, 82)": "f5e614227de5dc4f77435bb93ebbe45eb954e7464a594691384a454de6bfff96",
+    "(125, 83)": "9a6c84a9591047ae8f9aecc2d9c5c110a0a349e4ede42f05fd36d74690ff679b",
+    "(125, 84)": "558884a5f6b0e5f54d693313b4a301a7ae189b2eefe753d25ae4f8a5a9e465a8",
+    "(125, 85)": "214ac9eac48a44b3706d99f9e648f5b089733ac9b5ff745bb00880b57a7eca12",
+    "(126, 77)": "3955c343ac318c26199a1e66461c7670bd090a7de96c3c8c22da364beb1da9f4",
+    "(126, 78)": "042fe08fb2031178e1f350335a8b1b2f117e53fa1bda6970f816df259212d823",
+    "(126, 79)": "0818bbf33d39d196445308207f6bef37a1bf78ce90c455b6600bd94defd24396",
+    "(126, 80)": "4dc92b6adef6336aa7bab65bb5eb270afc161aa04e9804c74d566a56da955c38",
+    "(126, 81)": "676c104c9cedb95bc5e24adef7756bf0c960cd1b55cc37dcbd010fc7542e2bd0",
+    "(126, 82)": "03617ee3f13b54cbc784b9b00533bbedc3a7a8bc523de3bf6c5d9bdcfb5c2797",
+    "(126, 83)": "216256d6f56b42fcfd68eecf109a26decabb3cb68e802def7557edf615766ae4",
+    "(126, 84)": "ec57f28483abd1046456134ea3c1520b86b6a76a74061b0a92f071395dd80dd3",
+    "(126, 85)": "26f66c20f02c6f2b942413f98bcd797048d5d00ca61b03c1aa0c2b1f112c026f",
+    "(127, 79)": "54ef23063f55e151851c0e3e3fd463871974cec8b1705e24d1e2b92184e6698e",
+    "(127, 80)": "4fb4e41b04185831909cf25419c61add66fd67a1c0b6d4b910627dc753296f0d",
+    "(127, 81)": "d214cf09f955c831c380144c9cf2d527ec63548443afbb0eab2bd39e80f25c38",
+    "(127, 82)": "8d07d8d3b3a5fc52bf787d580014d0c1acd984896ee35b38a9c6d7eb141af64a",
+    "(127, 83)": "7de077a9dd246e3d411f729dac577de06c934566bc5fc3eb39a26bb9cec8f7c2"
+  },
+  "domains": [
+    {
+      "key": "snowdonia",
+      "name": "Snowdonia / Yr Wyddfa",
+      "latitude": 53.05,
+      "longitude": -4.02,
+      "spacing_m": 500,
+      "bounds": [
+        [
+          52.4712361499288,
+          -4.976421072581908
+        ],
+        [
+          53.621094519877744,
+          -3.063578927418092
+        ]
+      ]
+    },
+    {
+      "key": "clwyd",
+      "name": "Denbigh / Clwydian Range / Ruthin",
+      "latitude": 53.13,
+      "longitude": -3.25,
+      "spacing_m": 500,
+      "bounds": [
+        [
+          52.551224883872095,
+          -4.20820068740099
+        ],
+        [
+          53.70108345271412,
+          -2.29179931259901
+        ]
+      ]
+    },
+    {
+      "key": "berwyn",
+      "name": "Berwyns / Llangollen",
+      "latitude": 52.9,
+      "longitude": -3.35,
+      "spacing_m": 500,
+      "bounds": [
+        [
+          52.32125716069655,
+          -4.30310704353482
+        ],
+        [
+          53.47111516124887,
+          -2.3968929564651806
+        ]
+      ]
+    },
+    {
+      "key": "cadair",
+      "name": "Cadair Idris / Aran Fawddwy",
+      "latitude": 52.77,
+      "longitude": -3.8,
+      "spacing_m": 500,
+      "bounds": [
+        [
+          52.19127525189335,
+          -4.750258658380902
+        ],
+        [
+          53.341132935976496,
+          -2.8497413416190978
+        ]
+      ]
+    },
+    {
+      "key": "cambrian",
+      "name": "Cambrian Mountains / Plynlimon",
+      "latitude": 52.4,
+      "longitude": -3.75,
+      "spacing_m": 500,
+      "bounds": [
+        [
+          51.821326152441245,
+          -4.692270488813587
+        ],
+        [
+          52.971182954053845,
+          -2.807729511186413
+        ]
+      ]
+    },
+    {
+      "key": "mynd",
+      "name": "Long Mynd / Stiperstones / Corndon / Clun",
+      "latitude": 52.5,
+      "longitude": -2.95,
+      "spacing_m": 500,
+      "bounds": [
+        [
+          51.92131248067181,
+          -3.894412300846114
+        ],
+        [
+          53.07116951816408,
+          -2.0055876991538866
+        ]
+      ]
+    },
+    {
+      "key": "clee",
+      "name": "Brown Clee / Titterstone Clee",
+      "latitude": 52.45,
+      "longitude": -2.6,
+      "spacing_m": 500,
+      "bounds": [
+        [
+          51.87131932437058,
+          -3.543339819911822
+        ],
+        [
+          53.0211762436826,
+          -1.656660180088178
+        ]
+      ]
+    },
+    {
+      "key": "brecon",
+      "name": "Black Mountains / Talgarth / Brecon Beacons",
+      "latitude": 51.94,
+      "longitude": -3.32,
+      "spacing_m": 500,
+      "bounds": [
+        [
+          51.36138824848234,
+          -4.252578297420495
+        ],
+        [
+          52.511243989380766,
+          -2.3874217025795046
+        ]
+      ]
+    },
+    {
+      "key": "malvern",
+      "name": "Malvern Hills",
+      "latitude": 52.1,
+      "longitude": -2.34,
+      "spacing_m": 500,
+      "bounds": [
+        [
+          51.5213667962263,
+          -3.275919963143978
+        ],
+        [
+          52.67122290159805,
+          -1.4040800368560225
+        ]
+      ]
+    },
+    {
+      "key": "peak",
+      "name": "Peak District",
+      "latitude": 53.35,
+      "longitude": -1.82,
+      "spacing_m": 500,
+      "bounds": [
+        [
+          52.77119368315287,
+          -2.7831386729594865
+        ],
+        [
+          53.92105280580978,
+          -0.8568613270405134
+        ]
+      ]
+    },
+    {
+      "key": "pennines",
+      "name": "Pennines / Yorkshire Dales",
+      "latitude": 54.35,
+      "longitude": -2.18,
+      "spacing_m": 500,
+      "bounds": [
+        [
+          53.77104766120239,
+          -3.1664274326008504
+        ],
+        [
+          54.920909434161565,
+          -1.1935725673991506
+        ]
+      ]
+    },
+    {
+      "key": "lakes",
+      "name": "Lake District",
+      "latitude": 54.55,
+      "longitude": -3.05,
+      "spacing_m": 500,
+      "bounds": [
+        [
+          53.971017596632365,
+          -4.041257637097506
+        ],
+        [
+          55.12087992720608,
+          -2.058742362902494
+        ]
+      ]
+    },
+    {
+      "key": "cheviots",
+      "name": "Cheviots",
+      "latitude": 55.48,
+      "longitude": -2.15,
+      "spacing_m": 500,
+      "bounds": [
+        [
+          54.90087379239076,
+          -3.164519135381686
+        ],
+        [
+          56.050738846494134,
+          -1.1354808646183134
+        ]
+      ]
+    },
+    {
+      "key": "highlands",
+      "name": "Scottish Highlands / Lochaber",
+      "latitude": 56.9,
+      "longitude": -4.75,
+      "spacing_m": 500,
+      "bounds": [
+        [
+          56.32064050650834,
+          -5.802773699564326
+        ],
+        [
+          57.470510176953006,
+          -3.6972263004356747
+        ]
+      ]
+    },
+    {
+      "key": "grampians",
+      "name": "Grampians / Cairngorms / Aboyne",
+      "latitude": 57.0,
+      "longitude": -3.35,
+      "spacing_m": 500,
+      "bounds": [
+        [
+          56.42062340599699,
+          -4.405601499111482
+        ],
+        [
+          57.570493424466115,
+          -2.2943985008885175
+        ]
+      ]
+    },
+    {
+      "key": "fife",
+      "name": "Portmoak / Ochils",
+      "latitude": 56.23,
+      "longitude": -3.4,
+      "spacing_m": 500,
+      "bounds": [
+        [
+          55.65075274780219,
+          -4.434291602280641
+        ],
+        [
+          56.80062016660034,
+          -2.365708397719359
+        ]
+      ]
+    }
+  ],
+  "attribution": "Mapzen elevation tiles / AWS Open Data; SRTM, GMTED and other public elevation sources. https://registry.opendata.aws/terrain-tiles/",
+  "processing": "Bilinear sampling at 500 m spacing; ocean/bathymetric negative heights set to sea level. No synthetic ridge terrain."
+}

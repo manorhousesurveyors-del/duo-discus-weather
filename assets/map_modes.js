@@ -1,6 +1,7 @@
 /* Independent Windy/SkySight-inspired UI. Forecast sources remain explicit. */
 function installDuoModes(map, data) {
   'use strict';
+  if(['wind','thermal','pfd','xc','stf'].includes(data.mode))map._duoClientClicks=true;
   if (map._duoCleanup) map._duoCleanup();
   const style = document.createElement('style');
   style.textContent = `
@@ -67,7 +68,7 @@ function installDuoModes(map, data) {
     }
     if(!data.contours.features.length)control('bottomleft','duo-legend','No positive supported contour areas at this time.');
   }
-  if(data.mode==='route'){
+  if(data.mode==='route'&&!map._duoTask){
     const bar=control('bottomleft','duo-route-controls','<button data-action="undo" title="Remove the last point from this date’s task.">↶ Undo last</button><button data-action="clear" title="Clear this route and its completion state.">Clear route</button><button data-action="finish" title="Use the last selected point as Finish and open the task sheet.">✓ Finish here</button><button data-action="home" title="Append Start as Finish and open the task sheet.">⌂ Return home</button><button data-action="optimize" title="Open route distance and optimisation controls below the map.">✦ Optimise route</button><small>Click BGA markers in order: Start → turnpoints → Finish. Finish here or Return home opens your task sheet.</small>');
     bar.querySelectorAll('[data-action]').forEach(button=>button.onclick=()=>event('action',button.dataset.action));
   }

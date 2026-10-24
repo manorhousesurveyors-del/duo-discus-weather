@@ -185,8 +185,10 @@ def planner_panel(catalog,day,when,loading,model_key,bucket,forecasts,points,ass
         map_identity='planner',loading=loading,anchor=when,aviation=aviation,show_airfields=True,live_airfields=not recorded,selected_airfield=st.session_state.get('airfield_popup:last_planner_event'))
     if airspace:
         import folium
-        display_airspace={**airspace,'features':[{**f,'properties':{k:html.escape(v) if isinstance(v,str) else v for k,v in f['properties'].items()}} for f in airspace['features']]}
-        folium.GeoJson(display_airspace,name='Supplied airspace / danger boundaries',show=False,
+        from airspace import display_airspace
+        display=display_airspace(airspace)
+        display={**display,'features':[{**f,'properties':{k:html.escape(v) if isinstance(v,str) else v for k,v in f['properties'].items()}} for f in display['features']]}
+        folium.GeoJson(display,name='Airspace / danger boundaries · simplified display',show=False,
             style_function=lambda _:dict(color='#b13655',weight=1,fillOpacity=.06),
             tooltip=folium.GeoJsonTooltip(fields=['name','class','floor','ceiling'],aliases=['Name','Class','Lower limit','Upper limit'])).add_to(view)
     if report:
@@ -196,17 +198,15 @@ def planner_panel(catalog,day,when,loading,model_key,bucket,forecasts,points,ass
                 folium.PolyLine(line['points'],color='#12b596',weight=5,dash_array='8 5',tooltip=folium.Tooltip('Candidate energy line: '+html.escape(line['note']))).add_to(view)
     # Folium's layer menu references every overlay at render time. It must be
     # emitted after the planner's extra layers so their JS variables exist.
-    import folium
-    for key,child in list(view._children.items()):
-        if isinstance(child,folium.LayerControl):
-            view._children.pop(key)
-            child.add_to(view)
+    from client_map import reorder_layer_control
+    reorder_layer_control(view)
     def on_click():process_map_event(st.session_state.get('planner_map',{}),catalog,day,'Add to task',event_key='last_planner_event',visual_override='route')
     interaction=st_folium(view,height=620,use_container_width=True,pixelated=False,key='planner_map',on_change=on_click,wrap_longitude=False,returned_objects=['last_object_clicked','last_clicked'])
     if interaction and interaction!=st.session_state.get('last_planner_event'):
         old=active_task(day);process_map_event(interaction,catalog,day,'Add to task',event_key='last_planner_event',visual_override='route')
         if active_task(day)!=old:st.rerun()
-    if st.button('Analyse Task & Route Weather',type='primary',disabled=len(points)<2,width='stretch',key='analyse_route',help='Assess the route, fetch a sampled terrain corridor and compare centre/±10 km weather paths. Airspace checks use the dated bundled or uploaded boundaries; current activation needs a NOTAM check.'):
+    requested=st.session_state.pop('analyse_client_task',False)
+    if st.button('Analyse Task & Route Weather',type='primary',disabled=len(points)<2,width='stretch',key='analyse_route',help='Analyse the saved route. For an unsaved browser draft, use Analyse / save on the map. Current airspace activation needs a NOTAM check.') or (requested and len(points)>=2):
         try:
             from task_planning import assess_task,nearby_forecasts
             samples=tuple({p.key:p for leg in energy_sample_rows(points) for row in leg for p in row}.values())

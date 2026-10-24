@@ -67,7 +67,7 @@ class WindCoverageTests(unittest.TestCase):
             for node in ast.walk(ast.parse(Path(path).read_text())):
                 if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='st_folium':
                     kwargs={k.arg:k.value for k in node.keywords};self.assertEqual(ast.literal_eval(kwargs['returned_objects']),['last_object_clicked','last_clicked']);count+=1
-        self.assertEqual(count,3)
+        self.assertEqual(count,4)
 
     @unittest.skipUnless(shutil.which('node'),'Node is needed to parse generated map JavaScript')
     def test_generated_map_scripts_parse_with_route_markers_and_airfields(self):
@@ -195,8 +195,9 @@ class RouteAndWaveTests(unittest.TestCase):
         self.assertIsNotNone(at_height(p,25000*.3048))
         forecasts=tuple(forecast(GeoPoint('ridge:'+key,r.point.name,r.point.latitude,r.point.longitude)) for key,r in WAVE_RIDGES.items())
         body=wave_payload(forecasts,NOW)
-        self.assertEqual([f['altitude'] for f in body['frames']],[3000,10000,12000,16000,20000,25000])
-        self.assertTrue(all(f['image'].startswith('data:image/png;base64,') for f in body['frames']))
+        self.assertEqual([f['altitude'] for f in body['frames']],[3000,7000,10000,12000,13000,16000,20000,23000,25000])
+        self.assertTrue(all(tile['image'].startswith('data:image/png;base64,') for f in body['frames'] for tile in f['tiles']))
+        self.assertTrue(any(f['negative_cells'] for f in body['frames']))
         self.assertTrue(any(f['positive_cells'] for f in body['frames']))
         self.assertTrue(any('Denbigh' in s['name'] for s in body['frames'][0]['sites']))
         empty=wave_payload((),NOW);self.assertTrue(all(f['positive_cells']==0 and not f['bars'] for f in empty['frames']))

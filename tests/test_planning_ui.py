@@ -67,7 +67,7 @@ class PlanningUiTests(unittest.TestCase):
         self.assertIn('BGA AAA',clean_html);self.assertNotIn('Active task',clean_html)
         self.assertIn('Active task',active_html);self.assertIn('Start 1: AAA',active_html)
         self.assertIn('Finish 3: AAA',active_html)
-        self.assertIn('leaflet.markercluster@1.5.3',clean_html)
+        self.assertIn('DuoCanvasPoints',clean_html);self.assertNotIn('leaflet.markercluster',clean_html)
 
     def test_builder_sequence_reorder_clear_and_day_switch(self):
         from streamlit.testing.v1 import AppTest
