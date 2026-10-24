@@ -45,8 +45,7 @@ def task_soaring_layers(run_id,when,loading,_forecasts):
 
 
 def add_task_editor(map_view,points,when,forecasts,loading):
-    from map_modes import map_products
-    from map_weather import contour_features,BANDS
+    from map_weather import BANDS
     from app_cache import forecast_run_id
     samples,contours=task_soaring_layers(forecast_run_id(forecasts),when,loading,_forecasts=forecasts)
     records=[{'code':p.code,'name':p.name,'lat':p.latitude,'lon':p.longitude,'elevation_m':p.elevation_m} for p in points]

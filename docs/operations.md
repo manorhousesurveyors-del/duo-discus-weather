@@ -281,3 +281,19 @@ Run `scripts/verify_lazy_pages.py`, `scripts/verify_route_drag.py` and
 `scripts/verify_client_maps.py --proxy-assets` against the recorded test server
 on port 8504. `scripts/verify_gemini_browser.py` uses the explicitly mocked fixture
 server on port 8505 and cannot verify real Google quota or account access.
+
+## Startup after a Streamlit Cloud hot reload
+
+`app.py` treats OGN as an optional module. Missing activity/heartbeat/overlay
+hooks use guarded lookups, and an import failure disables traffic without
+blocking weather or tasks. The radar page explains when traffic is unavailable.
+`set_worker_active(active: bool)` remains a public, top-level function and only
+changes an existing worker's activity lease.
+
+Before binding application functions, `runtime_imports.py` checks already-loaded
+modules for the APIs introduced by lazy pages and shared tasks. Missing functions
+or outdated keyword signatures trigger one reload in dependency order. Current
+modules are left alone, and unused modules are not eagerly imported. OGN is
+excluded from automatic reloads because it owns a background worker. Required
+core APIs are validated after reloading; a genuinely incomplete checkout is not
+silently treated as a working forecast engine.

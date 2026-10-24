@@ -688,3 +688,26 @@ No email, ntfy or WhatsApp notifications were sent during this validation.
 The uploaded request ended mid-sentence after “cloud base, and spread”. All
 complete requirements were implemented; the local lift breakdown includes
 spread-out risk from the forecast evidence.
+
+## Streamlit Cloud stale-import hotfix · 24 October 2026
+
+**240 tests passed in 25.5 seconds**. Python compilation, dependency checks and
+`git diff --check` also passed.
+
+The reported startup failure was consistent with a pre-deployment `ogn_traffic`
+module retained in `sys.modules`: the committed source already defined
+`set_worker_active`, but a direct symbol import could still fail. All OGN entry
+points in `app.py` now use optional module loading and guarded attribute lookup.
+
+Regression coverage includes absent OGN hooks, a failed OGN import, worker lease
+behaviour without starting another thread, old function signatures, real reloads
+of ten cached application modules, and an audit of every local symbol imported
+by `app.py`, `briefing_bot.py`, `client_map.py` and `ogn_traffic.py`.
+
+Headless Chromium passed normal startup and shared-task/page navigation using
+recorded weather. A second isolated server deliberately removed the new APIs
+from ten loaded modules and supplied an OGN module with no hooks. Weather, Task,
+Wave, traffic fallback and Help pages opened without a Python exception or
+JavaScript error. Current modules were not reloaded again after recovery, and
+OGN's worker object was preserved. These are local deployment simulations;
+Streamlit Cloud's hosted process was not accessed directly.

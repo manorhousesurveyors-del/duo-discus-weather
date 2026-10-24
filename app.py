@@ -22,6 +22,11 @@ from plotly.subplots import make_subplots
 from scipy.interpolate import griddata
 from scipy.spatial import cKDTree
 import streamlit as st
+from runtime_imports import refresh_cached_modules, optional_module
+
+# Streamlit may rerun this file while retaining pre-deployment dependencies.
+# Refresh only outdated APIs, before binding any application function imports.
+refresh_cached_modules()
 from map_component import render_map as st_folium
 
 from task_planning import task_distance
@@ -424,8 +429,12 @@ def build_map(forecasts, when, *, layers, aviation=None, radar=None, convergence
     if show_airfields:
         from uk_airfields import add_airfields
         add_airfields(map_view,aviation,live=live_airfields,route=map_identity=="planner" or visual_mode=="route",selected=selected_airfield)
-    from ogn_traffic import add_traffic
-    add_traffic(map_view,show=map_identity=='traffic',recorded=not live_airfields)
+    ogn_traffic=optional_module('ogn_traffic')
+    # A legacy OGN module has no activity lease. Leave its worker untouched and
+    # omit its overlay until the current module is available.
+    if callable(getattr(ogn_traffic,'set_worker_active',None)):
+        getattr(ogn_traffic,'add_traffic',lambda *_args,**_kwargs:None)(
+            map_view,show=map_identity=='traffic',recorded=not live_airfields)
     control=folium.LayerControl(collapsed=True,position='topright').add_to(map_view)
     finish_layer_control(map_view,control)
     return map_view,rank_wave_sites(waves)
@@ -465,8 +474,9 @@ def _main():
     pages=['Weather map','Task planner','Help Guide','Wave watch','Live OGN Glider Radar','Help & Briefing Bot','Data quality']
     st.markdown('<style>.st-key-active_page [role="radiogroup"]{gap:0;border-bottom:1px solid #dce5e8;flex-wrap:wrap}.st-key-active_page [role="radiogroup"] label{padding:10px 12px;margin:0;border-bottom:2px solid transparent}.st-key-active_page [role="radiogroup"] label:has(input:checked){border-bottom-color:#267d84;color:#267d84}.st-key-active_page [data-testid="stRadioOption"]>div>div:first-child{display:none}.st-key-active_page [data-testid="stRadioOption"]:focus-within{outline:2px solid #267d84;outline-offset:-2px}</style>',unsafe_allow_html=True)
     active_page=st.radio('Page',pages,horizontal=True,key='active_page',label_visibility='collapsed',help='Only this page loads its maps and calculations. Task edits are shared across Weather and Task pages.')
-    from ogn_traffic import set_worker_active
-    set_worker_active(active_page=='Live OGN Glider Radar' and not bool(recorded))
+    ogn_traffic=optional_module('ogn_traffic')
+    getattr(ogn_traffic,'set_worker_active',lambda *_args,**_kwargs:None)(
+        active_page=='Live OGN Glider Radar' and not bool(recorded))
     catalog=current_catalog()
     default_thermal=st.query_params.get('thermals','off')=='on'
     if 'map_layers' not in st.session_state:
@@ -668,9 +678,13 @@ def _main():
              'N² s⁻²':'Brunt–Väisälä stability between 850 and 700 hPa. Positive values indicate static stability.'})
         st.caption('Wave signals inform the briefing but do not add assumed lift to a thermal task calculation.')
     if active_page=='Live OGN Glider Radar':
-        if not recorded:
-            from ogn_traffic import traffic_heartbeat
-            traffic_heartbeat()
+        ogn_traffic=optional_module('ogn_traffic')
+        traffic_ready=all(callable(getattr(ogn_traffic,name,None))
+            for name in ('set_worker_active','traffic_heartbeat','add_traffic'))
+        if not traffic_ready:
+            st.info('Live traffic is temporarily unavailable while the app updates. Weather and task planning remain available.')
+        elif not recorded:
+            getattr(ogn_traffic,'traffic_heartbeat',lambda *_args,**_kwargs:None)()
         st.subheader('Live OGN Glider Radar')
         st.caption('Current glider reports refresh independently of the forecast. Stale reports disappear after two minutes. Use the map’s Demo button for clearly labelled playback.')
         traffic_map,_=build_map(combined,when,layers=[],visual_mode='clean',include_modes=False,map_identity='traffic',

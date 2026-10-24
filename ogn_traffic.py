@@ -116,7 +116,8 @@ def ensure_worker():
     return _worker
 
 
-def set_worker_active(active):
+def set_worker_active(active: bool) -> None:
+    """Renew or pause an existing worker; this hook never starts a new thread."""
     if _worker is not None:_worker.active_until=time.time()+35 if active else 0
 
 
