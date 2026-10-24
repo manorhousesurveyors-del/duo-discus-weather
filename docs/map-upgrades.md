@@ -156,19 +156,32 @@ turns the switch off too. Leaving Weather always resets the switch.
 
 The chart shows 07:30–18:30 on the selected date and the next local date, including
 BST/GMT transitions. Scroll sideways for the second day and down for the hourly
-strips. The numerical table beneath the canvas provides accessible values.
+strips. The white hourly grid keeps its 165 px label column fixed while scrolling.
+Each date includes calculated sunrise/sunset at the clicked location (approximate
+astronomical times, not a prediction of sunlight through cloud). The numerical
+table beneath the canvas provides accessible values.
 
 - The lower 7,000 ft receives extra vertical space; the scale reaches 38,000 ft.
 - Clouds are a relative-humidity/model-cover proxy. Hatching means missing data.
-- Coloured plumes show conservative net climb below the working ceiling.
+- Indigo, blue, cyan and mint contours show conservative net thermal strength
+  below the estimated thermal top.
 - Rose is the LCL: terrain feet + `400 × max(0, T₂m − Td₂m)`.
-- Solid black is working ceiling; dotted charcoal is the dry mixing top. Cumulus
-  icons show positive mixing-top minus LCL depth, which is excluded from usable
-  gliding height. Known unsoarable samples have zero working ceiling; unknown
-  samples have dashes.
+- Solid black is the estimated thermal/mixing top. Stacked scalloped puffs fill
+  positive thermal-top minus LCL depth; deep stacks show deeper possible cloud
+  and high low-cloud cover darkens the stacks. These are model cloud estimates,
+  not confirmation of towering cumulus or a thunderstorm prediction.
+- The bordered **Soarable Height** rows exclude cloud depth. An unsoarable hour
+  displays terrain in the MSL row and zero AGL; an unknown hour displays dashes.
+- Separate temperature/dewpoint rows align with the white line chart. **Nearest
+  Obs** uses already-loaded METARs (for example from the METAR overlay). Actual
+  reports appear as red dots; multiple reports no more than three hours apart
+  can be joined with dashed red segments. With no cached report, the chart says
+  unavailable and does not fabricate observations or a blended forecast.
 - Wind barbs use 5/10/50 kt conventions. Surface wind is **10 m AGL**; the source
   does not supply 2 m wind. Temperatures/dewpoints are at 2 m.
-- The pressure curve spans 990–1030 hPa. Arrows flag values outside that range;
+- Wind and thermal-top wind have separate bordered cells with direction arrows,
+  speeds, bearings and bold surface gusts. Heating cells turn white to yellow.
+- The pressure curve spans 980–1020 hPa. Arrows flag values outside that range;
   numerical readouts retain the actual pressure.
 
 Clicks use only cached data. The clicked position is retained, and up to four

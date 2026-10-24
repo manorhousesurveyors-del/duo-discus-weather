@@ -42,7 +42,22 @@ async def verify(args):
         page = await context.new_page()
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.on('websocket', lambda socket: socket.on('framesent', lambda _: sent.append(time.perf_counter())))
+        await page.add_init_script("""window._verifiedMapEvents=[];
+          window.addEventListener('message',event=>{
+            const data=event.data,value=data?.value;
+            if(data?.type==='streamlit:setComponentValue' && value &&
+               !('document_cache' in value) && !('document_request' in value))
+              window._verifiedMapEvents.push(value);
+          });""")
         await page.goto(args.url, wait_until='domcontentloaded')
+
+        async def event_count():
+            # Restoring a cached document can resend an unchanged task version.
+            # Count user edits, not the explicit recovery handshake.
+            return await page.evaluate("""window._verifiedMapEvents.filter(event=>{
+              const command=event.last_object_clicked?.duo;
+              return command?.kind!=='task_sync'||JSON.parse(command.value).action!=='recover';
+            }).length""")
 
         async def open_map(name, selector):
             await page.locator('.st-key-active_page').get_by_text(name,exact=True).click(timeout=90000)
@@ -65,7 +80,7 @@ async def verify(args):
         frame, root = await open_map('Task planner','[data-action="clear"]')
         await frame.locator('[data-action="clear"]').click()
         await page.wait_for_timeout(700)
-        baseline = len(sent)
+        baseline = await event_count()
         await point_click(root,'MYN')
         await point_click(root,'BIE')
         await page.wait_for_timeout(100)
@@ -73,24 +88,24 @@ async def verify(args):
         for name in ('Speed to Fly (STF kt & Thermal Activity)','Potential Flight Distance (PFD)','Thermal Lift (kt)'):
             await root.evaluate('(el,name)=>{const m=window.map_div;m.addLayer(m._duoLayers._layers.find(x=>x.name===name).layer);}',name)
         await page.wait_for_timeout(700)
-        result['task']['draft_updates'] = len(sent)-baseline
+        result['task']['draft_updates'] = (await event_count())-baseline
         assert result['task']['points']==['MYN','BIE'] and result['task']['rubber']==2
         assert result['task']['bga']>=1390 and result['task']['airfields']>=1098
-        assert result['task']['draft_updates']==2
+        assert result['task']['draft_updates']==2,result['task']
         await page.screenshot(path=str(output/'task.png'),full_page=True)
         await point_click(root,'MYN')
         assert await root.evaluate('el=>window.map_div._duoTask.complete&&window.map_div._duoTask.rubber.getLatLngs().length===0')
         await page.get_by_text('BGA / SeeYou Task Sheet',exact=True).wait_for(timeout=60000)
         await page.wait_for_timeout(1600)
-        result['task']['finish_updates'] = len(sent)-baseline-result['task']['draft_updates']
+        result['task']['finish_updates'] = (await event_count())-baseline-result['task']['draft_updates']
         assert result['task']['finish_updates']==1
         # Saving a second time catches nested Streamlit bridge wrappers.
         await frame.locator('[data-action="undo"]').click()
         await page.wait_for_timeout(400)  # allow the separate Undo state packet
-        baseline = len(sent)
+        baseline = await event_count()
         await frame.locator('[data-action="finish"]').click()
         await page.wait_for_timeout(4000)
-        assert len(sent)-baseline==1
+        assert (await event_count())-baseline==1,await page.evaluate('window._verifiedMapEvents')
         assert await root.evaluate('el=>window.map_div._duoTask.complete&&window.map_div._duoTask.points.length===2')
         await frame.locator('[data-action="home"]').click()
         await page.wait_for_timeout(4000)
@@ -103,7 +118,7 @@ async def verify(args):
         assert await root.evaluate('el=>window.map_div._duoWave.ready')
         await root.evaluate('el=>{window.map_div.setView([52.85,-3.5],8,{animate:false});}')
         await page.wait_for_timeout(800)
-        baseline = len(sent)
+        baseline = await event_count()
         result['wave'] = {'levels':[]}
         for i in range(9):
             await frame.locator(f'[data-wave-level="{i}"]').click()
@@ -136,20 +151,20 @@ async def verify(args):
         await frame.locator('[data-wave-section]').uncheck()
         await root.evaluate('el=>{window.map_div.panBy([30,20],{animate:false});}')
         await page.wait_for_timeout(700)
-        result['wave']['updates'] = len(sent)-baseline
+        result['wave']['updates'] = (await event_count())-baseline
         assert result['wave']['updates']<=2
 
         frame, root = await open_map('Live OGN Glider Radar','[data-ogn="demo"]')
         await page.wait_for_timeout(500)
-        baseline = len(sent)
+        baseline = await event_count()
         await frame.locator('[data-ogn="demo"]').click()
         await frame.locator('select[aria-label="OGN auto-refresh"]').select_option('15')
         await page.wait_for_timeout(1800)
         result['traffic'] = await root.evaluate('el=>({count:window.map_div._duoTraffic.count,mode:window.map_div._duoTraffic.status,draw_ms:window.map_div._duoTraffic.layer.lastDrawMs})')
-        result['traffic']['updates'] = len(sent)-baseline
+        result['traffic']['updates'] = (await event_count())-baseline
         assert result['traffic']['count']==7 and result['traffic']['mode']=='demo'
         assert result['traffic']['updates']==0
-        result.update(errors=errors, failed_assets=failed)
+        result.update(errors=errors, failed_assets=failed, websocket_frames=len(sent), component_events=await page.evaluate('window._verifiedMapEvents.length'))
         await page.locator('.st-key-active_page').get_by_text('Help & Briefing Bot',exact=True).click()
         chat=page.get_by_placeholder('Ask for a task, day briefing, turnpoint or explanation…')
         questions=["I want to fly from the Mynd to the Mynd North and Mynd South back to the Mynd",

@@ -826,3 +826,49 @@ markers on the fixed 990–1030 hPa plot; numeric values remain unclipped. This
 checks schema compatibility, not national-grid throughput. API model-init time
 is unavailable, so the chart labels retrieval time honestly. Point values are
 cached model-grid estimates, not coordinate measurements or measured clouds.
+
+
+## Point forecast visual redesign — 24 October 2026
+
+The Weather-only probe now has a white hourly grid, a sticky 165 px legend,
+local sunrise/sunset, explicit altitude ticks, nested thermal contours and
+scalloped cloud columns. The solid black curve is the mixing top; the bordered
+usable-height rows exclude cloud depth and retain terrain MSL / zero AGL during
+unsoarable hours. Wind remains labelled 10 m because the source has no 2 m wind.
+Observations retain their station, coordinates, timestamp and stale status;
+missing reports never become synthetic observations or a blended forecast.
+
+The recorded-app Chromium probe regression passed coordinate, airfield and BGA
+clicks, close/disable/re-enable, all seven pages, cache-miss recovery and default
+OFF isolation. Actual coordinate/airfield DOM + canvas draw times were 24.1–58.4
+ms, reaching the next animation frame in 25.4–65.7 ms, with no click-time network
+requests or Streamlit events. Synthetic shallow, towering, overcast, blue,
+missing-data and 2× device-pixel-ratio scenes all passed the 100 ms drawing limit.
+The test checks cloud depth/stack count, real observed points, approximate solar
+times, unsoarable terrain baseline, 216 bordered data cells and the legend's fixed
+position during horizontal scrolling. Full diagrams are retained locally under
+`var/point-probe-browser/` for visual review.
+
+Warm page-switch medians were 199–418 ms across three samples per page. These are
+local Chromium timings with recorded forecasts, not a guarantee for every device
+or Streamlit Cloud deployment. The browser harness now waits for sidebar updates
+before pressing Escape, which is Streamlit's stop-running keyboard shortcut.
+A separate production component fix prevents late map acknowledgements from
+cancelling asynchronous map replacements; its controlled Node regression fails
+against the previous implementation and passes with the fix.
+
+The full automated suite passed **260 tests** in 50.45 seconds. Dependency checks,
+Python compilation, JavaScript syntax and whitespace checks passed. The lazy-page
+browser test passed single-page rendering and shared task additions/clearing;
+route dragging passed snapping, replacement, insertion and linked endpoints with
+1.2–1.3 ms drag updates and no JavaScript errors. The separate Gemini fixture
+passed model fallback, tomorrow's route loading and a clicked Denbigh briefing;
+it uses an explicit mock provider and no real Gemini request. Its harness waits
+for the requested date to reach the sidebar before switching pages.
+
+The broader client-map browser regression also passed: one user-edit event per
+route action, STF/PFD/thermal overlays, nine wave altitude controls, click/drag
+cross-sections, all ten terrain coverage checks, seven demo gliders and maps with
+missing model data. Its event accounting separates cache acknowledgements and
+explicit task recovery messages from actual user edits. All five headless
+browser scripts passed; no JavaScript errors or notifications were produced.

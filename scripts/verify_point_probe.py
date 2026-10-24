@@ -44,17 +44,26 @@ async def main():
         # Load the BGA catalog with ordinary controls before probing it.
         await page.get_by_text('More layers and click settings',exact=True).click()
         layers=page.get_by_role('combobox',name='Map layers',exact=True)
-        await layers.focus();await layers.press('ArrowDown')
+        await layers.focus();await layers.press('ArrowDown');await page.wait_for_timeout(50)
         for _ in range(8):
             active=await layers.evaluate("el=>document.getElementById(el.getAttribute('aria-activedescendant'))?.textContent")
             if active=='BGA turnpoints':break
-            await layers.press('ArrowDown')
+            await layers.press('ArrowDown');await page.wait_for_timeout(50)
         assert active=='BGA turnpoints',active
         await layers.press('Enter')
-        await page.keyboard.press('Escape');await idle()
+        await expect(page.locator('.st-key-map_layers').get_by_text('BGA turnpoints',exact=True)).to_be_visible()
+        # Escape is Streamlit's stop-running shortcut. Wait before dismissing
+        # the multiselect so the test cannot cancel the selected map update.
+        await idle();await page.keyboard.press('Escape')
+        for _ in range(100):
+            if await root().evaluate('el=>!!window.map_div?._duoBga'):break
+            await page.wait_for_timeout(100)
+        else:
+            await page.screenshot(path=str(out/'bga-setup-failure.png'),full_page=True)
+            raise AssertionError('BGA selection did not reach map; '+await page.locator('.st-key-visual_mode').inner_text())
         # Normal airfield inspection works while the probe is off.
         site=await root().evaluate("el=>window.map_div._duoAirfields.records.find(p=>/Long Mynd/i.test(p.label))")
-        await root().evaluate('(el,p)=>window.map_div.setView([p.lat,p.lon],11,{animate:false})',site)
+        await root().evaluate('(el,p)=>window.map_div.setView([p.lat,p.lon],14,{animate:false})',site)
         await page.wait_for_timeout(100);await at_point(site['lat'],site['lon'])
         await frame().locator('.duo-airfield-popup').wait_for()
         assert await frame().locator('.duo-point-panel').count()==0
@@ -69,7 +78,7 @@ async def main():
             await frame().locator('.duo-point-panel').wait_for();await page.wait_for_timeout(100)
             result=await root().evaluate('''el=>{const p=window.map_div._duoProbe,r=p.last.rows;return {ms:p.lastRenderMs,paint_ms:p.lastPaintMs,point:p.last.point,rows:r.length,lcl:r[0].lcl,temperature:r[0].temperature,dewpoint:r[0].dewpoint,terrain:p.last.terrain,ceiling:r[0].ceiling,top:r[0].top};}''')
             assert result['rows']==24,result
-            assert result['ms']<150 and result['paint_ms']<150,result
+            assert result['ms']<100 and result['paint_ms']<100,result
             if kind=='airfield':
                 assert result['point']['name']==(site.get('name') or site['label']),result
                 assert result['point']['lat']==site['lat'] and result['point']['lon']==site['lon'],result
@@ -87,8 +96,59 @@ async def main():
         assert checks['missing']
         assert all(abs(a-b)<.001 for a,b in checks['scale'])
         results['math_checks']=checks
+        # The requested legend stays fixed while the two-day hourly grid scrolls.
+        label_box=await frame().locator('.duo-point-labels').bounding_box()
+        assert abs(label_box['width']-165)<.1,label_box
+        await frame().locator('.duo-point-graphic').evaluate('el=>el.scrollLeft=500')
+        after_scroll=await frame().locator('.duo-point-labels').bounding_box()
+        assert abs(after_scroll['x']-label_box['x'])<1,(label_box,after_scroll)
+        await frame().locator('.duo-point-graphic').evaluate('el=>el.scrollLeft=0')
+        # Exercise actual renderer branches with explicitly synthetic profiles.
+        visual=await root().evaluate("""el=>{
+          const p=window.map_div._duoProbe,base=structuredClone(p.last),scenes={};
+          const draw=(name,top,lcl,cover,soar=true)=>{
+            const result=structuredClone(base),canvas=document.createElement('canvas');
+            result.rows.forEach(r=>{r.top=top;r.lcl=lcl;r.cloud_low=cover;r.soar=soar;r.climb=soar?3:null;r.cu=top-lcl;});
+            const started=performance.now(),details=p.render(canvas,result);
+            scenes[name]={ms:performance.now()-started,details,png:canvas.toDataURL('image/png')};
+          };
+          draw('shallow',5600,5000,35);draw('towering',14000,3500,50);
+          draw('overcast',9000,3000,98,false);draw('blue',4500,7000,0);
+          draw('missing',null,null,null,false);
+          const descriptor=Object.getOwnPropertyDescriptor(window,'devicePixelRatio');
+          Object.defineProperty(window,'devicePixelRatio',{configurable:true,value:2});
+          draw('retina',14000,3500,50);
+          if(descriptor)Object.defineProperty(window,'devicePixelRatio',descriptor);else delete window.devicePixelRatio;
+          const times=base.rows.slice(0,2).map(r=>r.iso),obs=times.map((time,i)=>({station:'TEST',name:'Synthetic observation',lat:base.point.lat,lon:base.point.lon,time,temperature:10+i,stale:false}));
+          const observed=structuredClone(base);observed.observation=p.nearestObservation(base.point,obs);
+          const observedDetails=p.render(document.createElement('canvas'),observed);
+          return {scenes,observedDetails,emptyObs:p.nearestObservation(base.point,[]),
+            sun:p.solarTimes({lat:51.4779,lon:0},'2026-06-21'),polar:p.solarTimes({lat:85,lon:0},'2026-06-21'),cloudWithoutNetLift:p.cloudColumn({top:6000,lcl:5000,cloud_low:0,soar:false}),
+            baseline:base.rows.filter(r=>r.soar===false).every(r=>r.displayMsl===base.terrain&&r.agl===0),details:p.lastRenderDetails};
+        }""")
+        assert visual['baseline'] and visual['emptyObs'] is None
+        assert visual['cloudWithoutNetLift']['depth']==1000
+        assert visual['observedDetails']['observations']==2
+        assert visual['polar']['polar']=='Midnight sun'
+        to_minutes=lambda s:int(s[:2])*60+int(s[3:])
+        assert abs(to_minutes(visual['sun']['rise'])-(4*60+44))<=5,visual['sun']
+        assert abs(to_minutes(visual['sun']['set'])-(21*60+21))<=5,visual['sun']
+        assert visual['details']['legendWidth']==165 and visual['details']['barbs']>0
+        assert visual['details']['borderedCells']==216,visual['details']
+        for name,scene in visual['scenes'].items():
+            (out/(name+'.png')).write_bytes(base64.b64decode(scene.pop('png').split(',',1)[1]))
+            assert scene['ms']<100,(name,scene['ms'])
+            clouds=scene['details']['clouds']
+            if name in ('blue','missing'):assert not clouds
+            else:
+                assert len(clouds)==24
+                assert all(c['base']<c['top'] and c['baseY']>c['topY'] for c in clouds)
+                if name=='shallow':assert all(1<=c['layers']<=2 for c in clouds)
+                if name=='towering':assert all(c['layers']>=5 for c in clouds)
+                if name=='overcast':assert all(c['overcast'] for c in clouds)
+        results['visual_checks']=visual
         # Export the actual HiDPI canvas for full-height visual review.
-        png=await frame().locator('.duo-point-graphic canvas').evaluate("el=>el.toDataURL('image/png')")
+        png=await frame().locator('.duo-point-canvas').evaluate("el=>el.toDataURL('image/png')")
         (out/'full-chart.png').write_bytes(base64.b64decode(png.split(',',1)[1]))
         await frame().locator('.duo-point-panel').screenshot(path=str(out/'meteogram.png'))
         # Closing must also reset the Streamlit switch, not just remove the SVG.

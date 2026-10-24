@@ -363,6 +363,26 @@ probe request. Runtime API revision 4 refreshes old configuration, parser and
 grid bindings during Streamlit hot reload. Older cached samples missing the new
 fields remain valid, with missing values instead of exceptions.
 
+The probe's optional API revision 2 adds an already-loaded aviation batch. It
+copies valid METAR coordinates, temperature, observation time and stale status
+into that map's payload without modifying the shared forecast cache. Weather
+refreshes an older probe module only while the probe is explicitly enabled.
+No observation lookup or new forecast field is requested by the redesign.
+
+The white 1605 × 1046 canvas uses 24 aligned 60 px hour columns and a sticky
+165 px canvas copy for labels. The bounded 144 × 112 humidity raster, vector
+contours and scalloped cloud stacks avoid expensive per-pixel full-resolution
+processing. Sunrise/sunset use local solar-transit calculations with a −0.833°
+apparent horizon and Europe/London formatting. Wind remains honestly labelled
+10 m; a 2 m forecast is not supplied. Client-side rendering tests enforce <100 ms
+for drawing and the next animation frame, including the optional probe's DOM.
+
+Map decoding preserves an in-flight replacement when a late acknowledgement
+for the previous map arrives. An ID-only update for the pending document updates
+its canonical task without requesting the same data twice. A newer full document
+still supersedes the old render. The Node regression executes the production
+iframe script with controlled asynchronous decompression to cover these races.
+
 Map documents also use a bounded browser-tab memory cache: at most four decoded
 documents or 48 MiB, with no DOM objects, map instances or inactive listeners.
 The component acknowledges available document hashes; warm navigation sends only

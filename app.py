@@ -758,7 +758,9 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
             if probe_enabled:
                 try:
                     probe=importlib.import_module('point_forecast_meteogram')
-                    probe.add_probe(view,probe_forecasts,day)
+                    if getattr(probe,'PROBE_API_REVISION',0)<2:
+                        probe=importlib.reload(probe)
+                    probe.add_probe(view,probe_forecasts,day,aviation=aviation)
                 except Exception:
                     # An optional chart or stale module must never prevent maps
                     # or other pages loading. Keep the ordinary map operational.

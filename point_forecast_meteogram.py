@@ -10,6 +10,7 @@ import streamlit as st
 from config import LOCAL_TIMEZONE, METRES_TO_FEET, MPS_TO_KNOTS
 from soaring_physics import Profile, evaluate_thermals, wind_components
 
+PROBE_API_REVISION = 2
 LEVELS = (950, 900, 850, 700, 600, 500, 400, 300, 250, 200)
 FIELDS = ('temperature', 'dewpoint', 'depth', 'climb', 'heat', 'solar',
           'u', 'v', 'gust', 'mslp', 'rain', 'cloud_low', 'cloud_mid', 'cloud_high')
@@ -85,9 +86,25 @@ def prepare_bundle(run_id,day,*,_forecasts):
             'notes':'Cached grid interpolation; no click-time request. RH/cloud shading is a proxy, not a measured cloud cross-section. Missing hours and levels stay unavailable. 10 m wind is supplied; 2 m wind is unavailable.'}
 
 
-def add_probe(map_view,forecasts,day):
+def observation_payload(aviation):
+    """Use only already-loaded METARs. Never label a model sample as an observation."""
+    reports=[]
+    for report in getattr(aviation,'metars',{}).values():
+        if any(value is None or not math.isfinite(value) for value in
+               (report.latitude,report.longitude,report.temperature_c)):
+            continue
+        reports.append({'station':report.station,
+            'name':str(report.raw.get('name') or report.station),
+            'lat':report.latitude,'lon':report.longitude,
+            'time':report.observed_at.isoformat(),'temperature':report.temperature_c,
+            'stale':report.stale})
+    return reports
+
+
+def add_probe(map_view,forecasts,day,*,aviation=None):
     """Attach only to an enabled Weather map. A failure remains local to it."""
     from app_cache import forecast_run_id
     from client_map import script
-    payload=prepare_bundle(forecast_run_id(forecasts),day,_forecasts=tuple(forecasts))
+    payload={**prepare_bundle(forecast_run_id(forecasts),day,_forecasts=tuple(forecasts)),
+             'observations':observation_payload(aviation)}
     script(map_view,'point_forecast_meteogram.js','installDuoPointProbe',payload)

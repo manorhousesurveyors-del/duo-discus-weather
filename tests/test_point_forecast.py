@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from tests.fixtures import NOW, forecast
 from config import FORECAST_MODELS, HOURLY_VARIABLES, forecast_locations
@@ -85,8 +86,42 @@ class PointDataTests(unittest.TestCase):
         old=replace(profile,levels=tuple(p for p in profile.levels if p.pressure_hpa>250))
         self.assertEqual(probe.pressure_sample(old,250),probe.pressure_sample(profile,250))
 
+    def test_observations_keep_provenance_and_missing_data_is_not_a_forecast(self):
+        self.assertEqual(probe.observation_payload(None),[])
+        report=SimpleNamespace(station='EGOS',latitude=52.8,longitude=-2.7,
+            temperature_c=12.3,observed_at=NOW,stale=True,raw={'name':'Shawbury'})
+        missing=SimpleNamespace(**{**vars(report),'temperature_c':None})
+        invalid=SimpleNamespace(**{**vars(report),'latitude':float('nan')})
+        aviation=SimpleNamespace(metars={'EGOS':report,'NULL':missing,'BAD':invalid})
+        values=probe.observation_payload(aviation)
+        self.assertEqual(len(values),1)
+        self.assertEqual(values[0],{'station':'EGOS','name':'Shawbury','lat':52.8,
+            'lon':-2.7,'time':NOW.isoformat(),'temperature':12.3,'stale':True})
+        with patch('client_map.script') as attach:
+            probe.add_probe(object(),(),NOW.date(),aviation=aviation)
+            self.assertEqual(attach.call_args.args[-1]['observations'],values)
+            probe.add_probe(object(),(),NOW.date())
+            self.assertEqual(attach.call_args.args[-1]['observations'],[])
+        self.assertNotIn('observations',probe.prepare_bundle((),NOW.date(),_forecasts=()))
+
 
 class PointIsolationTests(unittest.TestCase):
+    def test_enabled_probe_refreshes_its_old_optional_api_after_deployment(self):
+        from streamlit.testing.v1 import AppTest
+        from alerts import ForecastBundle,save_bundle
+        import app
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'weather.json'
+            save_bundle(ForecastBundle(tuple(forecast(p) for p in forecast_locations()),(),.5,(),NOW),path)
+            with patch.dict('os.environ',{'DUO_DASHBOARD_SNAPSHOT':str(path),'DUO_TASK_STORE':tmp+'/tasks'}), \
+                 patch.object(probe,'PROBE_API_REVISION',1):
+                at=AppTest.from_file(str(Path(app.__file__)),default_timeout=90).run()
+                self.assertEqual(probe.PROBE_API_REVISION,1)  # Off remains dormant.
+                at.toggle(key='point_probe_enabled').set_value(True).run()
+                self.assertFalse(at.exception)
+                self.assertEqual(probe.PROBE_API_REVISION,2)
+                self.assertFalse(any('temporarily unavailable' in w.value for w in at.warning))
+
     def test_off_never_imports_probe_other_pages_reset_and_import_failure_is_local(self):
         from streamlit.testing.v1 import AppTest
         from alerts import ForecastBundle,save_bundle

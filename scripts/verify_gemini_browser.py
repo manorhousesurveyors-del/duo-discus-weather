@@ -1,7 +1,7 @@
 """Browser verification against the explicitly mocked provider app on port 8505."""
 import asyncio,json,re
 from pathlib import Path
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright,expect
 
 async def main():
     out=Path('var/gemini-browser');out.mkdir(exist_ok=True)
@@ -28,6 +28,10 @@ async def main():
         await chat.fill('Suggest a short task from the Mynd tomorrow');await chat.press('Enter')
         await panel.get_by_role('button',name='Load suggested route onto map',exact=True).wait_for(timeout=90000)
         await panel.get_by_role('button',name='Load suggested route onto map',exact=True).click()
+        # Let the requested briefing date reach the sidebar before navigating.
+        # Sending its old widget value during the rerun resets the selected day.
+        await expect(page.get_by_role('combobox',name='Forecast day',exact=True)).to_have_value(re.compile(r'Day 1 .*'),timeout=30000)
+        await expect(page.get_by_test_id('stApp')).not_to_have_attribute('data-test-script-state','running',timeout=30000)
         await page.locator('.st-key-active_page').get_by_text('Task planner',exact=True).click()
         root=page.locator('iframe[title="map_component.duo_map"]').last.content_frame.locator('.leaflet-container')
         for _ in range(100):

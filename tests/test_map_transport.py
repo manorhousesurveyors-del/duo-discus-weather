@@ -1,10 +1,19 @@
 """Browser document notices must not become route or weather clicks."""
 import unittest
+import shutil
+import subprocess
+from pathlib import Path
 from unittest.mock import patch
 import map_component
 
 
 class DocumentNoticeTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('node'),'Node is needed for component protocol checks')
+    def test_late_acknowledgements_do_not_cancel_new_map_documents(self):
+        result=subprocess.run(['node','tests/map_transport_races.cjs'],
+            cwd=Path(__file__).resolve().parents[1],capture_output=True,text=True,timeout=15)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
     def test_acknowledgements_are_bounded_and_validate_hashes(self):
         state={};one='a'*64;two='b'*64
         with patch.object(map_component.st,'session_state',state):

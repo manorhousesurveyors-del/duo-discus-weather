@@ -26,19 +26,25 @@ function retainDocument(id,document,size){
  let total=[...decodedMaps.values()].reduce((sum,item)=>sum+item.size,0);
  while(decodedMaps.size>4||total>48*1024*1024){const key=decodedMaps.keys().next().value;total-=decodedMaps.get(key).size;decodedMaps.delete(key);}
 }
-let previous='',generation=0;const requestedDocuments=new Set();
+let previous='',generation=0,pendingId=null,pendingTask=null;const requestedDocuments=new Set();
 window.addEventListener('message',async event=>{
  if(event.source!==parent||event.data.type!=='streamlit:render')return;
  const renderStarted=performance.now(),renderTiming={};
- let args=event.data.args;const signature=args.document_id||args.script,token=++generation;
+ let args=event.data.args;const signature=args.document_id||args.script;
  send('streamlit:setFrameHeight',{height:720});
  if(signature===previous){window.map_div?._duoAcceptTask?.(args.canonical_task);return;}
  const saved=decodedMaps.get(args.document_id);
  if(saved){args={...args,...saved.document};renderTiming.cacheHit=true;}
  if(!args.script&&!args.compressed_document){
+  // An acknowledgement fragment can arrive during async decompression. It
+  // must not cancel that newer document or start a redundant cache request.
+  if(signature===pendingId){pendingTask=args.canonical_task;return;}
   if(args.document_id&&!requestedDocuments.has(args.document_id)){requestedDocuments.add(args.document_id);send('streamlit:setComponentValue',{value:{document_request:args.document_id},dataType:'json'});}
   return;
  }
+ // Only a genuine replacement supersedes an in-flight render. An old-map
+ // acknowledgement (the signature===previous return above) leaves it intact.
+ const token=++generation;pendingId=signature;pendingTask=args.canonical_task;
  try{
   if(args.compressed_document&&!args.script){
    const cached=decodedMaps.get(args.document_id);
@@ -59,14 +65,14 @@ window.addEventListener('message',async event=>{
   const constructionStarted=performance.now();
   new Function(args.script)();previous=signature;
   window._duoRenderTiming={...renderTiming,construct:performance.now()-constructionStarted,total:performance.now()-renderStarted,readyAt:Date.now()};
-  const map=window.map_div;map._duoAcceptTask?.(args.canonical_task);
+  const map=window.map_div;map._duoAcceptTask?.(pendingTask);pendingId=null;pendingTask=null;
   requestedDocuments.delete(args.document_id);
   send('streamlit:setComponentValue',{value:{document_cache:[...decodedMaps.keys()]},dataType:'json'});
   map.on('click',e=>{if(map._duoClientClicks||performance.now()<(map._duoLocalClickUntil||0)||e.originalEvent?._duoSelected)return;
    const point={lat:e.latlng.lat,lng:e.latlng.lng};window.__GLOBAL_DATA__.lat_lng_clicked=point;
    if(!['wind','radar','thermal','pfd','xc','stf'].includes(map._duoMode))window.Streamlit.setComponentValue({last_clicked:point,last_object_clicked:null});
   });
- }catch(e){document.getElementById('map-wrapper').innerHTML='<div id="status" role="alert">Map could not load. Please reload this page. '+String(e.message).replace(/[<>&]/g,'')+'</div>';console.error(e);}
+ }catch(e){if(token!==generation)return;pendingId=null;pendingTask=null;document.getElementById('map-wrapper').innerHTML='<div id="status" role="alert">Map could not load. Please reload this page. '+String(e.message).replace(/[<>&]/g,'')+'</div>';console.error(e);}
 });
 send('streamlit:componentReady',{apiVersion:1});send('streamlit:setFrameHeight',{height:720});
 </script></body></html>
