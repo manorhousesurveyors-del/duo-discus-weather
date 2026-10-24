@@ -917,3 +917,40 @@ three task soaring overlays, nine wave altitude controls, click/drag sections,
 all terrain coverage checks, demo traffic and missing-model map rendering. All
 six browser scripts passed. Dependency, Python compilation, JavaScript syntax
 and whitespace checks were clean.
+
+## Model coverage repair — 24 October 2026
+
+The complete automated suite passed **274 tests**. New regression cases remove
+BLH from every provider, remove UKMO CAPE, insert cloud gaps, and end UKMO/ICON
+upper fields after 48 hours. All three selected models retain 8/8 covered local
+hours and valid ratings on five days, including the BST/GMT transition. Tests
+also cover native zero preservation, exact UTC donor alignment, primary outage,
+all-provider missing radiation, incompatible requested coordinates, snapshot
+provenance, changed-donor cache invalidation, partial regional-batch failures,
+and raw transport reuse across model switches. Warm page execution measured
+under 0.3 seconds on all seven pages; hour changes did not restart grid loading.
+
+`scripts/forecast_coverage_fixture.py` supplies explicitly synthetic recorded
+weather for `scripts/verify_forecast_coverage.py`. Chromium exercised all **15
+model/day combinations** using the real dropdowns and physical map clicks.
+Every combination showed five Star Ratings, 8/8 coverage on every card, a visible
+map, and positive midday net climb and usable AGL in the actual JS probe. Probe
+draws took at most **38.4 ms**, reaching paint within **43.3 ms**. There were no
+JavaScript errors, click-time network requests, or probe-triggered Streamlit
+reruns. The separate dry/ballasted/paired thermal-render regression also passed.
+Screenshots and timing records are retained locally in `var/coverage-browser/`.
+
+Two verified-HTTPS live checks exercised the real provider boundary. A single
+Long Mynd request across three independent models completed in **1.84 seconds**.
+Every selected model then produced 8/8 covered hours and valid five-day ratings.
+At 12:00 UTC on 25 October, UKMO/ICON/ECMWF gave respectively **1.6/1.8/1.5 kt**
+net climb and approximately **2,920/2,120/1,482 ft** usable AGL. BLH was estimated
+from bracketed parcel soundings, rather than assigned a positive constant.
+
+A subsequent 23-site live regional check took **5.33 seconds** and encountered
+real transport failures: all UKMO batches and one batch from each other provider
+timed out. Surviving ECMWF/ICON responses jointly covered all **23 sites**, so
+each dropdown choice still produced five valid Long Mynd ratings with 8/8 local
+coverage. The borrowed model fields remained labelled. These are measured API
+responses, not a promise of provider uptime or validation of forecast skill.
+No alert email, WhatsApp message or mobile push was sent.

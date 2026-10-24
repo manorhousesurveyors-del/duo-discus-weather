@@ -10,7 +10,7 @@ import streamlit as st
 from config import LOCAL_TIMEZONE, METRES_TO_FEET, MPS_TO_KNOTS
 from soaring_physics import Profile, evaluate_thermals, wind_components
 
-PROBE_API_REVISION = 3
+PROBE_API_REVISION = 4
 LEVELS = (950, 900, 850, 700, 600, 500, 400, 300, 250, 200)
 FIELDS = ('temperature', 'dewpoint', 'depth', 'climb', 'heat', 'solar',
           'u', 'v', 'gust', 'mslp', 'rain', 'cloud_low', 'cloud_mid', 'cloud_high', 'core', 'sink')
@@ -61,7 +61,8 @@ def hour_sample(forecast, when, loading='dry'):
              u,v,None if values.get('wind_gusts_10m') is None else values['wind_gusts_10m']*MPS_TO_KNOTS,
              values.get('pressure_msl'),values.get('precipitation'),values.get('cloud_cover_low'),
              values.get('cloud_cover_mid'),values.get('cloud_cover_high'),thermal.core_updraught_knots,thermal.circling_sink_knots]
-        return {'s':[number(v) for v in row],'p':[pressure_sample(profile,p) for p in LEVELS]}
+        return {'s':[number(v) for v in row],'p':[pressure_sample(profile,p) for p in LEVELS],
+                'sources':forecast.sources_at(when)}
     except (KeyError,ValueError,TypeError):
         return {'s':[None]*len(FIELDS),'p':[[None]*5 for _ in LEVELS]}
 
@@ -105,7 +106,7 @@ def prepare_bundle(run_id,day,loading='dry',*,_forecasts):
             'model':'UKMO seamless → ECMWF fallback' if len(models)>1 else next(iter(models),'Unavailable'),
             'loading':loading,'max_distance_km':120,
             'cycle_note':'Model run time is not supplied by this API. Retrieval time is shown.',
-            'notes':'Cached grid interpolation; no click-time request. Mixing depth uses model BLH where available, otherwise a dry-parcel estimate. RH/cloud shading is a proxy, not a measured cloud cross-section. Missing hours and levels stay unavailable. 10 m wind is supplied; 2 m wind is unavailable.'}
+            'notes':'Cached grid interpolation; no click-time request. Missing fields use labelled model support or a bracketed dry-parcel mixing-depth estimate. Solar heating drives thermal strength. Hourly sources appear in the table. RH/cloud shading is a proxy, not a measured cloud cross-section. Unsupported hours and levels stay unavailable. 10 m wind is supplied; 2 m wind is unavailable.'}
 
 
 def observation_payload(aviation):

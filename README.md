@@ -23,6 +23,14 @@ including winter GMT. The initial view selects tomorrow at 13:00 after today's
 13:00 has passed. Refresh weather explicitly to request new data; cached
 forecasts last 30 minutes and aviation observations 60 seconds.
 
+The Met Office, ECMWF and ICON selections preserve native forecast values and
+fill missing fields hour by hour from the other models. Missing boundary-layer
+height uses a bracketed parcel estimate when necessary; missing CAPE alone never
+blocks a rating. The Weather caption, Data quality table and Point Forecast
+Probe disclose supporting sources. Each day card separates **8/8 local hours
+covered** from the number of hours suitable for soaring. The Duo polar and
+single circling-sink deduction remain unchanged.
+
 Public weather APIs need no credentials. The first map/grid load can take a few
 minutes because requests respect Open-Meteo's weighted quota. Allow about 2 GB
 RAM for the dashboard and land mask; the mask alone expands to about 1 GB.

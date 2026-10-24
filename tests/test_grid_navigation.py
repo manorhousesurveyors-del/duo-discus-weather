@@ -66,11 +66,12 @@ class UKGridTests(unittest.TestCase):
                 self.assertFalse(pending.done())
             finally:release.set()
             result=pending.result(timeout=10)
-            self.assertEqual(len(result.batch.failures),len(points))
+            self.assertEqual(len(result.batch.failures),len(points)*3)
             self.assertEqual(result.batch.forecasts,())
             self.assertIs(bundle.request('ifs025'),pending)  # no retries on failure
             other=bundle.request('ukmo');self.assertIsNot(other,pending)
-            self.assertTrue(all(f.provider==FORECAST_MODELS['ukmo'].api_name for f in other.result(timeout=10).batch.failures))
+            self.assertEqual(other.result(timeout=10).batch.failures,result.batch.failures)
+            self.assertEqual(request.call_count,36)  # Same raw data across model switches.
 
     def test_task_optimizer_can_only_read_an_already_finished_grid(self):
         from route_tools import screening_forecasts
@@ -119,7 +120,7 @@ class PageNavigationTests(unittest.TestCase):
         data=Future();data.set_result(forecasts)
         snapshot=grid.assemble((data,),(tuple(f.location for f in forecasts),),FORECAST_MODELS['ifs025'],start)
         # National transport remains pending while we navigate away, then finishes.
-        pending=Future();bundle=Mock(cycle=int(datetime.now(UTC).timestamp()//1800));bundle.request.return_value=pending
+        pending=Future();bundle=Mock(cycle=int(datetime.now(UTC).timestamp()//1800),coverage_revision=1);bundle.request.return_value=pending
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict('os.environ',{'DUO_DASHBOARD_SNAPSHOT':'','DUO_TASK_STORE':tmp,'GEMINI_API_KEY':''}), \
              patch.object(grid,'regional_future',return_value=regional), \

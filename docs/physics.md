@@ -3,8 +3,41 @@
 Calculations use SI internally, meteorological wind **from** directions,
 UTC instants, and Europe/London dates for task windows and alert deduplication.
 Displayed cloud/mixing heights are feet AMSL; mixing depth is metres AGL.
-Input profiles remain specific to one model. Unsupported exact hours produce
-missing results, not a nearest-hour or extrapolated forecast.
+Raw input profiles remain specific to one model. Dashboard and task forecasts
+retain primary values and explicitly support missing fields from other models
+at the same requested coordinate and exact UTC hour. Unsupported hours remain
+missing, without nearest-hour substitution or extrapolation.
+
+## Model coverage and source labels
+
+All three sidebar choices use `forecast_coverage.complete_forecasts`. Missing
+fields (including CAPE and upper winds) use ECMWF first, then ICON, then UKMO,
+skipping the selected model. A completely failed primary response can use a
+healthy donor. Native values, including real zeroes, are never overwritten.
+Fields with incompatible units are not combined. CAPE is optional; it is not
+a requirement for thermal or Star Rating calculations.
+
+If no provider supplies boundary-layer height, the completed pressure sounding
+provides the bracketed dry-parcel estimate described below. Solar heating enters
+the sensible-heat/core calculation once; we do not add an arbitrary temperature
+boost to force positive lift. Night or poor soaring conditions may give zero
+climb even with complete weather coverage. No bracket or no radiation means
+unavailable lift, rather than invented favourable weather.
+
+Every substituted field/hour carries `Forecast.field_sources`. The requested
+model stays in `Forecast.model`; `source_runs` retains contributing retrieval
+identities, so an updated donor invalidates derived caches even if the primary
+is older. Data quality and the Weather caption disclose support sources, and
+the probe's hourly table lists them. Retrieval time is the oldest contributing
+response, rather than an assumed forecast model cycle.
+
+Regional transport requests small, independent model batches concurrently and
+shares them across dropdown choices for one 30-minute cycle. The national grid
+also shares raw responses, with at most 12 requests in flight, one attempt per
+chunk, a 3.5-second socket timeout and no retry sleeps. All work stays behind the
+existing background futures; day/hour changes and probe clicks reuse arrays.
+Individual bad regional points no longer discard healthy points in the batch.
+The five-day cards show covered hours separately from the soarable window.
 
 ## Thermals, cloud and streets
 

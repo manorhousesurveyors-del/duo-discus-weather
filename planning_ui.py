@@ -157,7 +157,7 @@ def task_builder(catalog,day,*,location):
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def fetch_corridor(points: tuple[GeoPoint, ...], model_key: str, refresh_bucket: int):
-    return OpenMeteoClient().fetch_batched(points,(FORECAST_MODELS[model_key],))
+    return OpenMeteoClient().fetch_supported(points,FORECAST_MODELS[model_key])
 
 
 def task_weather(points,base_forecasts,model_key,bucket,*,recorded=False):

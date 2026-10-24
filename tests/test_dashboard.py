@@ -70,7 +70,8 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn('16:00',at.metric[3].value)
                 at.selectbox(key='forecast_model').select('ukmo').run()
                 self.assertFalse(at.exception)
-                self.assertTrue(any("does not cover" in w.value.lower() for w in at.warning))
+                self.assertFalse(any("does not cover" in w.value.lower() for w in at.warning))
+                self.assertTrue(any('supported by ecmwf_ifs025' in c.value for c in at.caption))
 
     def test_map_click_switches_inspector_to_coordinate(self):
         from streamlit.testing.v1 import AppTest

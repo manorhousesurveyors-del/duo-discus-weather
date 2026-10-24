@@ -25,6 +25,7 @@ class DayRating:
     window_hours: float | None
     wave: bool
     reasons: tuple[str,...]
+    covered_hours: int = 0
 
     @property
     def symbols(self):return 'Unavailable' if self.stars is None else '★'*self.stars+'☆'*(5-self.stars)
@@ -64,7 +65,7 @@ def rate_day(forecasts,origin,day,loading='dry',*,preference=FORECAST_PREFERENCE
     if known<8:stars=None;reasons=(f'Only {known}/8 hours include climb, height, rain and spread-out evidence.',)
     if wave:reasons+=('Wave potential is separate; it does not raise the thermal XC rating.',)
     return DayRating(day.isoformat(),origin.name,stars,classification.distance_km,climb if known else None,
-        base if known else None,longest if known else None,wave,reasons)
+        base if known else None,longest if known else None,wave,reasons,known)
 
 
 def best_rating(ratings):return max((r for r in ratings if r.stars is not None),key=lambda r:(r.stars,r.distance_km or 0),default=None)

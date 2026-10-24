@@ -74,7 +74,7 @@ function installDuoPointProbe(map, data) {
    row.soar=known?row.climb>0&&row.depth>0&&row.solar>0:null;
    row.agl=known?(row.soar?Math.max(0,Math.min(row.depth*(1-.6*(row.sink/row.core)**3),row.lcl-terrain)):0):null;
    row.ceiling=known?terrain+row.agl:null;row.displayMsl=row.ceiling;
-   row.sources=[...new Set(providers.map(s=>s.model))];
+   row.sources=[...new Set(providers.flatMap(s=>column.indices.flatMap(i=>s.hours[i]?.sources||[s.model])))];
    row.retrieved=[...new Set(providers.map(s=>s.retrieved).filter(Boolean))];
    const rh=finite(row.temperature)&&finite(row.dewpoint)?clamp(100*Math.exp(17.625*row.dewpoint/(243.04+row.dewpoint)-17.625*row.temperature/(243.04+row.temperature)),0,100):null;
    row.profile=[[terrain+32.8084,rh,row.u,row.v,row.cloud_low],...row.levels].filter(p=>finite(p[0])).sort((a,b)=>a[0]-b[0]);

@@ -10,7 +10,7 @@ import sys
 from threading import RLock
 
 # Bump when new compatibility contracts must reach an already-running app.
-API_REVISION = 5
+API_REVISION = 6
 
 _lock = RLock()
 _log = logging.getLogger(__name__)
@@ -19,8 +19,9 @@ _log = logging.getLogger(__name__)
 # Empty tuples check function presence; other tuples check newly added keywords.
 LAZY_APIS = {
     'config': {'forecast_variables': (), 'duo_circling_sink_knots': ()},
-    'data_ingestion': {'parse_forecast': ('variables',), 'split_model_response': ()},
+    'data_ingestion': {'parse_forecast': ('variables',), 'split_model_response': (), 'Forecast': ('field_sources','source_runs')},
     'soaring_physics': {'evaluate_thermals': ('loading',), 'thermal_usable_depth': ()},
+    'forecast_coverage': {'complete_forecasts': ()},
     'task_planning': {'assess_task': ()},
     'map_weather': {'soaring_samples': ()},
     'day_rating': {'rate_day': ()},
@@ -28,7 +29,7 @@ LAZY_APIS = {
     'uk_map_grid': {'grid_variables': ()},
     'json_payload': {'display_coordinates': ()},
     'app_cache': {'file_version': (), 'catalog_resource': (), 'forecast_run_id': ('physics_revision',),
-                  'day_summary': (), 'assessed_task': (), 'gemini_discovery': ()},
+                  'day_summary': (), 'assessed_task': (), 'gemini_discovery': (), 'covered_forecasts': ()},
     'terrain_wave': {'prepare_terrain': (), 'solve_field': ('prepared',)},
     'briefing_bot': {'site_evidence': ('maximum_km',)},
     'flight_briefing': {'build_context': ('resolved',)},

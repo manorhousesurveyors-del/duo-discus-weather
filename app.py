@@ -1,7 +1,7 @@
 """Interactive UK soaring dashboard. Start with: streamlit run app.py.
 
-Map clicks fetch a fresh sounding for the selected coordinate. All displayed
-forecast columns remain model-specific; unavailable diagnostics stay unavailable.
+The requested model retains its native values; explicit, labelled model support
+fills missing fields. Point probes read cached samples without click-time I/O.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ import importlib
 import runtime_imports
 
 # The compatibility registry itself may also predate this deployment.
-if getattr(runtime_imports,'API_REVISION',0)<5:
+if getattr(runtime_imports,'API_REVISION',0)<6:
     importlib.reload(runtime_imports)
 optional_module=runtime_imports.optional_module
 
@@ -50,12 +50,12 @@ CATEGORY_COLOURS = {'VFR':'#15835d','MVFR':'#2674c5','IFR':'#d84949','LIFR':'#a3
 
 
 @st.cache_resource(max_entries=2,show_spinner=False)
-def load_recorded(path,modified):
+def load_recorded(path,modified,coverage_revision=1):
     return load_bundle(Path(path))
 
 
 @st.cache_resource(ttl=1800,max_entries=6,show_spinner=False)
-def load_sites(model_key: str, refresh_bucket: int):
+def load_sites(model_key: str, refresh_bucket: int, coverage_revision=1):
     from uk_map_grid import regional_future
     return regional_future(refresh_bucket,model_key)
 
@@ -69,7 +69,9 @@ def load_grid(model_key: str, refresh_bucket: int):
 @st.cache_data(ttl=1800,show_spinner=False)
 def load_coordinate(latitude: float, longitude: float, model_key: str, refresh_bucket: int):
     point = GeoPoint('inspector',f'{latitude:.3f}, {longitude:.3f}',latitude,longitude)
-    return OpenMeteoClient().fetch(point,FORECAST_MODELS[model_key])
+    batch=OpenMeteoClient().fetch_supported((point,),FORECAST_MODELS[model_key])
+    if not batch.forecasts:raise IngestionError('No provider supplied a usable point forecast')
+    return batch.forecasts[0]
 
 
 @st.cache_data(ttl=60,show_spinner=False)
@@ -466,6 +468,13 @@ def _main():
     from planning_ui import active_task,current_catalog,task_builder
     from map_modes import MODES
     st.set_page_config(page_title='Duo · UK soaring weather',page_icon='⛅',layout='wide',initial_sidebar_state='expanded')
+    # Cached pre-deployment Forecast objects lack the provenance schema. Retire
+    # only weather state once; preserve tasks, navigation and user preferences.
+    if st.session_state.get('forecast_coverage_revision') != 1:
+        for key in list(st.session_state):
+            if key.startswith(('forecast_bundle:','forecast_fallback:')):
+                del st.session_state[key]
+        st.session_state['forecast_coverage_revision']=1
     st.markdown('<style>.block-container{padding-top:1.5rem}div[data-testid="stMetric"]{background:#fff;border:1px solid #dce5e8;border-radius:12px;padding:12px}'
                 'h1{letter-spacing:-.04em}section[data-testid="stSidebar"]{border-right:1px solid #dce5e8}</style>',unsafe_allow_html=True)
     now=datetime.now(UTC)
@@ -505,7 +514,7 @@ def _main():
             help='Choose one main map view. The floating Map modes menu offers the same choices; Clean Map hides weather overlays.')
         if 'forecast_model' not in st.session_state:st.session_state['forecast_model']='ifs025' if recorded else 'ukmo'
         model_key=st.selectbox('Forecast model',list(MODEL_LABELS),format_func=MODEL_LABELS.get,key='forecast_model',
-            help='UKMO seamless prioritises UKV over the UK. The probe labels ECMWF fallback columns if the preferred model lacks usable data. Other selections remain model-specific.')
+            help='Keep this model’s native values. Missing fields use ECMWF/ICON support or a bracketed parcel-height estimate, labelled in Data quality and the point probe. No missing value is treated as good weather.')
         if 'bot_forecast_day' in st.session_state:
             st.session_state['forecast_day']=st.session_state.pop('bot_forecast_day')
         default_day=1 if anchor.astimezone(LOCAL_TIMEZONE).hour>=13 else 0
@@ -525,8 +534,8 @@ def _main():
                 help='Inspect changes the sounding only. Add mode appends a clicked BGA marker or custom coordinate using the builder’s Add as role.')
         show_airfields=st.checkbox('UK airfields and live reports',value=True,key='show_airfields',help='Show gliding clubs and UK aerodromes. Hover for current model weather; click for runway details and NOAA METAR/TAF reports. Turquoise marks gliding fields, purple reporting airfields and grey known closures.')
         if st.button('Refresh weather',width='stretch',help='Clear stored forecasts and restart background updates. UK grid requests make one attempt per model and cycle.'):
-            from uk_map_grid import load_uk_map_grid,regional_future
-            st.cache_data.clear(); load_sites.clear(); regional_future.clear(); load_uk_map_grid.clear()
+            from uk_map_grid import load_uk_map_grid,regional_future,regional_sources
+            st.cache_data.clear(); load_sites.clear(); regional_future.clear(); regional_sources.clear(); load_uk_map_grid.clear()
             st.session_state.pop('uk_map_grid_bundle',None)
             st.session_state.pop('_map_documents',None)
             st.rerun()
@@ -567,10 +576,9 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
     from task_planning import validate_task
     from route_tools import optimizer_panel,task_sheet_panel
     from help_guide import render_help
-    from app_cache import forecast_run_id
+    from app_cache import forecast_run_id,covered_forecasts
     if recorded:
-        forecasts=tuple(f for f in recorded.forecasts if f.model==FORECAST_MODELS[model_key].api_name or (model_key=='ukmo' and f.model=='ukmo_uk_deterministic_2km')); errors=recorded.errors
-        st.session_state['forecast_fallback:'+model_key]=tuple(f for f in recorded.forecasts if model_key=='ukmo' and f.model=='ecmwf_ifs025')
+        forecasts=covered_forecasts(forecast_run_id(recorded.forecasts),model_key,_forecasts=recorded.forecasts); errors=recorded.errors
     elif active_page in ('Help Guide','Help & Briefing Bot','Data quality','Live OGN Glider Radar'):
         forecasts=st.session_state.get('forecast_bundle:'+model_key,())
         errors=()
@@ -578,10 +586,13 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
         from uk_map_grid import grid_progress
         pending=load_sites(model_key,bucket)
         if pending.done():
-            batch=pending.result()
-            forecasts=tuple(f for f in batch.forecasts if f.model==FORECAST_MODELS[model_key].api_name)
-            st.session_state['forecast_fallback:'+model_key]=tuple(f for f in batch.forecasts if f.model!=FORECAST_MODELS[model_key].api_name)
-            errors=tuple(f.message for f in batch.failures)
+            try:
+                batch=pending.result()
+                forecasts=batch.forecasts
+                errors=tuple(f.message for f in batch.failures)
+            except (IngestionError,OSError,ValueError) as exc:
+                forecasts=st.session_state.get('forecast_bundle:'+model_key,())
+                errors=(str(exc),)
         else:
             forecasts=st.session_state.get('forecast_bundle:'+model_key,())
             errors=()
@@ -596,8 +607,8 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
     if active_page=='Data quality':
         catalog_panel(catalog)
         st.divider();st.subheader('Forecast quality')
-        weather_table([{'Location':f.location.name,'Retrieved UTC':f.fetched_at.isoformat(),'Available through':str(f.available_through),'Unavailable fields':', '.join(f.unavailable_variables)} for f in forecasts],
-            {'Location':'Requested forecast coordinate.','Retrieved UTC':'Time this response was downloaded.','Available through':'Last non-null surface-temperature hour.','Unavailable fields':'Fields absent from this model response.'})
+        weather_table([{'Location':f.location.name,'Retrieved UTC':f.fetched_at.isoformat(),'Available through':str(f.available_through),'Gap support':', '.join(f.supplemental_sources) or 'None','Unavailable fields':', '.join(f.unavailable_variables)} for f in forecasts],
+            {'Location':'Requested forecast coordinate.','Retrieved UTC':'Oldest contributing response retrieval time.','Available through':'Last non-null surface-temperature hour.','Gap support':'Models or parcel estimates used only where requested-model fields were missing. Exact field/hour sources are retained in the forecast.','Unavailable fields':'Fields still absent after model support. CAPE is optional for thermal ratings.'})
         if errors:st.warning('\n'.join(dict.fromkeys(errors)))
         return
     if not forecasts: st.warning('No regional forecast is available for this model. The task builder and exports remain available.')
@@ -664,6 +675,9 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
         return
     # All other pages have returned. Only Weather can request the national grid.
     assert active_page=='Weather map'
+    support=sorted({s for f in combined for s in f.supplemental_sources})
+    if support:
+        st.caption(MODEL_LABELS[model_key]+' · Missing fields supported by '+', '.join(support)+'. Native model values are preserved.')
     wind_product=None
     if visual_mode in ('wind','thermal','pfd','xc','stf') and not recorded:
         from uk_map_grid import session_grid,grid_progress
@@ -736,7 +750,7 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
             st.metric(datetime.fromisoformat(r.day).strftime('%a %d %b'),r.symbols,
                 help='Independent UK RASP-style rating at the task start / Long Mynd. Distances are local weather capacity; check your full route separately. '+' '.join(r.reasons))
             st.caption(r.label+(' · '+str(round(r.distance_km))+' km' if r.distance_km is not None else ''))
-            st.caption('Window '+('unavailable' if r.window_hours is None else f'{r.window_hours:g} h'))
+            st.caption(f'{r.covered_hours}/8 local hours covered · Window '+('unavailable' if r.window_hours is None else f'{r.window_hours:g} h'))
     if not profiles: st.warning('The selected model does not cover this hour. Choose another day, time or model.')
     if active_page=='Weather map':
         probe_enabled=st.toggle('Enable Point Forecast Probe',key='point_probe_enabled',
@@ -750,8 +764,6 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
             completed=bundle.completed(model_key) if bundle is not None and bundle.cycle==bucket else None
             if completed is not None:
                 probe_forecasts=tuple({(f.location.key,f.model):f for f in (*combined,*completed.batch.forecasts)}.values())
-        if probe_enabled and model_key=='ukmo':
-            probe_forecasts=(*probe_forecasts,*st.session_state.get('forecast_fallback:'+model_key,()))
         from map_component import document_version
         document_key=document_version(map_forecasts,when,visual_mode,tuple(layers),loading,
             catalog.content_sha256,points,show_airfields,bool(recorded),
@@ -764,7 +776,7 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
             if probe_enabled:
                 try:
                     probe=importlib.import_module('point_forecast_meteogram')
-                    if getattr(probe,'PROBE_API_REVISION',0)<3:
+                    if getattr(probe,'PROBE_API_REVISION',0)<4:
                         probe=importlib.reload(probe)
                     probe.add_probe(view,probe_forecasts,day,aviation=aviation,loading=loading)
                 except Exception:

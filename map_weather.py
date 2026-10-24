@@ -104,7 +104,8 @@ def wind_payload(forecasts, anchor, *, days=5):
     return {'times': [t.isoformat() for t in times], 'labels': [t.strftime('%a %d %b · %H:%M %Z') for t in times],
             'levels': [label for _, label in WIND_LEVELS], 'stations': stations,
             'grid':{'latitudes':WIND_LATITUDES,'longitudes':WIND_LONGITUDES,'indices':grid},
-            'source': 'Open-Meteo '+(', '.join(sorted({f.model for f in forecasts})) or 'unavailable')+' · regular UK grid',
+            'source': 'Open-Meteo '+(', '.join(sorted({f.model for f in forecasts})) or 'unavailable')+' · regular UK grid'+
+                (' · gap support: '+', '.join(sorted({s for f in forecasts for s in f.supplemental_sources})) if any(f.supplemental_sources for f in forecasts) else ''),
             'notes':'Bilinear horizontal and log-pressure vector interpolation. Terrain fallback uses surface wind; missing forecast hours stay unavailable.'}
 
 

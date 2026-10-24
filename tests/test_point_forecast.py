@@ -119,7 +119,7 @@ class PointIsolationTests(unittest.TestCase):
                 self.assertEqual(probe.PROBE_API_REVISION,1)  # Off remains dormant.
                 at.toggle(key='point_probe_enabled').set_value(True).run()
                 self.assertFalse(at.exception)
-                self.assertEqual(probe.PROBE_API_REVISION,3)
+                self.assertEqual(probe.PROBE_API_REVISION,4)
                 self.assertFalse(any('temporarily unavailable' in w.value for w in at.warning))
 
     def test_off_never_imports_probe_other_pages_reset_and_import_failure_is_local(self):

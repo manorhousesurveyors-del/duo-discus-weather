@@ -12,7 +12,7 @@ import argparse
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from http.client import HTTPException
@@ -250,6 +250,20 @@ class Forecast:
     from_cache: bool
     requested_horizon_hours: int
     source: str = OPEN_METEO_URL
+    # Sparse provenance: only substitutions/estimates need an entry. Native
+    # values retain model identity; a null source never implies a filled value.
+    field_sources: dict[str, tuple[str | None, ...]] = field(default_factory=dict)
+    source_runs: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def supplemental_sources(self) -> tuple[str, ...]:
+        return tuple(sorted({s for series in getattr(self,'field_sources',{}).values() for s in series if s}))
+
+    def sources_at(self, valid_at: datetime) -> tuple[str, ...]:
+        values = self.at(valid_at)
+        index = int((utc_datetime(valid_at) - self.times[0]).total_seconds() // 3600)
+        return tuple(sorted({(self.field_sources[k][index] if k in self.field_sources else None) or self.model
+                             for k, v in values.items() if v is not None}))
 
     def at(self, valid_at: datetime) -> dict[str, float | None]:
         """Exact UTC instant only; never extrapolate or choose a nearby hour."""
@@ -383,6 +397,16 @@ class OpenMeteoClient:
         }, ttl_seconds=self.settings.forecast_cache_seconds)
         return parse_forecast(response, location, model)
 
+    def fetch_supported(self, locations, model, *, batch_size=8):
+        """Independent provider requests; one unavailable model cannot lose all.
+
+        Completion is explicit and records each borrowed field/hour. Raw fetch
+        methods remain available for comparison, archives and diagnostics.
+        """
+        from forecast_coverage import complete_forecasts
+        batch = self.fetch_batched(locations, FORECAST_MODELS.values(), batch_size=batch_size)
+        return ForecastBatch(complete_forecasts(batch.forecasts, model), batch.failures)
+
     def fetch_many(self, locations: Iterable[GeoPoint] | None = None,
                    models: Iterable[ForecastModel] | None = None) -> ForecastBatch:
         points = tuple(forecast_locations() if locations is None else locations)
@@ -466,14 +490,17 @@ class OpenMeteoClient:
                 'cell_selection': 'nearest',
             }, ttl_seconds=self.settings.forecast_cache_seconds)
             bodies = [response.body] if isinstance(response.body, dict) else response.body
-            if len(bodies) != len(chunk):
+            if not isinstance(bodies,list) or len(bodies) != len(chunk):
                 raise SchemaError('Multi-coordinate response count does not match request')
-            result = []
+            result, bad = [], []
             for index, (point, body) in enumerate(zip(chunk, bodies)):
                 if not isinstance(body, dict) or body.get('location_id', index) != index:
                     raise SchemaError('Multi-coordinate response order is invalid')
-                result.append(parse_forecast(JsonResponse(body, response.fetched_at, response.from_cache), point, model))
-            return result
+                try:
+                    result.append(parse_forecast(JsonResponse(body, response.fetched_at, response.from_cache), point, model))
+                except IngestionError as exc:
+                    bad.append(FetchFailure(point.key, model.api_name, str(exc)))
+            return result, bad
 
         forecasts, failures = [], []
         with ThreadPoolExecutor(max_workers=self.settings.http_workers) as pool:
@@ -482,7 +509,9 @@ class OpenMeteoClient:
             for future in as_completed(jobs):
                 chunk, model = jobs[future]
                 try:
-                    forecasts.extend(future.result())
+                    good, bad = future.result()
+                    forecasts.extend(good)
+                    failures.extend(bad)
                 except IngestionError as exc:
                     failures.extend(FetchFailure(p.key, model.api_name, str(exc)) for p in chunk)
         return ForecastBatch(tuple(sorted(forecasts, key=lambda f: (f.location.key, f.model))),
@@ -848,8 +877,19 @@ def forecast_from_snapshot(record: Mapping[str, Any]) -> Forecast:
     body = {'latitude': record['model_latitude'], 'longitude': record['model_longitude'],
             'elevation': record['terrain_elevation_m'], 'utc_offset_seconds': 0,
             'hourly': hourly, 'hourly_units': {**record['units'], 'time': 'unixtime'}}
-    return parse_forecast(JsonResponse(body, _timestamp(record['fetched_at'], 'snapshot retrieval'),
-                                      bool(record.get('from_cache', False))), location, model)
+    forecast = parse_forecast(JsonResponse(body, _timestamp(record['fetched_at'], 'snapshot retrieval'),
+                                         bool(record.get('from_cache', False))), location, model)
+    sources = record.get('field_sources', {})
+    if not isinstance(sources, dict) or any(k not in forecast.hourly or not isinstance(v, (list, tuple))
+        or len(v) != len(forecast.times) or any(s is not None and not isinstance(s, str) for s in v)
+        for k, v in sources.items()):
+        raise SchemaError('Invalid field-source provenance in snapshot')
+    runs = record.get('source_runs', ())
+    if not isinstance(runs, (list,tuple)) or any(not isinstance(r, (list,tuple)) or len(r)!=2
+        or not all(isinstance(v,str) for v in r) for r in runs):
+        raise SchemaError('Invalid source-run provenance in snapshot')
+    return replace(forecast, field_sources={k: tuple(v) for k, v in sources.items()},
+                   source_runs=tuple(tuple(r) for r in runs))
 
 
 def main(argv: list[str] | None = None) -> int:

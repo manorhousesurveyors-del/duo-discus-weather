@@ -130,7 +130,10 @@ class Profile:
 def boundary_layer_height(profile: Profile) -> tuple[float | None, str]:
     direct = profile.values.get('boundary_layer_height')
     if direct is not None and direct >= 0:
-        return direct, 'model boundary-layer height'
+        origins = getattr(profile.forecast,'field_sources',{}).get('boundary_layer_height')
+        index = int((profile.valid_at-profile.forecast.times[0]).total_seconds()//3600)
+        source = origins[index] if origins else None
+        return direct, source or 'model boundary-layer height'
     temperature, pressure = profile.values.get('temperature_2m'), profile.values.get('surface_pressure')
     if temperature is None or pressure is None or pressure <= 0:
         return None, 'missing surface temperature/pressure for parcel estimate'
