@@ -64,7 +64,7 @@ def easy_answer(text):
     return '\n\n'.join(f'**Step {i+1}**\n\n{sentence}' for i,sentence in enumerate(sentences) if sentence)
 
 
-def render_help(catalog,assessment,classification,waves):
+def render_help(catalog,assessment,classification,waves,*,forecasts=(),day=None,today=None):
     st.subheader('Help Guide')
     st.caption('Small steps. Plain words. Take one card at a time.')
     st.markdown('''<style>
@@ -86,6 +86,9 @@ def render_help(catalog,assessment,classification,waves):
     if st.button('Explain in small steps',key='help_ask',help='Show a short, step-by-step answer based on the current forecast.'):
         intent=parse_intent(question,catalog)
         if intent.kind=='suggest':text='Open Route Forecast Planner. Choose your distance. Click Optimise Route. The planner checks the weather before loading a route.'
+        elif day is not None and intent.kind in ('weather','wave','day','help'):
+            from briefing_bot import pilot_briefing,briefing_date
+            text,_=pilot_briefing(question,forecasts,briefing_date(question,day,today or day))
         else:text=answer_question(intent,catalog,assessment,classification,waves)
         st.session_state['easy_briefing']=easy_answer(text)
     with st.container(key='help_answer'):

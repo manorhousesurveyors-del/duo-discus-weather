@@ -539,3 +539,51 @@ Node, Python compilation passes and `git diff --check` is clean. The GitHub API
 was inaccessible from this execution environment (HTTP 403), so the reported
 Actions failure was reproduced from the supplied error and checked-in workflow,
 not by reading private run logs or dispatching a production job.
+
+## Unified map mounting and pilot briefing · 24 October 2026
+
+Maps no longer depend on Streamlit's `tab.open` lazy-rendering state. A small
+supported two-way Streamlit component renders all four map containers with a
+720 px iframe and explicit 680 px Leaflet/CSS height. ResizeObserver,
+IntersectionObserver and a visibility timer restore hidden canvases. Leaflet and
+jQuery are bundled with licences; unpkg/cdnjs provide fallbacks. Explicit
+Finish/Analyse events retain task saving; mouse movement never calls Python.
+Nested NumPy arrays/scalars, NaN and infinities are normalized to JSON null before
+custom browser payload serialization. This removes map-mount failure paths
+without interpreting missing weather as zero.
+
+The committed `scripts/verify_client_maps.py` was run against the full recorded
+app in Chromium, with an isolated task store and verified HTTPS asset proxy.
+It asserted both Task and Wave maps are visible at ≥600 px, all 1,390 BGA points
+and 1,098 airfields are present, rubber-band/closing/Undo/Return Home work, all
+three soaring overlays toggle, all nine wave heights and click/drag sections
+work, and OGN demo remains explicitly labelled. Task redraw measured 2.0 ms,
+cursor update 0.3 ms; wave switches 0.6–2.9 ms after preload. Cold forecast and
+terrain preparation are separate and these timings are not device guarantees.
+Local gestures sent zero Streamlit updates; deliberate finishing sent one.
+
+Both exact requested bot questions passed in the browser. The route became
+`MYN → MNDN → MNDS → MYN`, with per-leg weather/STF and a complete Mynd hourly
+briefing. Neither answer contained `THE — Thetford` or a request to build a task
+first. With the selected model deliberately absent from the snapshot, Task,
+Wave and OGN maps and their canvases still measured **680 px**. There were no
+browser JavaScript errors or failed assets. Runtime screenshots and results are
+under ignored `var/unified-final-browser/`.
+
+A real certificate-verified ECMWF Long Mynd request returned **169 hourly rows**,
+from 23 October 13:00 UTC to 30 October 13:00 UTC. Today's 24 October rating was
+**one star**, with zero estimated thermal XC distance, rather than unavailable.
+The response is retained locally in `var/unified-live-mynd.json`. Both single
+and batched requests now include `past_hours=24`; parser and quota accounting
+include those hours. This is model history, not past observations.
+
+Gemini SDK configuration, read-only route tool, credential precedence and
+provider-failure fallback were tested with mocks; no Gemini key was available
+for a live generation. The local assistant was tested in the real browser.
+No email, WhatsApp or ntfy notification was sent. Existing watchdog discovery,
+invalid-state recovery and manual email tests remain part of the full suite;
+there is no `Previous state unavailable` throw in the workflow or alert runner.
+
+Final full suite: **211 tests passed** (`python -m unittest discover -s tests -v`,
+119 seconds). `pip check`, Python compilation, generated map JavaScript checks
+and `git diff --check` passed. The final browser process exited successfully.

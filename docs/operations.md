@@ -74,8 +74,9 @@ invocation, including a rerun, requests a new test email. It overrides a differe
 
 The test fetches one ECMWF Long Mynd forecast instead of the national grid.
 Unavailable or stale weather produces labelled unavailable star rows and still
-allows the delivery test; it never invents ratings. Today can be unavailable
-if the provider no longer includes the complete morning soaring window.
+allows the delivery test; it never invents ratings. Requests include
+`past_hours=24` so today's morning window is present, including BST/GMT changes.
+Provider gaps can still leave a rating unavailable; missing data is not zero.
 Reports are `briefing-test-email.html` and `.json`, with provider acceptance or
 failure recorded separately. Gmail acceptance returns 0; SMTP rejection or an
 uncertain send remains a delivery error. The command-line equivalent is

@@ -12,7 +12,7 @@ import streamlit as st
 import bga_turnpoints as bga
 from briefing_bot import answer_question, explain_task, format_windows, parse_intent, shortlist_tasks
 from config import FORECAST_MODELS, LOCAL_TIMEZONE, ROUTES, GeoPoint
-from data_ingestion import OpenMeteoClient
+from data_ingestion import OpenMeteoClient, IngestionError
 from soaring_physics import distance_bearing
 from task_planning import (add_task_point, assess_task, coordinate_turnpoint,
     corridor_points, export_cup, export_tsk, load_daily_task, nearby_forecasts, reorder_task,
@@ -230,6 +230,9 @@ def process_map_event(interaction,catalog,day,mode,*,event_key='last_map_event',
                 for item in draft['points']:
                     point=catalog.by_code.get(item['code'])
                     if point is None:
+                        from briefing_bot import LOCAL_POINTS
+                        point=LOCAL_POINTS.get(item['code'])
+                    if point is None:
                         airfield=airfield_by_id(item['code'])
                         point=airfield.turnpoint if airfield else coordinate_turnpoint(float(item['lat']),float(item['lon']))
                     selected.append(point)
@@ -370,9 +373,18 @@ def catalog_panel(catalog):
              'Source type':'BGA source records passed whole-catalog validation. User supplied means the coordinates have not been verified against that source.'})
 
 
-def briefing_panel(catalog,day,loading,model_key,bucket,forecasts,assessment,classification,waves,*,recorded=False):
+def briefing_panel(catalog,day,loading,model_key,bucket,forecasts,assessment,classification,waves,*,recorded=False,today=None):
+    from briefing_bot import briefing_date, pilot_briefing, gemini_key, gemini_briefing
     st.subheader('Help & Briefing Bot')
     st.caption('Ask about the selected day, your task, BGA points or a new route. Suggestions are checked against corridor weather before being marked achievable.')
+    with st.expander('Gemini settings · optional'):
+        runtime=st.text_input('GEMINI_API_KEY',type='password',key='gemini_runtime_key',help='Optional: use Google Gemini for a conversational overview. Your key stays in this server session. Weather and your question are sent to Google only when you ask. Leave blank for the local assistant.')
+        model=st.selectbox('Gemini model',['gemini-2.5-flash','gemini-2.5-pro'],key='gemini_model',help='Flash answers quickly. Pro may take longer. Your Google account quota and charges apply.')
+        if st.button('Forget pasted key',help='Remove the pasted key from this session.',on_click=lambda:st.session_state.pop('gemini_runtime_key',None)):
+            st.rerun()
+    try: secret_key=st.secrets.get('GEMINI_API_KEY','')
+    except (FileNotFoundError,st.errors.StreamlitSecretNotFoundError): secret_key=''
+    api_key=gemini_key(runtime,{'GEMINI_API_KEY':secret_key})
     context=f'{day.isoformat()}|{loading}|{model_key}|{bucket}|{catalog.content_sha256}'
     history=st.session_state.setdefault('briefing_messages',[])
     for message in history[-12:]:
@@ -390,7 +402,25 @@ def briefing_panel(catalog,day,loading,model_key,bucket,forecasts,assessment,cla
     if question:
         history.append({'role':'user','content':question})
         intent=parse_intent(question,catalog)
-        if intent.kind=='suggest':
+        requested_day=briefing_date(question,day,today or datetime.now(LOCAL_TIMEZONE).date())
+        evidence={}
+        if intent.kind=='route':
+            route=intent.route
+            try:
+                validate_task(route)
+                weather,failures=task_weather(route,forecasts,model_key,bucket,recorded=recorded)
+                result=assess_task(route,weather,requested_day,loading,preference=(FORECAST_MODELS[model_key].api_name,))
+                set_task(requested_day,route,rerun=False)
+                from route_tools import complete_task
+                complete_task(requested_day,route)
+                if today is not None and 0<=(requested_day-today).days<5:
+                    st.session_state['bot_forecast_day']=(requested_day-today).days
+                response,evidence=pilot_briefing(question,forecasts,requested_day,assessment=result,route=route)
+                response=f'Loaded your task for {requested_day:%a %d %b}.\n\n'+response
+                if failures: response+='\n\nForecast gaps: '+'; '.join(failures[:3])
+            except (ValueError,IngestionError) as exc:
+                response=f'Please check this route: {exc}'
+        elif intent.kind=='suggest':
             origin=catalog.by_code.get(intent.origin_code)
             if origin is None:
                 response=f'Origin {intent.origin_code} is not in the current catalog. Check the trigraph in the task builder.'
@@ -415,7 +445,12 @@ def briefing_panel(catalog,day,loading,model_key,bucket,forecasts,assessment,cla
                 else:
                     response=(f'No achievable {intent.target_km} km task was established among {len(suggestions)} checked corridors. '
                               'Review the candidate reasons below, choose a shorter distance, or refresh incomplete forecasts. This bounded search is not proof that no other route could work.')
+        elif intent.kind in ('weather','wave','day','help') or (intent.kind=='explain' and assessment is None):
+            response,evidence=pilot_briefing(question,forecasts,requested_day,assessment=assessment if requested_day==day else None)
         else: response=answer_question(intent,catalog,assessment,classification,waves)
+        with st.spinner('Preparing your pilot briefing…'):
+            response,source=gemini_briefing(question,evidence,response,catalog,api_key=api_key,model=model)
+        response+='\n\n*'+source+'*'
         history.append({'role':'assistant','content':response})
         st.session_state['briefing_messages']=history[-24:]
         st.rerun()

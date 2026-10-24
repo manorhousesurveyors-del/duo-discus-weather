@@ -134,8 +134,9 @@ keeps its color regardless of zoom or point count. The legend follows visibility
 Toggle it in Map layers or the Leaflet control. **Thermals on by default** stores
 an `?thermals=on` / `off` preference in the URL; bookmark that URL to retain it.
 
-The Help & Briefing Bot is a deterministic, forecast-grounded domain assistant;
-it needs no LLM subscription or secret. Try “suggest a 250 km triangle from MYN”,
+The Help & Briefing Bot combines a deterministic task/weather engine with optional
+Google Gemini narration. Without a key it provides the full local briefing.
+Try “suggest a 250 km triangle from MYN”,
 “find and load a 300 km out-and-return”, “why is my task marginal?”, “what kind of
 day is this?”, or “where is MYN?”. It searches published BGA geometry at or above the requested distance (up to
 8% longer), screens
@@ -148,3 +149,29 @@ suggestions. A failed bounded search is not proof that every possible task fails
 Sidebar controls, metrics, table headings and markers carry hover explanations.
 The bot's explanation cites calculated windows, weakest legs and missing/poor
 weather instead of inventing a forecast.
+
+Natural route wording such as “I want to fly from the Mynd to the Mynd North and
+Mynd South back to the Mynd” loads `MYN → MNDN → MNDS → MYN`. Ordinary English
+words such as “the”, “can” and “fly” cannot match catalog trigraphs. Full names,
+codes, Long Mynd/MGC, mndN/mndS and MYN N/MYN S are supported. `MNDN` (52.5550,
+−2.8620) and `MNDS` (52.4820, −2.9020) are pilot-defined local ridge references,
+not official BGA points; their elevations remain unknown. The published MYN
+coordinate is retained. Explicit custom routes load even when weather cannot
+establish achievability; that limitation remains in the briefing.
+
+“Tomorrow” means the day after the current local date (snapshot date in recorded
+mode), rather than the day after the sidebar selection. Site briefings need no
+task: they show hourly surface wind, gusts, west-face wind component, cloud base,
+thermals, precipitation and wave evidence. Ridge support uses a 280° facing
+direction and a 5 kt on-face screening threshold, not a measured lift or launch
+limit. Missing gusts/heights remain unknown. Short West takeoff considerations
+require current site conditions and the duty instructor's decision.
+
+Set `GEMINI_API_KEY` in Streamlit Secrets or the server environment; a password
+input under **Gemini settings** overrides it for that session. **Forget pasted
+key** removes the runtime value. Do not put keys into Git. Supported models are
+`gemini-2.5-flash` and `gemini-2.5-pro`. The question and weather/task evidence
+are sent to Google when a key is configured. The SDK exposes the same read-only
+route resolver as a tool; the model cannot write a task. Responses retain the
+deterministic evidence below the narrative. Timeout, missing key, quota and
+provider failures retain the local briefing without exposing provider errors.

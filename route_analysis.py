@@ -154,25 +154,13 @@ def hourly_details(points,forecasts,assessment):
 
 
 def planner_panel(catalog,day,when,loading,model_key,bucket,forecasts,points,assessment,aviation,*,map_builder,recorded=False):
-    from streamlit_folium import st_folium
+    from map_component import render_map as st_folium
     from planning_ui import process_map_event,active_task,set_task,weather_table,fetch_corridor
     from task_import import import_task
     from route_tools import complete_task,signature
     from airspace import import_airspace,LOCAL_PATH
     st.subheader('Task planning map')
     st.caption('Click BGA points or airfields in order. Panning, zooming and hover reports stay in your browser.')
-    with st.expander('Import a complete CUP / XCSoar task, or airspace boundaries'):
-        upload=st.file_uploader('Load an existing task',type=['cup','tsk'],key='planner_task_upload',help='Import one complete SeeYou Related Tasks declaration or an XCSoar Task. Waypoint-only CUP files are rejected to avoid inventing a route order.')
-        if st.button('Load uploaded task',disabled=upload is None,key='planner_import',help='Replace this date’s task with the uploaded Start–Turnpoints–Finish sequence. Review imported observation zones in your instrument.'):
-            try:
-                imported=import_task(upload.getvalue(),Path(upload.name).suffix,catalog=catalog.turnpoints)
-                set_task(day,imported,rerun=False);complete_task(day,imported);st.rerun()
-            except ValueError as exc:st.error(str(exc))
-        boundaries=st.file_uploader('Current airspace boundaries',type=['txt','air','json','geojson'],key='planner_airspace_upload',help='Load current OpenAir or polygon GeoJSON with class, name, floor and ceiling fields. This enables route intersection checks; NOTAM activity still needs an official check.')
-        if st.button('Use uploaded airspace',disabled=boundaries is None,help='Validate and save this supplied boundary file locally for route analysis. Existing data is retained if validation fails.'):
-            try:
-                body=import_airspace(boundaries.getvalue(),boundaries.name);LOCAL_PATH.parent.mkdir(exist_ok=True);LOCAL_PATH.write_text(json.dumps(body));st.rerun()
-            except (ValueError,OSError) as exc:st.error(str(exc))
     try:airspace=load_airspace(day)
     except (ValueError,OSError) as exc:st.warning(f'Airspace file unavailable: {exc}');airspace=None
     date_warning=airspace_date_warning(airspace,day)
@@ -188,7 +176,7 @@ def planner_panel(catalog,day,when,loading,model_key,bucket,forecasts,points,ass
         from airspace import display_airspace
         display=display_airspace(airspace)
         display={**display,'features':[{**f,'properties':{k:html.escape(v) if isinstance(v,str) else v for k,v in f['properties'].items()}} for f in display['features']]}
-        folium.GeoJson(display,name='Airspace / danger boundaries · simplified display',show=False,
+        folium.GeoJson(display,name='Airspace / danger boundaries · simplified display',show=True,
             style_function=lambda _:dict(color='#b13655',weight=1,fillOpacity=.06),
             tooltip=folium.GeoJsonTooltip(fields=['name','class','floor','ceiling'],aliases=['Name','Class','Lower limit','Upper limit'])).add_to(view)
     if report:
@@ -201,10 +189,22 @@ def planner_panel(catalog,day,when,loading,model_key,bucket,forecasts,points,ass
     from client_map import reorder_layer_control
     reorder_layer_control(view)
     def on_click():process_map_event(st.session_state.get('planner_map',{}),catalog,day,'Add to task',event_key='last_planner_event',visual_override='route')
-    interaction=st_folium(view,height=620,use_container_width=True,pixelated=False,key='planner_map',on_change=on_click,wrap_longitude=False,returned_objects=['last_object_clicked','last_clicked'])
+    interaction=st_folium(view,height=720,use_container_width=True,pixelated=False,key='planner_map',on_change=on_click,wrap_longitude=False,returned_objects=['last_object_clicked','last_clicked'])
     if interaction and interaction!=st.session_state.get('last_planner_event'):
         old=active_task(day);process_map_event(interaction,catalog,day,'Add to task',event_key='last_planner_event',visual_override='route')
         if active_task(day)!=old:st.rerun()
+    with st.expander('Import a complete CUP / XCSoar task, or airspace boundaries'):
+        upload=st.file_uploader('Load an existing task',type=['cup','tsk'],key='planner_task_upload',help='Import one complete SeeYou Related Tasks declaration or an XCSoar Task. Waypoint-only CUP files are rejected to avoid inventing a route order.')
+        if st.button('Load uploaded task',disabled=upload is None,key='planner_import',help='Replace this date’s task with the uploaded Start–Turnpoints–Finish sequence. Review imported observation zones in your instrument.'):
+            try:
+                imported=import_task(upload.getvalue(),Path(upload.name).suffix,catalog=catalog.turnpoints)
+                set_task(day,imported,rerun=False);complete_task(day,imported);st.rerun()
+            except ValueError as exc:st.error(str(exc))
+        boundaries=st.file_uploader('Current airspace boundaries',type=['txt','air','json','geojson'],key='planner_airspace_upload',help='Load current OpenAir or polygon GeoJSON with class, name, floor and ceiling fields. This enables route intersection checks; NOTAM activity still needs an official check.')
+        if st.button('Use uploaded airspace',disabled=boundaries is None,help='Validate and save this supplied boundary file locally for route analysis. Existing data is retained if validation fails.'):
+            try:
+                body=import_airspace(boundaries.getvalue(),boundaries.name);LOCAL_PATH.parent.mkdir(exist_ok=True);LOCAL_PATH.write_text(json.dumps(body));st.rerun()
+            except (ValueError,OSError) as exc:st.error(str(exc))
     requested=st.session_state.pop('analyse_client_task',False)
     if st.button('Analyse Task & Route Weather',type='primary',disabled=len(points)<2,width='stretch',key='analyse_route',help='Analyse the saved route. For an unsaved browser draft, use Analyse / save on the map. Current airspace activation needs a NOTAM check.') or (requested and len(points)>=2):
         try:

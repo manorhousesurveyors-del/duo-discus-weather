@@ -184,7 +184,7 @@ class JsonHttpClient:
             locations = len(str(params.get('latitude','')).split(','))
             variables = len(str(params.get('hourly','')).split(','))
             models = len(str(params.get('models','')).split(','))
-            days = float(params.get('forecast_hours',168))/24
+            days = (float(params.get('forecast_hours',168))+float(params.get('past_hours',0)))/24
             cost = locations*max(1,variables*models/10*max(1,days/14))
         for attempt in range(self.settings.http_max_attempts):
             self._pace(host,cost)
@@ -303,7 +303,7 @@ def parse_forecast(response: JsonResponse, location: GeoPoint, model: ForecastMo
     times = tuple(_timestamp(value, "forecast") for value in raw_times)
     if any(b - a != timedelta(hours=1) for a, b in zip(times, times[1:])):
         raise SchemaError("Forecast timestamps must be unique, ordered and hourly")
-    if len(times) > model.horizon_hours + 1:
+    if len(times) > model.horizon_hours + 25:
         raise SchemaError("Forecast exceeds its requested time window")
     values: dict[str, tuple[float | None, ...]] = {}
     units: dict[str, str | None] = {}
@@ -368,7 +368,7 @@ class OpenMeteoClient:
         response = self.http.get_json(OPEN_METEO_URL, {
             "latitude": location.latitude, "longitude": location.longitude,
             "models": model.api_name, "hourly": ",".join(HOURLY_VARIABLES),
-            "forecast_hours": model.horizon_hours + 1, "timezone": "GMT", "timeformat": "unixtime",
+            "forecast_hours": model.horizon_hours + 1, "past_hours": 24, "timezone": "GMT", "timeformat": "unixtime",
             "wind_speed_unit": "ms", "temperature_unit": "celsius", "precipitation_unit": "mm",
             "cell_selection": "nearest",
         }, ttl_seconds=self.settings.forecast_cache_seconds)
@@ -418,7 +418,7 @@ class OpenMeteoClient:
                 'latitude': ','.join(str(p.latitude) for p in chunk),
                 'longitude': ','.join(str(p.longitude) for p in chunk),
                 'models': model.api_name, 'hourly': ','.join(fields),
-                'forecast_hours': model.horizon_hours + 1, 'timezone': 'GMT', 'timeformat': 'unixtime',
+                'forecast_hours': model.horizon_hours + 1, 'past_hours': 24, 'timezone': 'GMT', 'timeformat': 'unixtime',
                 'wind_speed_unit': 'ms', 'temperature_unit': 'celsius', 'precipitation_unit': 'mm',
                 'cell_selection': 'nearest',
             }, ttl_seconds=self.settings.forecast_cache_seconds)

@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from json_payload import browser_json
 import json
 
 from bga_turnpoints import Turnpoint
@@ -89,7 +90,7 @@ def add_airfields(map_view,batch=None,*,live=True,route=False,selected=None):
     from branca.element import MacroElement,Template
     payload=airfield_records()
     element=MacroElement()
-    element.payload=json.dumps({'airfields':payload,'reports':aviation_payload(batch),'live':live,'route':route,'selected':selected},allow_nan=False,separators=(',',':')).replace('<','\\u003c')
+    element.payload=browser_json({'airfields':payload,'reports':aviation_payload(batch),'live':live,'route':route,'selected':selected})
     script=Path(__file__).with_name('assets').joinpath('airfields.js').read_text()
     element._template=Template('{% macro script(this, kwargs) %}\n'+script+'\ninstallDuoAirfields({{this._parent.get_name()}},{{this.payload|safe}});\n{% endmacro %}')
     element.add_to(map_view)

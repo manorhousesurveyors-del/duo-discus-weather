@@ -1,5 +1,6 @@
 """Compact browser payloads for canvas waypoints and deliberate route commits."""
 from pathlib import Path
+from json_payload import browser_json
 import hashlib
 import json
 from branca.element import MacroElement, Template
@@ -8,7 +9,7 @@ from config import LOCAL_TIMEZONE
 
 def script(map_view, filename, call, payload=None):
     element=MacroElement()
-    element.payload=json.dumps(payload,separators=(',',':'),allow_nan=False).replace('<','\\u003c')
+    element.payload=browser_json(payload)
     source=Path(__file__).with_name('assets').joinpath(filename).read_text()
     element._template=Template('{% macro script(this, kwargs) %}\n'+source+'\n'+call+'({{this._parent.get_name()}},{{this.payload|safe}});\n{% endmacro %}')
     element.add_to(map_view)

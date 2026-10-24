@@ -74,7 +74,7 @@ class DashboardTests(unittest.TestCase):
             path=Path(directory)/'snapshot.json'
             save_bundle(ForecastBundle(tuple(forecast(p) for p in forecast_locations()),(),.5,(),NOW),path)
             with patch.dict('os.environ',{'DUO_DASHBOARD_SNAPSHOT':str(path),'DUO_TASK_STORE':directory+'/tasks'}), \
-                 patch('streamlit_folium.st_folium',return_value={'last_clicked':{'lat':53.,'lng':-2.5}}):
+                 patch('map_component.render_map',return_value={'last_clicked':{'lat':53.,'lng':-2.5}}):
                 at=AppTest.from_file(str(Path(app.__file__)),default_timeout=30).run()
                 self.assertFalse(at.exception)
                 self.assertEqual(at.selectbox(key='inspector_selection').value,'Map coordinate')

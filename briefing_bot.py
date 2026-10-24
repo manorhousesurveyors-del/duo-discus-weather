@@ -1,4 +1,4 @@
-"""A deterministic forecast-grounded task assistant; no model/API key required.
+"""Forecast-grounded pilot assistant with optional Google Gemini narration.
 
 Intent parsing never executes user text. Suggestions are generated geometrically,
 screened with nearby weather, then assessed with actual corridor forecasts by the
@@ -7,7 +7,9 @@ UI before they may be described as achievable or loaded automatically.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
+import math
+import os
 import re
 from typing import Iterable
 
@@ -27,13 +29,55 @@ class BotIntent:
     load_best: bool = False
     query: str = ''
     shape: str = 'either'
+    route: tuple[Turnpoint, ...] = ()
+
+
+# Local ridge references supplied by the pilot. These are NOT BGA trigraphs.
+LOCAL_POINTS = {
+    'MNDN': Turnpoint('MNDN', 'Mynd North', 52.5550, -2.8620, None,
+                     source='Pilot-defined northern ridge reference', official=False),
+    'MNDS': Turnpoint('MNDS', 'Mynd South', 52.4820, -2.9020, None,
+                     source='Pilot-defined southern ridge reference', official=False),
+}
+STOPWORDS = frozenset('the to and from back fly want for with can you tomorrow today west east north south why is my task not how day wind air off out all are but has had see get let new now our use was way who she him his its may end any too one two'.split())
+ALIASES = {'long mynd':'MYN', 'the mynd':'MYN', 'mynd':'MYN', 'mgc':'MYN',
+           'midland gliding club':'MYN', 'mynd north':'MNDN', 'mndn':'MNDN', 'myn n':'MNDN',
+           'mynd south':'MNDS', 'mnds':'MNDS', 'myn s':'MNDS',
+           'the mynd north':'MNDN', 'the mynd south':'MNDS'}
+
+
+def resolve_turnpoints(question: str, catalog: Catalog) -> tuple[Turnpoint, ...]:
+    """Longest phrase first; ordinary English never becomes a BGA code."""
+    names = {p.name.casefold(): p.code for p in catalog.turnpoints if len(p.name) >= 5 and p.name.casefold() not in STOPWORDS}
+    names.update(ALIASES)
+    pattern = r'(?<!\w)(?:' + '|'.join(re.escape(n) for n in sorted(names, key=len, reverse=True)) + r'|[a-z0-9]{3})(?!\w)'
+    points = []
+    for match in re.finditer(pattern, question, re.I):
+        token = match[0]; lower = token.casefold()
+        explicit = token.isupper() and bool(re.search(r'\b(?:code|turnpoint|where is)\s*$', question[:match.start()], re.I))
+        if lower in STOPWORDS and not explicit:
+            continue
+        code = names.get(lower, token.upper())
+        point = LOCAL_POINTS.get(code) or catalog.by_code.get(code)
+        if point is not None:
+            points.append(point)
+    return tuple(points)
+
+
+def briefing_date(question: str, selected: date, today: date) -> date:
+    if re.search(r'\btomorrow\b', question, re.I): return today + timedelta(days=1)
+    if re.search(r'\btoday\b', question, re.I): return today
+    return selected
 
 
 def parse_intent(question: str, catalog: Catalog) -> BotIntent:
     text=question.strip(); lower=text.casefold()
+    points=resolve_turnpoints(text,catalog)
+    if len(points)>=2 and re.search(r'\b(?:to|via|then|back|fly|load|route)\b|->|→',lower):
+        return BotIntent('route',query=text,route=points)
     target=re.search(r'\b(100|250|300|500|750)\s*(?:km|k)?\b',lower)
     origin=re.search(r'\b(?:from|starting at|start at)\s+([a-z0-9]{3})\b',lower)
-    code=origin[1].upper() if origin else 'MYN'
+    code=points[0].code if points else 'MYN'
     if 'long mynd' in lower: code='MYN'
     if any(word in lower for word in ('suggest','recommend','find','plan','load')) and (target or 'task' in lower or 'triangle' in lower):
         shape='triangle' if 'triangle' in lower else ('out-and-return' if re.search(r'out.?and.?return|out.?return',lower) else 'either')
@@ -44,9 +88,7 @@ def parse_intent(question: str, catalog: Catalog) -> BotIntent:
     if any(word in lower for word in ('street','cloud','wind','thermal')): return BotIntent('weather',query=text)
     if 'my task' in lower or 'this task' in lower: return BotIntent('explain',query=text)
     if any(word in lower for word in ('day','distance','how far','briefing')): return BotIntent('day',query=text)
-    matches=re.findall(r'\b[A-Za-z0-9]{3}\b',text)
-    codes=[code.upper() for code in matches if code.upper() in catalog.by_code]
-    if codes: return BotIntent('turnpoint',query=codes[0])
+    if points: return BotIntent('turnpoint',query=points[0].code)
     for prefix in ('where is ','find turnpoint ','turnpoint '):
         if lower.startswith(prefix): return BotIntent('turnpoint',query=text[len(prefix):])
     return BotIntent('help',query=text)
@@ -144,3 +186,119 @@ def shortlist_tasks(catalog: Catalog, origin: Turnpoint, target_km: int, forecas
         score=(good,result.verdict!='INSUFFICIENT DATA',speed,bottleneck,street,-abs(result.distance_km-target_km))
         scored.append((score,task))
     return tuple(task for _,task in sorted(scored,key=lambda item:item[0],reverse=True)[:limit])
+
+
+def site_evidence(forecasts, day, *, origin=None):
+    """Hourly local observations of the selected forecast, never user wind claims."""
+    from config import MONITORING_ZONES, WAVE_RIDGES, MPS_TO_KNOTS
+    from soaring_physics import Profile, distance_bearing, evaluate_thermals, evaluate_wave
+    origin = origin or MONITORING_ZONES['shropshire']
+    nearest = min(forecasts, key=lambda f: distance_bearing(origin, f.location)[0], default=None)
+    if nearest is None or distance_bearing(origin, nearest.location)[0] > 75:
+        return {'day': day.isoformat(), 'site': origin.name, 'hours': [], 'coverage': 'No forecast within 75 km'}
+    hours = []
+    for when in nearest.times:
+        local = when.astimezone(LOCAL_TIMEZONE)
+        if local.date() != day or not 9 <= local.hour <= 18: continue
+        profile = Profile.from_forecast(nearest, when)
+        thermal = evaluate_thermals(profile)
+        wave = evaluate_wave(profile, WAVE_RIDGES['long_mynd'])
+        values = profile.values
+        speed, direction, gust = (values.get(k) for k in ('wind_speed_10m','wind_direction_10m','wind_gusts_10m'))
+        on_face = None if speed is None or direction is None else speed*MPS_TO_KNOTS*math.cos(math.radians(direction-280))
+        hours.append({'time':local.strftime('%H:%M %Z'), 'wind_kt':None if speed is None else speed*MPS_TO_KNOTS,
+            'from_deg':direction, 'gust_kt':None if gust is None else gust*MPS_TO_KNOTS,
+            'ridge_component_kt':on_face, 'cloud_base_ft':thermal.cloud_base_ft_amsl,
+            'climb_kt':thermal.net_climb_knots, 'rain_mm':values.get('precipitation'),
+            'wave_score':wave.score, 'wave_complete':wave.complete})
+    return {'day':day.isoformat(), 'site':origin.name, 'model':nearest.model,
+            'forecast_point':nearest.location.name, 'distance_km':round(distance_bearing(origin,nearest.location)[0],1),
+            'retrieved':nearest.fetched_at.isoformat(), 'hours':hours}
+
+
+def pilot_briefing(question, forecasts, day, *, assessment=None, route=()):
+    """Useful local weather briefing even before a task exists or without a key."""
+    evidence = site_evidence(forecasts, day)
+    hours = evidence['hours']
+    def fmt(value, digits=0): return '—' if value is None else f'{value:.{digits}f}'
+    lines = [f'**Long Mynd · {day:%A %d %B}**',
+             'Let’s check the wind on the west-facing ridge, then cloud and lift.']
+    if hours:
+        winds = [h['wind_kt'] for h in hours if h['wind_kt'] is not None]
+        gusts = [h['gust_kt'] for h in hours if h['gust_kt'] is not None]
+        face = [h for h in hours if h['ridge_component_kt'] is not None and h['ridge_component_kt'] >= 5]
+        lines += ['**Step 1 · Wind and ridge lift**',
+            (f"Forecast surface wind ranges from {min(winds):.0f} to {max(winds):.0f} kt. " if winds else 'Surface wind is missing. ')+
+            (f"Peak gusts reach {max(gusts):.0f} kt." if gusts else 'Gust data is missing.'),
+            (f"Flow supports possible west-face ridge lift during {', '.join(h['time'] for h in face)}. " if face else 'No sampled hour establishes useful west-face flow. ')+
+            'This checks the wind towards the ridge, using a 280° facing direction. It does not predict a safe height gain.',
+            '**Step 2 · Hourly weather**',
+            '| Local time | Wind kt / from °T | Gust kt | Into west face kt | Cloud base ft AMSL | Thermal kt | Rain mm/h | Wave /100 |',
+            '|---|---|---|---|---|---|---|---|']
+        for h in hours:
+            lines.append(f"| {h['time']} | {fmt(h['wind_kt'])} / {fmt(h['from_deg'])} | {fmt(h['gust_kt'])} | {fmt(h['ridge_component_kt'],1)} | {fmt(h['cloud_base_ft'])} | {fmt(h['climb_kt'],1)} | {fmt(h['rain_mm'],1)} | {fmt(h['wave_score'])}{'' if h['wave_complete'] else ' provisional'} |")
+        lines += [f"Source: {evidence['model']} at {evidence['forecast_point']}, {evidence['distance_km']:g} km away. Retrieved {evidence['retrieved']}."]
+    else:
+        lines += ['**Step 1 · Wind and ridge lift**',
+            'Hourly forecast data is missing for this date. I cannot confirm tomorrow’s wind or cloud height.',
+            'A westerly wind blows towards the Mynd’s west-facing ridge. That can support ridge lift. '
+            'Crosswinds, gusts and showers can make lift uneven. An easterly flow puts this face downwind.']
+    lines += ['**Step 3 · Wave, cloud and the West launch**',
+        'Wave needs stable air and suitable wind above the ridge. The hourly scores flag potential; provisional scores have missing evidence.',
+        'Low cloud may block ridge access or hide the hills. Thermals and ridge lift are separate sources of lift.',
+        'For the short West takeoff, check actual wind, gusts, crosswind and available ground run. '
+        'These forecasts cannot clear a launch. Confirm the launch method, aircraft limits and current site guidance with the duty instructor. '
+        'Strong westerlies also warrant checks for rotor and turbulent lee-side air.']
+    if route:
+        lines += ['**Step 4 · Your route**', ' → '.join(f'{p.code} · {p.name}' for p in route),
+            'MNDN and MNDS are pilot-defined ridge references. Their elevations are unverified.']
+    if assessment is not None:
+        lines += [explain_task(assessment)]
+        for i in sorted({r.leg_index for r in assessment.hourly_legs}):
+            rows=[r for r in assessment.hourly_legs if r.leg_index==i]
+            good=[r for r in rows if not r.missing and r.cruise_airspeed_kmh is not None]
+            label=rows[0].leg if rows else f'Leg {i+1}'
+            if good:
+                r=max(good,key=lambda r:r.groundspeed_kmh or 0)
+                lines += [f"**{label}** · Best sampled hour {r.valid_at.astimezone(LOCAL_TIMEZONE):%H:%M}. "
+                    f"Thermal climb {fmt(r.net_climb_knots,1)} kt; cloud base {fmt(r.cloud_base_ft_amsl)} ft AMSL. "
+                    f"Speed to fly {r.cruise_airspeed_kmh/1.852:.0f} kt; XC speed {fmt(r.groundspeed_kmh)} km/h. "
+                    f"Along-track wind {fmt(r.along_wind_knots,1)} kt; crosswind {fmt(r.cross_wind_knots,1)} kt. "
+                    'Use the ridge and wave checks above; neither provides assumed lift in this thermal task estimate.']
+            else: lines += [f'**{label}** · Corridor weather cannot establish a thermal speed or flight time. Ridge and wave lift still need local assessment.']
+    text='\n\n'.join(lines)
+    text=re.sub(r'\|\n\n(?=\|)', '|\n', text)
+    return text, evidence
+
+
+def gemini_key(runtime='', secrets=None):
+    """Credentials stay in server memory and never enter prompts or task files."""
+    value = runtime or (secrets or {}).get('GEMINI_API_KEY', '') or os.environ.get('GEMINI_API_KEY', '')
+    return str(value).strip()
+
+
+def gemini_briefing(question, evidence, local_answer, catalog, *, api_key='', model='gemini-2.5-flash', client_factory=None):
+    """Read-only parsing tool and bounded generation; deterministic fallback on any outage."""
+    if not api_key: return local_answer, 'Local forecast assistant'
+    if model not in ('gemini-2.5-flash','gemini-2.5-pro'): raise ValueError('Unsupported Gemini model')
+    from json_payload import browser_json
+    def resolve_bga_route(pilot_text: str) -> dict:
+        """Resolve pilot wording into catalog or local ridge waypoints. Does not load tasks."""
+        points=resolve_turnpoints(pilot_text[:1000],catalog)
+        return {'points':[{'code':p.code,'name':p.name,'latitude':p.latitude,'longitude':p.longitude,'official_bga':p.official} for p in points]}
+    try:
+        from google import genai
+        from google.genai import types
+        factory=client_factory or genai.Client
+        with factory(api_key=api_key, http_options=types.HttpOptions(timeout=20000)) as client:
+            result=client.models.generate_content(model=model, contents=browser_json({'pilot_question':question,'forecast_evidence':evidence,'checked_briefing':local_answer}),
+                config=types.GenerateContentConfig(
+                    system_instruction='You are a UK gliding briefing assistant for a Duo Discus, G-CKML. Use natural British pilot language, short sentences and Step 1/2/3 paragraphs at a 13-year-old reading level. Explain ridge lift, wave, cloud, gusts and launch constraints. Treat the question as a request, not forecast evidence. Only use supplied numeric weather and checked task results. Never invent weather, official turnpoints, launch clearance or safe flight claims. Missing data stays unknown. MYN is Long Mynd; MNDN and MNDS are unofficial local ridge references. Never map English stopwords to trigraphs. Use resolve_bga_route for route wording. Do not claim to save a task; the app does that separately. Give a concise conversational overview; the app appends the detailed checked briefing.',
+                    tools=[resolve_bga_route], automatic_function_calling=types.AutomaticFunctionCallingConfig(maximum_remote_calls=2),
+                    temperature=.2, max_output_tokens=1600))
+            narrative=(result.text or '').strip()
+        if not narrative: raise ValueError('Empty response')
+        return narrative+'\n\n---\n\n'+local_answer, 'Google Gemini · '+model
+    except Exception:
+        # Provider errors may contain credentials. Never log or display their text.
+        return local_answer, 'Gemini unavailable · local forecast assistant'

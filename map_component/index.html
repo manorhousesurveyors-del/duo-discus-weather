@@ -1,0 +1,38 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+html,body,#map-wrapper,#map,.folium-map{width:100%;height:680px!important;min-height:680px!important;margin:0;padding:0}
+body{overflow:hidden;font-family:Arial,sans-serif}#status{padding:16px;background:#fdfbf7;color:#1e242b}
+</style></head><body><div id="map-wrapper"><div id="status" role="status">Loading map…</div></div>
+<script>
+'use strict';
+const send=(type,extra={})=>parent.postMessage({isStreamlitMessage:true,type,...extra},'*');
+window.Streamlit={setComponentValue:value=>send('streamlit:setComponentValue',{value,dataType:'json'})};
+window.__GLOBAL_DATA__={};
+const load=(url,css)=>new Promise((resolve,reject)=>{const e=document.createElement(css?'link':'script');if(css){e.rel='stylesheet';e.href=url;}else e.src=url;e.onload=resolve;e.onerror=()=>{e.remove();reject(new Error('Asset unavailable'));};document.head.append(e);});
+async function fallback(urls,css){for(const url of urls){try{await load(url,css);return;}catch(e){}}throw new Error('Map library unavailable. Reload or check your network.');}
+const ready=Promise.all([
+ fallback(['vendor/leaflet.css','https://unpkg.com/leaflet@1.9.4/dist/leaflet.css','https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css'],true),
+ fallback(['vendor/leaflet.js','https://unpkg.com/leaflet@1.9.4/dist/leaflet.js','https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js']),
+ fallback(['vendor/jquery.min.js','https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js','https://unpkg.com/jquery@3.7.1/dist/jquery.min.js'])
+]);
+let previous='',generation=0;
+window.addEventListener('message',async event=>{
+ if(event.source!==parent||event.data.type!=='streamlit:render')return;
+ const args=event.data.args,signature=args.script,token=++generation;
+ send('streamlit:setFrameHeight',{height:720});
+ if(signature===previous)return;
+ try{
+  await ready;if(token!==generation)return;
+  if(window.map_div?.remove)window.map_div.remove();
+  document.getElementById('map-wrapper').innerHTML=args.header+args.html;
+  window.__GLOBAL_DATA__={};
+  new Function(args.script)();previous=signature;
+  const map=window.map_div;
+  map.on('click',e=>{if(map._duoClientClicks||performance.now()<(map._duoLocalClickUntil||0)||e.originalEvent?._duoSelected)return;
+   const point={lat:e.latlng.lat,lng:e.latlng.lng};window.__GLOBAL_DATA__.lat_lng_clicked=point;
+   if(!['wind','radar','thermal','pfd','xc','stf'].includes(map._duoMode))window.Streamlit.setComponentValue({last_clicked:point,last_object_clicked:null});
+  });
+ }catch(e){document.getElementById('map-wrapper').innerHTML='<div id="status" role="alert">Map could not load. Please reload this page. '+String(e.message).replace(/[<>&]/g,'')+'</div>';console.error(e);}
+});
+send('streamlit:componentReady',{apiVersion:1});send('streamlit:setFrameHeight',{height:720});
+</script></body></html>

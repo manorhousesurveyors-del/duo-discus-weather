@@ -47,8 +47,18 @@ planner. The default map is clean. Soaring contours use stepped purple-to-red
 bands with black outlines; zero/unsupported areas stay clear. Bookmark `?thermals=on` to start with
 it enabled. **Help & Briefing Bot** answers from the selected forecasts/catalog
 and checks suggested BGA triangles and out-and-returns before offering to load
-them. It requires no LLM key. Controls, metrics, table columns and map markers
+them. The local assistant needs no key; optional Google Gemini adds a natural
+pilot briefing. Set `GEMINI_API_KEY` in Streamlit Secrets or the environment, or
+paste it into **Gemini settings** in the bot tab. Flash is the default; Pro is
+also available. Provider outages fall back to the checked local briefing.
+Controls, metrics, table columns and map markers
 have hover explanations.
+
+Task, Wave Watch and OGN maps mount even with missing forecasts. Each map uses
+a 680 px canvas inside a 720 px component, bundled Leaflet, CDN fallbacks and
+hidden-tab resize observers. Point clicks, cursor drawing and wave height
+changes stay in the browser; Finish/Analyse saves the task. Open-Meteo requests
+include the previous 24 hours so today's star rating includes its morning window.
 
 **Help Guide** provides dyslexia-friendly step cards and a plain-language weather
 bot. Completing a route opens its **BGA / SeeYou Task Sheet**, with PDF, Word,

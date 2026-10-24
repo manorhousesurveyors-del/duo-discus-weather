@@ -1,5 +1,6 @@
 """Floating Leaflet controls and source-labelled visual layers."""
 from pathlib import Path
+from json_payload import browser_json
 import json
 import folium
 import streamlit as st
@@ -36,7 +37,7 @@ def add_map_modes(map_view,forecasts,when,anchor,loading,*,mode='clean',radar=No
     element=MacroElement()
     # No network script dependency: all controls and animation are bundled.
     javascript=Path(__file__).with_name('assets').joinpath('map_modes.js').read_text()
-    element.payload=json.dumps(payload,separators=(',',':'),allow_nan=False).replace('<','\\u003c')
+    element.payload=browser_json(payload)
     element._template=Template('{% macro script(this, kwargs) %}\n'+javascript+
         '\ninstallDuoModes({{this._parent.get_name()}}, {{this.payload|safe}});\n{% endmacro %}')
     element.add_to(map_view)

@@ -1,6 +1,7 @@
 /* Independent Windy/SkySight-inspired UI. Forecast sources remain explicit. */
 function installDuoModes(map, data) {
   'use strict';
+  map._duoMode=data.mode;
   if(['wind','thermal','pfd','xc','stf'].includes(data.mode))map._duoClientClicks=true;
   if (map._duoCleanup) map._duoCleanup();
   const style = document.createElement('style');
