@@ -12,7 +12,7 @@ from scipy.interpolate import griddata
 from scipy.spatial import cKDTree
 import contourpy
 
-from config import DUO_DISCUS_POLARS, LOCAL_TIMEZONE, METRES_TO_FEET, MPS_TO_KNOTS, GeoPoint
+from config import DUO_DISCUS_POLARS, LOCAL_TIMEZONE, METRES_TO_FEET, MPS_TO_KNOTS, PRESSURE_LEVELS_HPA, GeoPoint
 from soaring_physics import Profile, cross_country_speed, evaluate_thermals, wind_components
 from task_planning import classify_day
 
@@ -26,7 +26,21 @@ BANDS = {'thermal': (0, .5, 1, 1.5, 2.5, 3.5, 4.5, 5.5, 20),
          'stf': (0, 50, 55, 60, 65, 70, 75, 85, 150)}
 
 
+WIND_LATITUDES = tuple(round(float(v),6) for v in np.linspace(49.8,59.,13))
+WIND_LONGITUDES = tuple(round(float(v),6) for v in np.linspace(-8.5,2.,15))
+WIND_VARIABLES = ('temperature_2m','surface_pressure','wind_speed_10m','wind_direction_10m',
+                  'wind_speed_80m','wind_direction_80m','wind_speed_100m','wind_direction_100m') + tuple(
+    f'{v}_{p}hPa' for p in (1000,950,925,850,800,700,500)
+    for v in ('wind_speed','wind_direction','geopotential_height'))
+
+
 def national_grid():
+    """Regular 195-node UK grid, including coastal water; no distance cutoff mask."""
+    return tuple(GeoPoint(f'map:{lat:.6f}:{lon:.6f}',f'UK grid {lat:.3f}, {lon:.3f}',lat,lon)
+                 for lat in WIND_LATITUDES for lon in WIND_LONGITUDES)
+
+
+def soaring_grid():
     """~85 km spaced land samples, not a high-resolution meteorological model."""
     from global_land_mask import globe
     return tuple(GeoPoint(f'map:{lat:.2f}:{lon:.2f}', f'UK map {lat:.2f}, {lon:.2f}', float(lat), float(lon))
@@ -38,10 +52,36 @@ def wind_vector(profile, pressure):
     if pressure == 0:
         speed, direction = profile.values.get('wind_speed_10m'), profile.values.get('wind_direction_10m')
         return None if speed is None or direction is None else (*wind_components(speed, direction), False)
-    level = profile.level(pressure)
-    if level is None or level.u_mps is None or level.v_mps is None:
-        return None
-    return level.u_mps, level.v_mps, level.interpolated
+    # Wind fields do not require temperature/humidity at each pressure level.
+    # Interpolate vector components, avoiding the 359°/1° direction wrap error.
+    values=profile.values; terrain=profile.forecast.terrain_elevation_m
+    nodes=[]; surface_pressure=values.get('surface_pressure')
+    if surface_pressure:
+        for height in (10,80,100):
+            speed,direction=values.get(f'wind_speed_{height}m'),values.get(f'wind_direction_{height}m')
+            if speed is not None and direction is not None:
+                p=surface_pressure*math.exp(-height/8434.5)
+                nodes.append((p,*wind_components(speed,direction),0))
+        if nodes and pressure>=nodes[0][0]:
+            # At/below the lowest near-surface sample (including the small
+            # surface-to-10 m interval), display explicitly labelled surface
+            # wind. Never invent an underground pressure-level wind.
+            return nodes[0][1],nodes[0][2],2
+    for p in PRESSURE_LEVELS_HPA:
+        speed,direction=values.get(f'wind_speed_{p}hPa'),values.get(f'wind_direction_{p}hPa')
+        height=values.get(f'geopotential_height_{p}hPa')
+        if speed is None or direction is None or (height is not None and height<=terrain+2):continue
+        if height is None and surface_pressure and p>=surface_pressure:continue
+        if height is None and not surface_pressure:continue
+        nodes.append((p,*wind_components(speed,direction),0))
+    nodes.sort(reverse=True)
+    for p,u,v,flag in nodes:
+        if p==pressure:return u,v,flag
+    for a,b in zip(nodes,nodes[1:]):
+        if a[0]>pressure>b[0]:
+            fraction=math.log(pressure/a[0])/math.log(b[0]/a[0])
+            return a[1]+fraction*(b[1]-a[1]),a[2]+fraction*(b[2]-a[2]),1
+    return None
 
 
 def wind_payload(forecasts, anchor, *, days=5):
@@ -49,6 +89,7 @@ def wind_payload(forecasts, anchor, *, days=5):
     start = datetime.combine(anchor.astimezone(LOCAL_TIMEZONE).date(), time(), LOCAL_TIMEZONE)
     times = [(start.astimezone(UTC) + timedelta(hours=h)).astimezone(LOCAL_TIMEZONE) for h in range(days*24)]
     stations = []
+    forecasts=tuple(forecasts)
     for f in forecasts:
         series = []
         for when in times:
@@ -58,9 +99,13 @@ def wind_payload(forecasts, anchor, *, days=5):
             series.append([None if (v := wind_vector(profile, pressure)) is None else
                            [round(v[0], 2), round(v[1], 2), int(v[2])] for pressure, _ in WIND_LEVELS])
         stations.append({'lat': f.location.latitude, 'lon': f.location.longitude, 'values': series})
+    lookup={(round(s['lat'],6),round(s['lon'],6)):i for i,s in enumerate(stations)}
+    grid=[[lookup.get((lat,lon)) for lon in WIND_LONGITUDES] for lat in WIND_LATITUDES]
     return {'times': [t.isoformat() for t in times], 'labels': [t.strftime('%a %d %b · %H:%M %Z') for t in times],
             'levels': [label for _, label in WIND_LEVELS], 'stations': stations,
-            'coverage_km': 120, 'source': 'Open-Meteo model wind · interpolated between samples'}
+            'grid':{'latitudes':WIND_LATITUDES,'longitudes':WIND_LONGITUDES,'indices':grid},
+            'source': 'Open-Meteo '+(', '.join(sorted({f.model for f in forecasts})) or 'unavailable')+' · regular UK grid',
+            'notes':'Bilinear horizontal and log-pressure vector interpolation. Terrain fallback uses surface wind; missing forecast hours stay unavailable.'}
 
 
 def soaring_samples(forecasts, when, loading):

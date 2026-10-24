@@ -25,3 +25,25 @@ it does not make this third-party mirror an official navigation publication.
 The catalog records the original download hash, canonical-content hash, version,
 retrieval time and URL. Quarterly checks discover the current download filename;
 see [task planning](../docs/task-planning.md) for validation and update behavior.
+
+## UK airfields
+
+`uk_airfields.json` was retrieved on **24 October 2026** from:
+
+- [OurAirports airport metadata via datasets/airport-codes](https://github.com/datasets/airport-codes)
+- [OurAirports runway data](https://github.com/davidmegginson/ourairports-data)
+- [NOAA station capabilities](https://aviationweather.gov/data/cache/stations.cache.xml.gz)
+
+OurAirports airport/runway data is public domain. The JSON retains source URLs,
+retrieval time, runway metadata, reporting capabilities and club aliases.
+It includes 1,098 airfields in GB, the Isle of Man and Channel Islands,
+including 130 unique METAR/TAF station codes from NOAA's capability catalog.
+Heliports and most closed facilities are excluded. Kirton in Lindsey is retained
+because it was requested, with its source status explicitly marked **closed**.
+Reporting capability is not a guarantee of a current report. No missing runway,
+elevation or ICAO code is fabricated. Club names are aliases, not BGA trigraphs.
+
+Current airspace geometry is not bundled. Users can supply a validated OpenAir
+or polygon GeoJSON file through Task planner; it is saved under ignored `var/`.
+Absent geometry is reported as unassessed. Do not treat airport proximity circles
+as controlled-airspace boundaries.

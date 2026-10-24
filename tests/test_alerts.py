@@ -36,7 +36,7 @@ class AlertTests(unittest.TestCase):
         b=build_briefing(bundle,5,now=NOW+timedelta(minutes=17))
         self.assertEqual(b.target_time,NOW+timedelta(days=5))
         self.assertEqual(len(b.regions),9)
-        self.assertEqual(len(b.waves),12)
+        self.assertEqual(len(b.waves),14)
         self.assertEqual(len(b.routes),2)
         self.assertTrue(all(r.comparisons for r in b.regions))
         self.assertTrue(any('Shropshire' in t for t in b.triggers))

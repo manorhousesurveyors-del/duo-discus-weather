@@ -124,9 +124,10 @@ shared 60-second cooldown. Caches/limiters are per process; dashboard sessions
 and runners behind one IP can share the upstream quota without sharing the
 limiter. Lower `DUO_OPEN_METEO_CALLS_PER_MINUTE` when necessary.
 
-The default watchdog costs roughly 990 weighted calls/run, around 4,000/day,
+The expanded watchdog costs roughly 1,200 weighted calls/run, around 4,800/day,
 before retries/dashboard usage. Consult [Open-Meteo pricing](https://open-meteo.com/en/pricing)
-for the free tier's usage/license terms. Retain the 0.5° grid unless budget and
+for the free tier's usage/license terms. The 195-node wind display adds about
+566 weighted calls per cold model request and uses a 15-minute cache. Retain the 0.5° convergence grid unless budget and
 provider plan support more points.
 
 Weather HTTPS hosts: `api.open-meteo.com`, `aviationweather.gov`.
@@ -153,3 +154,11 @@ Snapshots are labelled and never silently substituted after an outage.
 Cloud setup saves install/start instructions and domains in the configuration
 draft. Review/save in environment settings and publish to apply it. GitHub
 schedule activation and secret provisioning are separate deployment steps.
+
+
+Airfield source snapshots additionally use `raw.githubusercontent.com` and the
+NOAA station cache. Runtime airfield reports use the existing Open-Meteo/NOAA
+hosts. Candidate UK airspace sources `asselect.uk` and `www.j3j4.org` were added
+to the saved cloud network draft during this upgrade; the draft requires user
+publication before they can be fetched. No current UK boundary file was verified
+or bundled. Manual current OpenAir/GeoJSON upload enables geometry checks.

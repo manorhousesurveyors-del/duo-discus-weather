@@ -20,15 +20,15 @@ class WindMapTests(unittest.TestCase):
         surface=wind_vector(p,0)
         self.assertAlmostEqual(surface[0],10);self.assertAlmostEqual(surface[1],0)
         v=wind_vector(p,800)
-        self.assertTrue(v[2]);self.assertAlmostEqual(v[0],10)
-        self.assertIsNone(wind_vector(p,400))
+        self.assertFalse(v[2]);self.assertAlmostEqual(v[0],10)
+        self.assertIsNone(wind_vector(p,250))
 
     def test_missing_and_below_terrain_pressure_levels_stay_missing(self):
         p=Profile.from_forecast(forecast(changes={'wind_speed_10m':None,'geopotential_height_950hPa':50}),NOW)
         self.assertIsNone(wind_vector(p,0))
         # Interpolation is permitted only when neighbouring atmospheric levels bracket it.
         self.assertTrue(wind_vector(p,950)[2])
-        p=Profile.from_forecast(forecast(changes={'geopotential_height_500hPa':50}),NOW)
+        p=Profile.from_forecast(forecast(changes={'geopotential_height_500hPa':50,'wind_speed_400hPa':None,'wind_speed_300hPa':None}),NOW)
         self.assertIsNone(wind_vector(p,500))
 
     def test_five_day_hourly_axis_has_no_dst_duplicates_and_short_horizon_is_null(self):
@@ -44,7 +44,7 @@ class WindMapTests(unittest.TestCase):
 
     def test_national_land_samples_cover_scotland_wales_and_northern_ireland(self):
         points=national_grid()
-        self.assertLess(len(points),100);self.assertGreater(max(p.latitude for p in points),58)
+        self.assertEqual(len(points),195);self.assertGreater(max(p.latitude for p in points),58)
         self.assertTrue(any(54<p.latitude<56 and p.longitude<-5.5 for p in points))
 
     def test_layer_control_is_collapsed_and_js_payload_escapes_html(self):

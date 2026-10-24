@@ -287,6 +287,7 @@ def _expected_units(variable: str) -> set[str]:
         "shortwave_radiation": {"W/m²"}, "direct_radiation": {"W/m²"}, "cape": {"J/kg"},
         "lifted_index": {"K", "°C"}, "boundary_layer_height": {"m"},
         "soil_moisture_0_to_7cm": {"m³/m³"},
+        "visibility": {"m"},
     }.get(variable, {"m"} if variable.startswith("geopotential_height_") else set())
 
 

@@ -35,7 +35,7 @@ class DashboardTests(unittest.TestCase):
         for value in ('tile.openstreetmap.org','a.tile.opentopomap.org','cdn.jsdelivr.net',
                       'Thermal strength','Potential cloud base'):
             self.assertIn(value,document)
-        self.assertEqual(len(waves),12)
+        self.assertEqual(len(waves),14)
         self.assertNotIn('Active task',document)
         self.assertNotIn('Duo Discus task templates',document)
         self.assertNotIn('rawcdn.githack.com',document)

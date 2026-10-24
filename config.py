@@ -124,6 +124,8 @@ def _ridge(key: str, name: str, summit: str, lat: float, lon: float,
 WAVE_RIDGES: Mapping[str, WaveRidge] = MappingProxyType({
     "long_mynd": _ridge("long_mynd", "Long Mynd", "Pole Bank", 52.5185, -2.8805, 516, 280),
     "snowdonia": _ridge("snowdonia", "Snowdonia", "Yr Wyddfa", 53.0685, -4.0763, 1085, 250),
+    "denbigh": _ridge("denbigh", "Denbigh / Lleweni Parc · Vale of Clwyd", "Moel Famau / Clwydians", 53.154, -3.257, 555, 270),
+    "cambrian": _ridge("cambrian", "Mid Wales / Cambrian Mountains", "Plynlimon", 52.468, -3.783, 752, 270),
     "berwyn": _ridge("berwyn", "Berwyn Range", "Cadair Berwyn", 52.8806, -3.3807, 832, 240),
     "black_mountains": _ridge("black_mountains", "Black Mountains", "Waun Fach", 51.9620, -3.1431, 811, 310),
     "malvern": _ridge("malvern", "Malvern Hills", "Worcestershire Beacon", 52.1044, -2.3394, 425, 270),
@@ -198,8 +200,9 @@ SURFACE_VARIABLES = (
     "precipitation", "precipitation_probability", "shortwave_radiation",
     "direct_radiation", "cape", "lifted_index", "boundary_layer_height",
     "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m", "soil_moisture_0_to_7cm",
+    "wind_speed_80m", "wind_direction_80m", "wind_speed_100m", "wind_direction_100m", "visibility",
 )
-PRESSURE_LEVELS_HPA = (1000, 950, 925, 850, 700, 600, 500)
+PRESSURE_LEVELS_HPA = (1000, 950, 925, 850, 800, 700, 600, 500, 400, 300)
 PRESSURE_VARIABLES = (
     "temperature", "relative_humidity", "wind_speed", "wind_direction",
     "geopotential_height", "vertical_velocity",

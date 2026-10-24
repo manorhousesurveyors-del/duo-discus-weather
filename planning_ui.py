@@ -128,9 +128,11 @@ def task_builder(catalog,day,*,location):
 
 
 @st.cache_data(ttl=900,show_spinner=False)
-def fetch_map_grid(model_key,refresh_bucket):
-    from map_weather import national_grid
-    return OpenMeteoClient().fetch_batched(national_grid(),(FORECAST_MODELS[model_key],))
+def fetch_map_grid(model_key,refresh_bucket,kind='soaring'):
+    from map_weather import national_grid,soaring_grid,WIND_VARIABLES
+    from config import HOURLY_VARIABLES
+    return OpenMeteoClient().fetch_batched(national_grid() if kind=='wind' else soaring_grid(),
+        (FORECAST_MODELS[model_key],),variables=WIND_VARIABLES if kind=='wind' else HOURLY_VARIABLES,batch_size=20)
 
 
 @st.cache_data(ttl=900,show_spinner=False)
@@ -204,17 +206,39 @@ def task_result(points,assessment,*,key='map'):
         for note in assessment.warnings: st.caption(note)
 
 
-def process_map_event(interaction,catalog,day,mode):
+def process_map_event(interaction,catalog,day,mode,*,event_key='last_map_event',visual_override=None):
     """Called before sidebar widgets rerender; old map payloads cannot re-add points."""
-    previous=st.session_state.get('last_map_event',{})
-    st.session_state['last_map_event']=interaction.copy()
+    previous=st.session_state.get(event_key,{})
+    st.session_state[event_key]=interaction.copy()
+    visual=visual_override or st.session_state.get('visual_mode')
     point=None; coordinate=None
-    tags=interaction.get('selected_tags') or []
+    tags=list(interaction.get('selected_tags') or [])
+    clicked=interaction.get('last_object_clicked') or {}
+    if clicked.get('duo') and clicked!=previous.get('last_object_clicked'):
+        command=clicked['duo'];kind=command.get('kind');value=command.get('value','')
+        if kind=='airfield_report':
+            from uk_airfields import airfield_by_id
+            if airfield_by_id(value):st.session_state['airfield_popup:'+event_key]=value
+            return
+        st.session_state.pop('airfield_popup:'+event_key,None)
+        if kind=='thermals':
+            layers=[layer for layer in st.session_state.get('map_layers',[]) if layer!='Thermals']
+            if value=='on':layers.append('Thermals')
+            st.session_state['map_layers']=layers
+            return
+        tags.append(f'duo:{kind}:{value}:{command.get("nonce","")}')
+        if kind=='airfield':
+            from uk_airfields import airfield_by_id
+            airfield=airfield_by_id(value)
+            if airfield:
+                st.session_state['selected_airfield']=airfield.ident
+                st.session_state['airfield_popup:'+event_key]=airfield.ident
+                point=airfield.turnpoint;coordinate=(point.latitude,point.longitude)
     fresh=[str(tag) for tag in tags if tag not in (previous.get('selected_tags') or [])]
     from map_modes import MODES
     from route_tools import complete_task
     for tag in fresh:
-        if tag.startswith('duo:radar:') and st.session_state.get('visual_mode')=='radar':
+        if tag.startswith('duo:radar:') and visual=='radar':
             try:
                 fields=tag.split(':')
                 selected=GeoPoint('radar-click','Radar click',float(fields[2]),float(fields[3]))
@@ -265,11 +289,10 @@ def process_map_event(interaction,catalog,day,mode):
         if thermal.endswith(':on') and 'Thermals' not in layers: layers.append('Thermals')
         if thermal.endswith(':off'): layers=[layer for layer in layers if layer!='Thermals']
         st.session_state['map_layers']=layers
-    visual=st.session_state.get('visual_mode')
     if coordinate and visual=='radar':
         st.session_state['radar_coordinate']=coordinate
         return
-    if coordinate and visual in ('wind','thermal','pfd','xc','stf'):
+    if coordinate and visual in ('wind','thermal','pfd','xc','stf','wave'):
         return  # These modes handle point flags inside the map without a weather fetch/rerender.
     if coordinate:
         st.session_state['inspector_coordinate']=coordinate

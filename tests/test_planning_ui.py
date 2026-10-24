@@ -17,8 +17,8 @@ from tests.test_task_planning import A, B, DAY, TASK
 
 class PlanningUiTests(unittest.TestCase):
     def test_all_controls_metrics_and_map_markers_have_hover_help(self):
-        controls={'selectbox','multiselect','slider','radio','toggle','text_input','button','download_button','file_uploader','metric'}
-        for path in ('app.py','planning_ui.py','route_tools.py','help_guide.py'):
+        controls={'selectbox','multiselect','slider','radio','toggle','text_input','button','download_button','file_uploader','metric','checkbox'}
+        for path in ('app.py','planning_ui.py','route_tools.py','help_guide.py','route_analysis.py'):
             tree=ast.parse(Path(path).read_text())
             for node in ast.walk(tree):
                 if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute):

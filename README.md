@@ -15,7 +15,7 @@ python3 -m venv .venv
 .venv/bin/python -m streamlit run app.py
 ```
 
-The dashboard provides nine regional forecasts, twelve wave sites, thermal and
+The dashboard provides nine regional forecasts, fourteen wave sites, thermal and
 cloud-base maps, convergence ribbons, custom BGA tasks, observed radar, METAR/TAF
 popups, and a map-click sounding/meteogram inspector. Choose model, day, local
 hour, wing loading and layers in the sidebar. Times follow **Europe/London**,
@@ -68,13 +68,38 @@ at 06:00 UTC on 1 January, April, July and October and commits validated catalog
 changes to main. See [task planning and data provenance](docs/task-planning.md)
 for source attribution, supported formats, assessment limits and operating details.
 
+## UK wind, airfields and route analysis
+
+Wind uses a complete **195-node rectangular grid** from 49.8–59°N and
+8.5°W–2°E, including coastal water. Bilinear canvas interpolation removes the
+old distance-cutoff holes. All six wind altitude frames are cached together;
+wind/wave altitude changes, panning and zooming stay in the browser.
+Initial live downloads still depend on provider latency and quotas.
+
+The **1,098-entry UK airfield layer** includes the named gliding clubs and
+130 distinct NOAA reporting stations. Hover for current model wind and surface
+weather; click for runway information, latest METAR, full TAF and a six-hour
+trend. Missing or old reports are labelled. Airfield status and landing
+permission require an operator check.
+
+**Task planner** has its own BGA/airfield map, CUP/TSK task import and an
+**Analyse Task & Route Weather** button. Analysis adds hourly leg conditions,
+STF/XC speeds, sampled terrain margins, coastal/rain warnings and candidate
+energy lines. Upload current OpenAir/GeoJSON boundaries to enable airspace
+intersection checks; without them, that check remains **UNASSESSED**.
+
+**Wave watch** includes Denbigh/Lleweni Parc and the Cambrian Mountains, with
+six altitude buttons from 3,000 to 25,000 ft. Model ascent colours and three
+Scorer-based lee-wave guides are indicative, not resolved wave crests.
+See [map and analysis methods](docs/map-upgrades.md) for coverage and limits.
+
 ## Evaluate without sending
 
 ```bash
 .venv/bin/python alerts.py --dry-run
 ```
 
-This retrieves three models for 21 sites and ICON/ECMWF for a 216-point
+This retrieves three models for 23 sites and ICON/ECMWF for a 216-point
 England/Wales grid, then saves HTML/JSON briefings and a reusable weather bundle
 under `var/briefings/`. It evaluates +48 and +120 hours at the enclosing UTC
 forecast hour. Reuse recorded data without another API request:
@@ -113,8 +138,8 @@ MacCready route capacity, stability/Scorer wave scores and spherical wind
 convergence. See [physics methods](docs/physics.md) for equations and thresholds.
 
 The APIs do not provide every requested field. Missing values remain unavailable;
-900/950 hPa interpolation is explicit and stays inside available pressure
-levels. Boundary-layer height and heat flux can be estimates, and wave/front
+Missing pressure winds are log-interpolated within supported levels. Near-terrain
+wind buttons show a labelled surface fallback, never underground wind. Boundary-layer height and heat flux can be estimates, and wave/front
 classifications are heuristic. The legacy watchdog routes use endpoint weather; custom tasks sample the
 corridor every ≤35 km and integrate hourly climb/glide progress. These are planning aids, not validated predictions
 of climb, wave crests or a terrain/airspace-cleared flight plan.

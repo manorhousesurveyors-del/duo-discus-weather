@@ -14,16 +14,19 @@ particular screenshot has not been established.
 
 ## Wind
 
-Wind mode fetches a paced, cached 40-point UK land grid plus the existing regional,
-ridge and active-task forecasts. National samples are about 85 km apart; the
-interpolated display is not a higher-resolution forecast. Blue/green through
-yellow/red/magenta shows speed in knots. White canvas particles follow the wind
-towards its destination. The animation honours reduced-motion preferences.
+Wind mode fetches a paced, cached **13 × 15 regular grid (195 nodes)** covering
+49.8–59°N and −8.5–2°E, including sea points. Bilinear interpolation uses the
+four enclosing nodes with no distance-cutoff mask. This display grid does not
+increase the source model's resolution. Blue/green through yellow/red/magenta
+shows speed in knots. White canvas particles follow the wind towards its
+destination. The animation honours reduced-motion preferences.
 
 The six-level bar selects surface 10 m, 950, 850, 800, 700 or 500 hPa. Pressure
 heights are approximate standard-atmosphere labels, not terrain clearance.
-Missing pressure levels use vector/log-pressure interpolation only when
-bracketed by above-terrain levels. Levels below terrain stay unavailable.
+Missing winds use log-pressure interpolation of **u/v vectors**, with available
+10/80/100 m and pressure levels. Pressure buttons at or below the lowest near-surface sample show a clearly
+labelled **surface fallback**. Missing support or hours beyond model coverage
+remain unavailable. They are never filled with fabricated upper-air wind.
 
 The wind timeline has 120 hourly instants beginning at the current local day's
 midnight. UTC increments preserve the repeated autumn hour. The wind timeline
@@ -31,6 +34,11 @@ is independent of the sidebar's task/sounding hour; its own label is authoritati
 Shorter model coverage remains blank. Point flags show spatially interpolated
 model wind, an expandable six-level profile and a five-day timeline. They are
 not station observations at the clicked location.
+
+All maps return only click objects to Streamlit. Pan/zoom changes are saved
+locally, and cached wind frames/contours are reused across click reruns. The
+dedicated planner, airfield layer and wave map are described in
+[map upgrades](map-upgrades.md).
 
 ## Soaring contours
 

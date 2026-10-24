@@ -18,8 +18,8 @@ def forecast(point=None, *, start=NOW, hours=None, model='ecmwf_ifs025', changes
                   shortwave_radiation=1100., soil_moisture_0_to_7cm=.05,
                   cloud_cover_low=20., wind_speed_10m=10., wind_direction_10m=270.,
                   precipitation=0.)
-    heights = (110, 530, 760, 1450, 3000, 4200, 5600)
-    temperatures = (27, 23, 21, 16, 9, -2, -15)
+    heights = (110, 530, 760, 1450, 2000, 3000, 4200, 5600, 7200, 9200)
+    temperatures = (27, 23, 21, 16, 13.5, 9, -2, -15, -26, -40)
     for p, height, t in zip(PRESSURE_LEVELS_HPA, heights, temperatures):
         values.update({f'temperature_{p}hPa':t, f'geopotential_height_{p}hPa':height,
                        f'relative_humidity_{p}hPa':70., f'wind_speed_{p}hPa':10.,
@@ -30,7 +30,7 @@ def forecast(point=None, *, start=NOW, hours=None, model='ecmwf_ifs025', changes
         if name.startswith(('temperature','dew_point')): unit='°C'
         elif name.startswith(('wind_speed','wind_gusts','vertical_velocity')): unit='m/s'
         elif name.startswith('wind_direction'): unit='°'
-        elif name.startswith(('geopotential_height','boundary_layer')): unit='m'
+        elif name.startswith(('geopotential_height','boundary_layer')) or name=='visibility': unit='m'
         elif name.startswith(('cloud_cover','relative_humidity','precipitation_probability')): unit='%'
         elif name in ('surface_pressure','pressure_msl'): unit='hPa'
         elif name.endswith('radiation'): unit='W/m²'

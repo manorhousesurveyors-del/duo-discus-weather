@@ -13,18 +13,18 @@ from config import (
 class ConfigurationTests(unittest.TestCase):
     def test_specification_locations_routes_and_stations(self):
         self.assertEqual(len(MONITORING_ZONES), 9)
-        self.assertEqual(len(WAVE_RIDGES), 12)
+        self.assertEqual(len(WAVE_RIDGES), 14)
         self.assertEqual(len(set(ICAO_STATIONS)), 15)
         self.assertEqual((MONITORING_ZONES['shropshire'].latitude,
                           MONITORING_ZONES['shropshire'].longitude), (52.518, -2.88))
         self.assertEqual(len(ROUTES['A'].legs), 3)
         self.assertEqual(ROUTES['A'].waypoints[0], ROUTES['A'].waypoints[-1])
         self.assertEqual(len(ROUTES['B'].legs), 1)
-        self.assertEqual(len(forecast_locations()), 21)
-        self.assertEqual(len({p.key for p in forecast_locations()}), 21)
+        self.assertEqual(len(forecast_locations()), 23)
+        self.assertEqual(len({p.key for p in forecast_locations()}), 23)
 
     def test_ridge_azimuths_and_provenance(self):
-        expected = [280, 250, 240, 310, 270, 260, 250, 240, 250, 260, 230, 270]
+        expected = [280, 250, 270, 270, 240, 310, 270, 260, 250, 240, 250, 260, 230, 270]
         self.assertEqual([r.perpendicular_wind_azimuths_deg[0] for r in WAVE_RIDGES.values()], expected)
         for ridge in WAVE_RIDGES.values():
             self.assertFalse(ridge.survey_verified)

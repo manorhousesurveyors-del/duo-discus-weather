@@ -312,3 +312,71 @@ occurred in the successful check. HTTPS certificate verification remained enable
 Both workflows and `DeliverySettings.from_env` were checked against the secret
 table in `docs/operations.md`: Gmail/CallMeBot use `GMAIL_APP_PASSWORD` and
 `CALLMEBOT_API_KEY`; the two Twilio secrets apply only to that optional provider.
+
+
+## UK wind, airfields, task analysis and wave maps — 24 October 2026
+
+The complete offline suite passes **170 tests**, none skipped. New coverage
+includes regular coastal grid geometry, missing 950/800 hPa vector interpolation,
+below-terrain and ground-to-10 m fallback, six-level grid coverage, the two-click-
+object component contract, full generated JavaScript syntax, named airfields,
+map event identity/deduplication, CUP/TSK task import, OpenAir circles/arcs and
+corridor crossings, missing DEM samples, candidate path rain rejection, hourly
+AGL data and all six wave altitudes. Existing task-sheet/export, radar and alert
+checks remain included. Python compilation, four JavaScript syntax checks,
+`pip check` and `git diff --check` pass.
+
+### Live weather and airfield checks
+
+A cold ECMWF wind request retrieved all **195 regular-grid nodes**, with zero
+request failures, in **105.62 seconds**. All six altitude levels have 195/195
+supported values for every one of the **110 available forecast hours** checked,
+from 24 October 10:00 BST through 28 October 22:00 GMT. Earlier hours preceding
+the returned model data remain unavailable. The current-hour check used four
+explicitly labelled surface fallbacks at 950 hPa. A later-hour sweep exposed a
+small ground-to-10 m interpolation gap; the regression test and near-terrain
+surface fallback now cover it. Separate live UKV checks at Mid Wales, Newtown
+and Hereford returned all six levels, with zero failures.
+
+NOAA requests covered **130 unique ICAO codes**, returning **88 METARs** and
+**82 TAFs**, with zero request/parser failures. Capability does not guarantee
+a current report; some returned TAFs were expired and are marked accordingly.
+Browser checks at Long Mynd, Heathrow and Lleweni Parc loaded actual current
+Open-Meteo surface estimates and all six trend rows, together with raw NOAA
+METAR/full TAF text. Nearby station distances and expired TAF labels were
+verified. Missing runway/elevation metadata remains unavailable.
+
+### Browser interaction and timing
+
+Headless Chromium tested the full Streamlit application with a deterministic
+synthetic five-day bundle. This is UI evidence, not validation of a real flight.
+The map rendered all 1,098 airfield markers; wind flags returned values at Mid
+Wales, the Welsh Coast, Shrewsbury, Newtown, Ludlow and Hereford. Wind altitude
+button operations took **57–91 ms** in that run, and the pan/zoom JavaScript
+operation took **16 ms**. Both generated **zero WebSocket updates** to Streamlit.
+These local measurements do not promise instant cold network fetches.
+
+The dedicated planner built **MYN → BIE → MYN** using physical BGA-marker clicks
+and Return home. Analysis displayed the verdict, hourly conditions, hazard
+assessment and **two candidate energy lines**. All six wave-altitude buttons
+switched in **49–109 ms**, also with zero Streamlit WebSocket updates. The
+successful combined run had zero JavaScript exceptions, Streamlit exceptions
+or failed asset requests. A separate live airfield browser check likewise had
+zero script exceptions or failed assets. Public HTTPS assets were fetched via
+the environment's certificate-verifying Python proxy client; TLS checks stayed on.
+
+Time-specific evidence is retained locally under ignored `var/`:
+`upgrade-browser-results.json`, `wind-grid-live-results.json`,
+`wind-grid-all-hours.json`, `ukv-wind-live-results.json`,
+`airfield-browser-results.json` and `map-upgrades-final-tests.log`.
+
+### Remaining data boundary
+
+The environment proxy blocked the current UK airspace source sites.
+`asselect.uk` and `www.j3j4.org` were added to a confirmed saved network draft,
+which requires publication. No current national airspace boundary file was
+retrieved/verified or bundled. The tested OpenAir/GeoJSON importer and corridor
+intersection engine work with supplied geometry; without it the application
+reports airspace as **UNASSESSED**, with major-airfield proximity listed
+separately. Wave bars remain Scorer-scale guides, and terrain sampling cannot
+establish flight clearance. No live notification was sent.

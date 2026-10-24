@@ -32,7 +32,7 @@ class PhysicsTests(unittest.TestCase):
         level=p.level(900)
         self.assertTrue(level.interpolated)
         self.assertLess(angular_difference(wind_direction(level.u_mps,level.v_mps),0),10)
-        self.assertIsNone(p.level(400))
+        self.assertIsNone(p.level(250))
         self.assertEqual(wind_components(10,270)[0],10)
 
     def test_subterrain_and_inverted_pressure_order_excluded_or_rejected(self):
@@ -68,11 +68,11 @@ class PhysicsTests(unittest.TestCase):
         self.assertEqual(evaluate_thermals(self.profile(direct_radiation=0)).net_climb_knots,-1.6)
 
     def test_overdevelopment_and_cloud_street_thresholds(self):
-        t=evaluate_thermals(self.profile(relative_humidity_700hPa=86,cloud_cover_low=61))
+        t=evaluate_thermals(self.profile(relative_humidity_800hPa=86,cloud_cover_low=61))
         self.assertTrue(t.overdevelopment)
         self.assertTrue(t.cloud_streets)
         self.assertFalse(evaluate_thermals(self.profile(wind_direction_10m=240)).cloud_streets)
-        self.assertFalse(evaluate_thermals(self.profile(relative_humidity_700hPa=85,cloud_cover_low=61)).overdevelopment)
+        self.assertFalse(evaluate_thermals(self.profile(relative_humidity_800hPa=85,cloud_cover_low=61)).overdevelopment)
 
     def test_wave_missing_motion_and_failed_core_cannot_alert(self):
         ridge=WAVE_RIDGES['malvern']
