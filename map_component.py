@@ -58,5 +58,27 @@ def compressed_document(view):
             'compressed_document':base64.b64encode(zlib.compress(raw,6)).decode()}
 
 
-def render_map(view,*,key,on_change=None,**_):
-    return render_document(compressed_document(view),key=key,on_change=on_change)
+def document_version(forecasts,when,*options):
+    from app_cache import forecast_run_id,file_version
+    # Session-specific task content is included by callers. File versions also
+    # invalidate an existing browser session after a deployment or data import.
+    root=Path(__file__).parent
+    versions=file_version([*root.glob('*.py'),*root.glob('assets/*.js'),
+                           *root.glob('data/*.json'),root/'map_component/index.html'])
+    return (forecast_run_id(forecasts),when.isoformat(),versions,options)
+
+
+def cached_document(key, version, build):
+    """Reuse finished per-session documents without rebuilding Folium objects."""
+    cache=st.session_state.setdefault('_map_documents',{})
+    lookup=(key,version)
+    if lookup not in cache:
+        if len(cache)>=12:cache.pop(next(iter(cache)))
+        cache[lookup]=compressed_document(build())
+    return cache[lookup]
+
+
+def render_map(view,*,key,on_change=None,document_key=None,**_):
+    document=(cached_document(key,document_key,view) if callable(view)
+              else compressed_document(view))
+    return render_document(document,key=key,on_change=on_change)

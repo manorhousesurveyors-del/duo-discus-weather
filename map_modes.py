@@ -27,9 +27,9 @@ def map_products(forecasts,when,anchor,loading,mode):
     return cache[key]
 
 
-def add_map_modes(map_view,forecasts,when,anchor,loading,*,mode='clean',radar=None,task=(),rate_grid=None,radar_point=None,hide_menu=False):
+def add_map_modes(map_view,forecasts,when,anchor,loading,*,mode='clean',radar=None,task=(),rate_grid=None,radar_point=None,hide_menu=False,wind_product=None):
     if mode not in MODES: mode='clean'
-    samples,contours,wind=map_products(forecasts,when,anchor,loading,mode)
+    samples,contours,wind=([],{'type':'FeatureCollection','features':[]},wind_product) if mode=='wind' and wind_product is not None else map_products(forecasts,when,anchor,loading,mode)
     payload={'mode':mode,'modes':MODES,'when':when.isoformat(),'wind':wind,'samples':samples,
              'contours':contours,'bands':BANDS.get(mode),'radar':radar,'points':len(task),
              'date':when.date().isoformat(),'loading':loading,'rate_grid':rate_grid,'radar_point':radar_point,'hide_menu':hide_menu}

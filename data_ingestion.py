@@ -254,10 +254,10 @@ class Forecast:
     def at(self, valid_at: datetime) -> dict[str, float | None]:
         """Exact UTC instant only; never extrapolate or choose a nearby hour."""
         valid_at = utc_datetime(valid_at)
-        try:
-            index = self.times.index(valid_at)
-        except ValueError as exc:
-            raise KeyError(f"Forecast has no sample for {valid_at.isoformat()}") from exc
+        offset = (valid_at - self.times[0]).total_seconds() if self.times else -1
+        index = int(offset // 3600)
+        if offset % 3600 or not 0 <= index < len(self.times) or self.times[index] != valid_at:
+            raise KeyError(f"Forecast has no sample for {valid_at.isoformat()}")
         return {name: values[index] for name, values in self.hourly.items()}
 
     @property

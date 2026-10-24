@@ -711,3 +711,64 @@ Wave, traffic fallback and Help pages opened without a Python exception or
 JavaScript error. Current modules were not reloaded again after recovery, and
 OGN's worker object was preserved. These are local deployment simulations;
 Streamlit Cloud's hosted process was not accessed directly.
+
+
+## UK grid / single-page rendering fix · 24 October 2026
+
+**247 tests passed in 34.1 seconds.** This includes the missing-grid fallback,
+hot-reload API checks and refreshing the compatibility registry itself in an
+already-running process. Dependency, compilation and whitespace checks passed.
+No notifications were sent.
+
+The old spinner was in `app._main`, around `load_map_forecasts` →
+`planning_ui.fetch_map_grid` → `OpenMeteoClient.fetch_batched`. It already excluded
+day/hour from its cache key and sat inside the Weather guard. Its transport
+nevertheless applied weighted request pacing, 20-second timeouts and up to three
+attempts. The spinner also surrounded cache hits. Shared summaries were rendered
+before the final page branches, and Streamlit could retain an old page body while
+waiting for synchronous work. No `st.tabs` wrapper remained in the starting code.
+
+The replacement has a cycle-only shared resource, a session reference to it,
+lazy model-separated Futures, twelve concurrent chunks, 120 forecast hours,
+3.5-second request timeouts and zero retry sleeps. Failed chunks stay unavailable
+for that cycle. All seven pages now return through exclusive branches; the body
+is cleared before rendering. The Task optimiser cannot initiate a national grid.
+
+`tests/test_grid_navigation.py` verifies all of the following:
+
+- A deliberately blocked provider starts twelve concurrent requests and returns
+  control in under 300 ms. Repeated calls reuse its Future; failures do not retry.
+- Rate limiting and timeout make one request each and never sleep.
+- Both cached resources and all 120 exact hour views retain identity across
+  day/hour changes; NumPy view selection is under 5 ms without copying data.
+- A pending grid cannot block Help. All six non-Weather pages avoid the loader,
+  including Task optimisation. Models and cycles remain separate.
+- Real, warmed Streamlit pages (no mocked maps/physics) switch in under 300 ms;
+  no national-grid spinner is displayed and no duplicate page headings/cards
+  remain. Full-suite measured wall-clock times were:
+
+| Page | Warm AppTest execution |
+| --- | ---: |
+| Weather map | 83.7 ms |
+| Task planner | 61.0 ms |
+| Help Guide | 50.6 ms |
+| Wave watch | 78.7 ms |
+| Live OGN Glider Radar | 52.4 ms |
+| Help & Briefing Bot | 51.3 ms |
+| Data quality | 61.5 ms |
+
+Chromium `scripts/verify_lazy_pages.py` checks all seven pages, exclusive Task/Wave
+headings, exactly one iframe on map pages and zero on text pages, task additions
+and clearing across maps, fragment-only saves, local briefing and altitude
+switching. No JavaScript errors occurred. Latest warm browser readiness ranged
+from 256 ms for Help to 873 ms for Wave; these include iframe loading and browser
+layout, and are **not** the under-300-ms server measurement. A first uncached Wave
+build in the earlier fresh-server run took 5.58 seconds. Cold Task/Wave physics and
+new map document construction can still take several seconds.
+
+A live verified HTTPS sample at Long Mynd returned 144 timestamps (120 future
+plus 24 past) in 1.027 seconds using the new transport. This checks the API schema
+and transport, not national throughput. The full UK grid's completion time still
+depends on provider transfer/rate limits and worker processing; no unconditional
+under-two-second cold-network guarantee is claimed. Its wait no longer blocks the
+Streamlit page. Tests use deterministic transport, never a live quota dependency.

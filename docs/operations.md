@@ -193,9 +193,13 @@ limiter. Lower `DUO_OPEN_METEO_CALLS_PER_MINUTE` when necessary.
 
 The expanded watchdog costs roughly 1,200 weighted calls/run, around 4,800/day,
 before retries/dashboard usage. Consult [Open-Meteo pricing](https://open-meteo.com/en/pricing)
-for the free tier's usage/license terms. The 195-node wind display adds about
-566 weighted calls per cold model request and uses a 15-minute cache. Retain the 0.5° convergence grid unless budget and
-provider plan support more points.
+for the free tier's usage/license terms. The unified 195-node, 84-variable UK map
+bundle costs about 1,638 weighted calls per cold model/cycle. Its cache is shared
+across sessions for 30 minutes. The dashboard grid makes one concurrent attempt
+per chunk; a 429 stays missing until the next cycle, with no retry sleep. This
+can exceed a free provider's minute quota; the app remains usable while missing
+coverage is labelled. Retain the 0.5° convergence grid unless budget and provider
+plan support more points.
 
 Weather HTTPS hosts: `api.open-meteo.com`, `aviationweather.gov`.
 Map HTTPS hosts: `api.rainviewer.com`, `tilecache.rainviewer.com`,
@@ -297,3 +301,40 @@ modules are left alone, and unused modules are not eagerly imported. OGN is
 excluded from automatic reloads because it owns a background worker. Required
 core APIs are validated after reloading; a genuinely incomplete checkout is not
 silently treated as a working forecast engine.
+
+
+## National grid and page navigation · 24 October 2026
+
+`uk_map_grid.load_uk_map_grid` is a shared resource keyed only by the UTC
+30-minute forecast-cycle bucket. `st.session_state["uk_map_grid_bundle"]` holds
+that same resource. Each model has a separate, lazy Future inside the bundle;
+changing model never relabels another model's forecast. Day, hour, active page,
+wing loading and task edits cannot start a second fetch within the same cycle.
+A new cycle or explicit Refresh starts new work when Weather needs it.
+
+Each cold grid uses twelve concurrent multi-coordinate requests covering 195
+points, 120 forecast hours and 24 past hours. Each request has a 3.5-second socket
+timeout, one attempt and no pacing/retry sleeps. Wind frames and the read-only
+hour-indexed NumPy cube are prepared by the worker. This is not a guaranteed
+3.5-second total transfer deadline or a promised two-second provider response.
+Regional forecasts also update in the background. Alert/watchdog transports
+retain their existing retry and pacing policy.
+
+Only the Weather page's wind/thermal/PFD/XC/STF modes request the national grid.
+The other six pages return before that branch. Task optimisation may read an
+already completed current-cycle grid; it never starts one. Its explicit corridor
+checks still fetch only the shortlisted routes. The old blocking grid spinner
+and duplicate national loader have been removed. Missing points remain missing;
+when every grid request fails, existing regional wind remains the fallback.
+
+The page body is cleared before rendering its keyed active-page container.
+Weather summaries/cards and the inspector render only on Weather. Task, Wave,
+OGN and text pages have their own exclusive branches. Finished Weather/Task/OGN
+map documents are cached per session, with forecast, hour, task, catalog,
+overlays and source-file versions in their keys. Wave documents use a compact
+catalog digest instead of hashing every turnpoint on each rerun.
+
+Timing regressions in `tests/test_grid_navigation.py` measure real warm AppTest
+page switches (<300 ms), cube hour selection (<5 ms), and no repeated fetch on
+day/hour changes. Cold map construction and browser iframe/tile loading are
+measured separately; neither shares the warm-server timing guarantee.

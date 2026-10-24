@@ -153,7 +153,7 @@ def hourly_details(points,forecasts,assessment):
     return result
 
 
-def planner_panel(catalog,day,when,loading,model_key,bucket,forecasts,points,assessment,aviation,*,map_builder,recorded=False):
+def planner_panel(catalog,day,when,loading,model_key,bucket,forecasts,points,assessment,aviation,*,map_builder,recorded=False,document_cache=True):
     from map_component import render_map as st_folium
     from planning_ui import process_map_event,active_task,set_task,weather_table,fetch_corridor
     from task_import import import_task
@@ -169,27 +169,32 @@ def planner_panel(catalog,day,when,loading,model_key,bucket,forecasts,points,ass
     request_key=(signature(points),day.isoformat(),when.isoformat(),loading,model_key,airspace.get('content_hash') if airspace else None)
     report=st.session_state.get('route_analysis')
     if report and report['key']!=request_key:report=None
-    view,_=map_builder(forecasts,when,layers=[],task=points,turnpoints=catalog.turnpoints,visual_mode='route',
-        map_identity='planner',loading=loading,anchor=when,aviation=aviation,show_airfields=True,live_airfields=not recorded,selected_airfield=st.session_state.get('airfield_popup:last_planner_event'))
-    if airspace:
-        import folium
-        from airspace import display_airspace
-        display=display_airspace(airspace)
-        display={**display,'features':[{**f,'properties':{k:html.escape(v) if isinstance(v,str) else v for k,v in f['properties'].items()}} for f in display['features']]}
-        folium.GeoJson(display,name='Airspace / danger boundaries · simplified display',show=True,
-            style_function=lambda _:dict(color='#b13655',weight=1,fillOpacity=.06),
-            tooltip=folium.GeoJsonTooltip(fields=['name','class','floor','ceiling'],aliases=['Name','Class','Lower limit','Upper limit'])).add_to(view)
-    if report:
-        import folium
-        for line in report['energy']:
-            if line['points']:
-                folium.PolyLine(line['points'],color='#12b596',weight=5,dash_array='8 5',tooltip=folium.Tooltip('Candidate energy line: '+html.escape(line['note']))).add_to(view)
-    # Folium's layer menu references every overlay at render time. It must be
-    # emitted after the planner's extra layers so their JS variables exist.
-    from client_map import reorder_layer_control
-    reorder_layer_control(view)
+    from map_component import document_version
+    version=document_version(forecasts,when,request_key,catalog.content_sha256,bool(recorded),
+        repr(report['energy']) if report else None,st.session_state.get('airfield_popup:last_planner_event'))
+    def planner_document():
+        view,_=map_builder(forecasts,when,layers=[],task=points,turnpoints=catalog.turnpoints,visual_mode='route',
+            map_identity='planner',loading=loading,anchor=when,aviation=aviation,show_airfields=True,live_airfields=not recorded,selected_airfield=st.session_state.get('airfield_popup:last_planner_event'))
+        if airspace:
+            import folium
+            from airspace import display_airspace
+            display=display_airspace(airspace)
+            display={**display,'features':[{**f,'properties':{k:html.escape(v) if isinstance(v,str) else v for k,v in f['properties'].items()}} for f in display['features']]}
+            folium.GeoJson(display,name='Airspace / danger boundaries · simplified display',show=True,
+                style_function=lambda _:dict(color='#b13655',weight=1,fillOpacity=.06),
+                tooltip=folium.GeoJsonTooltip(fields=['name','class','floor','ceiling'],aliases=['Name','Class','Lower limit','Upper limit'])).add_to(view)
+        if report:
+            import folium
+            for line in report['energy']:
+                if line['points']:
+                    folium.PolyLine(line['points'],color='#12b596',weight=5,dash_array='8 5',tooltip=folium.Tooltip('Candidate energy line: '+html.escape(line['note']))).add_to(view)
+        # Folium's layer menu references every overlay at render time. It must be
+        # emitted after the planner's extra layers so their JS variables exist.
+        from client_map import reorder_layer_control
+        reorder_layer_control(view)
+        return view
     def on_click():process_map_event(st.session_state.get('planner_map',{}),catalog,day,'Add to task',event_key='last_planner_event',visual_override='route')
-    interaction=st_folium(view,height=720,use_container_width=True,pixelated=False,key='planner_map',on_change=on_click,wrap_longitude=False,returned_objects=['last_object_clicked','last_clicked'])
+    interaction=st_folium(planner_document if document_cache else planner_document(),document_key=version,height=720,use_container_width=True,pixelated=False,key='planner_map',on_change=on_click,wrap_longitude=False,returned_objects=['last_object_clicked','last_clicked'])
     if interaction and interaction!=st.session_state.get('last_planner_event'):
         old=active_task(day);process_map_event(interaction,catalog,day,'Add to task',event_key='last_planner_event',visual_override='route')
         if active_task(day)!=old:st.rerun()

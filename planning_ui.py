@@ -156,14 +156,6 @@ def task_builder(catalog,day,*,location):
 
 
 @st.cache_data(ttl=1800,show_spinner=False)
-def fetch_map_grid(model_key,refresh_bucket,kind='soaring'):
-    from map_weather import national_grid,soaring_grid,WIND_VARIABLES
-    from config import HOURLY_VARIABLES
-    return OpenMeteoClient().fetch_batched(national_grid() if kind=='wind' else soaring_grid(),
-        (FORECAST_MODELS[model_key],),variables=WIND_VARIABLES if kind=='wind' else HOURLY_VARIABLES,batch_size=20)
-
-
-@st.cache_data(ttl=1800,show_spinner=False)
 def fetch_corridor(points: tuple[GeoPoint, ...], model_key: str, refresh_bucket: int):
     return OpenMeteoClient().fetch_batched(points,(FORECAST_MODELS[model_key],))
 

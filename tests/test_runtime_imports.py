@@ -64,6 +64,22 @@ with patch('runtime_imports.importlib.reload', side_effect=AssertionError('Unnec
                                 text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_app_refreshes_the_compatibility_registry_itself_after_deployment(self):
+        script = """
+import runtime_imports,map_component,map_modes
+runtime_imports.API_REVISION=0
+runtime_imports.LAZY_APIS={}
+del map_component.cached_document
+map_modes.add_map_modes=lambda view:None
+import app
+assert runtime_imports.API_REVISION==2
+assert callable(map_component.cached_document)
+assert runtime_imports._supports(map_modes,{'add_map_modes':('wind_product',)})
+"""
+        result=subprocess.run([sys.executable,'-c',script],cwd=Path(__file__).resolve().parents[1],
+                              text=True,capture_output=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stderr)
+
     def test_every_local_symbol_import_in_audited_modules_exists(self):
         root = Path(__file__).resolve().parents[1]
         for filename in ('app.py', 'briefing_bot.py', 'client_map.py', 'ogn_traffic.py'):

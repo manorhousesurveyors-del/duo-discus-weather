@@ -26,6 +26,8 @@ async def main():
             await expect(page.locator('iframe[title="map_component.duo_map"]')).to_have_count(1 if marker else 0,timeout=30000)
             result['pages'][name]={'ready_ms':round((time.perf_counter()-before)*1000),'iframes':await page.locator('iframe[title="map_component.duo_map"]').count()}
             assert not await page.locator('[data-testid="stException"]').count()
+            await expect(page.get_by_role('heading',name='Task planning map',exact=True)).to_have_count(1 if name=='Task planner' else 0)
+            await expect(page.get_by_role('heading',name='Wave Watch Map',exact=True)).to_have_count(1 if name=='Wave watch' else 0)
         await choose('Task planner','[data-action="clear"]')
         await frame().locator('[data-action="clear"]').click();await page.wait_for_timeout(350)
         await expect(page.get_by_test_id('stApp')).not_to_have_attribute('data-test-script-state','running',timeout=30000)
@@ -72,6 +74,7 @@ async def main():
         await frame().locator('[data-wave-level="3"]').click()
         assert result['pages']['Wave watch']['iframes']==1
         cold_wave=result['pages']['Wave watch']['ready_ms']
+        await choose('Live OGN Glider Radar','[data-ogn="demo"]')
         await choose('Help Guide');assert result['pages']['Help Guide']['iframes']==0
         await choose('Wave watch','[data-wave-level="0"]')
         result['cold_wave_ready_ms']=cold_wave

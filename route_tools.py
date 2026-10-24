@@ -36,8 +36,16 @@ def choose_optimised(candidates,objective):
     return max(eligible,key=score)
 
 
+def screening_forecasts(forecasts,model_key,bucket):
+    # Task planning may reuse a finished Weather grid, but never loads one.
+    bundle=st.session_state.get('uk_map_grid_bundle')
+    snapshot=bundle.completed(model_key) if bundle is not None and bundle.cycle==bucket else None
+    if snapshot is None:return forecasts
+    return tuple({(f.location.key,f.model):f for f in (*forecasts,*snapshot.batch.forecasts)}.values())
+
+
 def optimizer_panel(catalog,day,loading,model_key,bucket,forecasts,*,recorded=False):
-    from planning_ui import active_task,set_task,task_weather,fetch_map_grid
+    from planning_ui import active_task,set_task,task_weather
     points=active_task(day)
     with st.expander('Optimise Route for Fastest Speed / Best Distance',expanded=st.session_state.get('open_optimizer',False)):
         st.caption('Search nearby BGA triangles and out-and-returns. Verify the best three corridors before loading a route.')
@@ -50,10 +58,7 @@ def optimizer_panel(catalog,day,loading,model_key,bucket,forecasts,*,recorded=Fa
         cols[2].metric('Start point',origin_code,help='Use your current task’s start. With no task, the search starts at Long Mynd MYN.')
         if st.button('Optimise Route',key='optimise_route',disabled=origin is None,help='Screen up to 30 routes, check the best three using corridor forecasts, then plot the highest-ranked flyable route. This replaces the current task only when a complete flight is found.'):
             with st.spinner('Searching BGA routes and checking weather along each shortlisted corridor…'):
-                screening=forecasts
-                if not recorded and not any(f.location.key.startswith('map:') for f in forecasts):
-                    grid=fetch_map_grid(model_key,bucket)
-                    screening=(*forecasts,*grid.forecasts)
+                screening=forecasts if recorded else screening_forecasts(forecasts,model_key,bucket)
                 candidates=shortlist_tasks(catalog,origin,target,screening,day,loading,preference=(FORECAST_MODELS[model_key].api_name,))
                 checked=[];errors=[]
                 for task in candidates:
