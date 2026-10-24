@@ -285,3 +285,30 @@ The PDF was also rendered and visually inspected, and text extracted with
 Poppler. Actual instrument hardware/SeeYou application import, a live calibrated
 radar feed, and screenshot-perfect matching were not available for verification.
 See [operation and data limits](map-modes-and-task-sheets.md).
+
+## Radar point precipitation follow-up · 24 October 2026
+
+The full offline suite passes **151 tests**. New cases cover exact coordinate,
+model and hour requests, the preceding-hour accumulation/mean-rate contract,
+zero versus null, missing forecast coverage, invalid units/time series/values,
+cache separation, service failures and recorded-mode isolation. Radar click
+events preserve the clicked coordinates without adding task points or changing
+the sounding inspector. JavaScript syntax and dependency checks pass.
+
+A verified live Open-Meteo lookup at 52.518, -2.880 returned **0.1 mm/h** for the
+hour ending 09:00 BST. Chromium physical clicks near Long Mynd and Talgarth
+then displayed **1.3** and **1.8 mm/h** for the hour ending 13:00 BST. Changing
+the forecast slider to 14:00 refreshed the latter point to **3.1 mm/h**, without
+another map click. The colour-bar pointers followed those numeric values.
+These are dated model outputs, not observed radar measurements or stable test
+fixtures. RainViewer tiles remained visible with their independent observed time.
+
+The browser check also opened the source/period details and verified that the
+flag's horizontal anchor matches its geographic map point within two pixels.
+A ResizeObserver fixes the restored flag's position after late stylesheet/layout
+changes. No JavaScript errors, Streamlit exceptions or failed external assets
+occurred in the successful check. HTTPS certificate verification remained enabled.
+
+Both workflows and `DeliverySettings.from_env` were checked against the secret
+table in `docs/operations.md`: Gmail/CallMeBot use `GMAIL_APP_PASSWORD` and
+`CALLMEBOT_API_KEY`; the two Twilio secrets apply only to that optional provider.

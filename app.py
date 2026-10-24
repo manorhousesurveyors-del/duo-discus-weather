@@ -90,6 +90,26 @@ def load_calibrated_radar(url,refresh_bucket):
     return rate_overlay(load_rate_grid(url))
 
 
+@st.cache_data(ttl=300,max_entries=256,show_spinner=False)
+def load_radar_precipitation(latitude,longitude,when,model_key,refresh_bucket):
+    from precipitation import fetch_point_precipitation
+    return fetch_point_precipitation(latitude,longitude,when,FORECAST_MODELS[model_key])
+
+
+def radar_point_result(coordinate,when,model_key,refresh_bucket,*,recorded=False):
+    """Return a fresh, coordinate-specific result or an explicit missing flag."""
+    latitude,longitude=coordinate
+    result={'latitude':latitude,'longitude':longitude,'rate':None,
+            'valid_at':when.isoformat(),'source':'Open-Meteo',
+            'model':FORECAST_MODELS[model_key].api_name}
+    if recorded:
+        return {**result,'error':'Recorded snapshot: live point queries are disabled.'}
+    try:
+        return load_radar_precipitation(latitude,longitude,when,model_key,refresh_bucket)
+    except (IngestionError,ValueError) as exc:
+        return {**result,'error':f'Point precipitation unavailable: {exc}'}
+
+
 def sounding_figure(profile: Profile) -> go.Figure:
     """Skew-T coordinates: x=T+35 ln(1000/p), log-pressure vertical axis."""
     fig = go.Figure()
@@ -269,7 +289,7 @@ def thermal_overlay_data(samples):
 
 
 def build_map(forecasts, when, *, layers, aviation=None, radar=None, convergence=None,
-              centre=(53.3,-2.6), zoom=6, task=(), turnpoints=(), visual_mode=None, anchor=None, loading="dry", rate_grid=None):
+              centre=(53.3,-2.6), zoom=6, task=(), turnpoints=(), visual_mode=None, anchor=None, loading="dry", rate_grid=None, radar_point=None):
     if visual_mode not in (None,'extras'):
         layers=['BGA turnpoints'] if visual_mode=='route' else []
     map_view=folium.Map(location=centre,zoom_start=zoom,tiles=None,control_scale=True,prefer_canvas=True)
@@ -430,7 +450,7 @@ def build_map(forecasts, when, *, layers, aviation=None, radar=None, convergence
     folium.LayerControl(collapsed=True,position='bottomright').add_to(map_view)
     if visual_mode is not None:
         from map_modes import add_map_modes
-        add_map_modes(map_view,forecasts,when,anchor or when,loading,mode=visual_mode,radar=radar,task=task,rate_grid=rate_grid)
+        add_map_modes(map_view,forecasts,when,anchor or when,loading,mode=visual_mode,radar=radar,task=task,rate_grid=rate_grid,radar_point=radar_point)
     return map_view,rank_wave_sites(waves)
 
 
@@ -523,7 +543,7 @@ def main():
             map_forecasts=tuple({(f.location.key,f.model):f for f in (*combined,*map_batch.forecasts)}.values())
             errors+=tuple(f.message for f in map_batch.failures)
         st.caption('UK map: interpolated land samples about 85 km apart. Visual contours do not increase the model’s native resolution.')
-    aviation=radar=convergence=rate_grid=None
+    aviation=radar=convergence=rate_grid=radar_point=None
     if visual_mode=='extras' and 'METAR' in layers and not recorded: aviation=load_aviation(int(now.timestamp()//60))
     if ((visual_mode=='extras' and 'Radar' in layers) or visual_mode=='radar') and not recorded:
         try: radar=load_radar(int(now.timestamp()//300))
@@ -531,6 +551,10 @@ def main():
     if visual_mode=='radar' and os.environ.get('DUO_RADAR_RATE_GRID_URL') and not recorded:
         try: rate_grid=load_calibrated_radar(os.environ['DUO_RADAR_RATE_GRID_URL'],int(now.timestamp()//300))
         except (IngestionError,ValueError) as exc: st.warning(f'Calibrated radar unavailable: {exc}')
+    if visual_mode=='radar' and st.session_state.get('radar_coordinate'):
+        with st.spinner('Loading Open-Meteo rain estimate at your map point…'):
+            radar_point=radar_point_result(st.session_state['radar_coordinate'],when,model_key,
+                                          int(now.timestamp()//300),recorded=bool(recorded))
     if visual_mode=='extras' and 'Convergence' in layers:
         if recorded: grid_forecasts=tuple(f for f in recorded.grid_forecasts if f.model==FORECAST_MODELS[model_key].api_name)
         else:
@@ -568,7 +592,7 @@ def main():
     map_tab,task_tab,help_tab,wave_tab,bot_tab,quality_tab=st.tabs(['Weather map','Task planner','Help Guide','Wave watch','Help & Briefing Bot','Data quality'])
     with map_tab:
         map_view,waves=build_map(map_forecasts,when,layers=layers,aviation=aviation,radar=radar,convergence=convergence,
-            task=points,turnpoints=catalog.turnpoints,visual_mode=visual_mode,anchor=anchor,loading=loading,rate_grid=rate_grid)
+            task=points,turnpoints=catalog.turnpoints,visual_mode=visual_mode,anchor=anchor,loading=loading,rate_grid=rate_grid,radar_point=radar_point)
         def on_map_change():
             process_map_event(st.session_state.get('soaring_map',{}),catalog,day,st.session_state.get('map_click_mode','Inspect weather'))
         interaction=st_folium(map_view,height=650,use_container_width=True,pixelated=False,key='soaring_map',on_change=on_map_change,
@@ -577,8 +601,9 @@ def main():
         # AppTest and initial component defaults do not invoke the browser callback.
         if interaction and interaction!=st.session_state.get('last_map_event'):
             old=active_task(day)
+            old_radar=st.session_state.get('radar_coordinate')
             process_map_event(interaction,catalog,day,mode)
-            if active_task(day)!=old: st.rerun()
+            if active_task(day)!=old or st.session_state.get('radar_coordinate')!=old_radar: st.rerun()
         st.caption('Open Map modes to choose wind, radar, soaring contours or the route planner. These independent model estimates are inspired by Windy/SkySight; they are not their proprietary forecasts.')
         if visual_mode=='route':
             task_result(points,assessment)

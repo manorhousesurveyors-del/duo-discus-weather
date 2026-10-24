@@ -55,8 +55,11 @@ bot. Completing a route opens its **BGA / SeeYou Task Sheet**, with PDF, Word,
 CUP/TSK downloads and direct HTTP links/QR codes. The route optimiser checks
 200/300/500 km or custom-distance BGA candidates before loading a complete flight.
 See [map modes, radar limits and task-sheet operation](docs/map-modes-and-task-sheets.md).
-The public RainViewer feed is image-only, native zoom 7; calibrated mm/h and
-higher-resolution radar require a separate provider feed. These are independent
+Radar clicks show Open-Meteo's hourly mean precipitation in **mm/h** for the
+selected coordinate, model and forecast hour, with a marker on the colour bar.
+These estimates are separate from RainViewer's observed image tiles (native
+zoom 7); calibrated observed rates and higher-resolution radar require a
+separate provider feed. These are independent
 Windy/SkySight-inspired displays, not those services' proprietary products.
 
 Data quality supports CUP/CSV/JSON uploads and a manual BGA update check.

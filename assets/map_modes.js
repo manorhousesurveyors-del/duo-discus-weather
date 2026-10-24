@@ -12,13 +12,15 @@ function installDuoModes(map, data) {
     .duo-altitude{display:flex;gap:4px;flex-wrap:wrap;padding:7px;max-width:min(470px,75vw)}.duo-altitude button{font-size:11px;padding:7px}
     .duo-timeline{padding:9px 13px;width:340px;box-sizing:border-box}.duo-timeline input{width:100%;accent-color:#f5b650}.duo-timeline label{display:block;margin-bottom:6px}
     .duo-legend{padding:9px 13px;font-size:11px}.duo-ramp{height:9px;margin:6px 0;border-radius:9px;background:linear-gradient(90deg,#603b91,#3348a4,#2684d2,#39ccda,#63be62,#e4d74f,#f39b38,#d74234)}
+    .duo-rain-ramp{position:relative;margin-top:13px}.duo-rain-pointer{position:absolute;top:-12px;transform:translateX(-50%);color:white;font-size:12px;text-shadow:0 1px 3px black}.duo-rain-value{display:block;margin-top:6px;font-weight:bold}
     .duo-labels{display:flex;justify-content:space-between;gap:7px}.duo-callout .leaflet-popup-content-wrapper,.duo-callout .leaflet-popup-tip{background:#172532;color:#f4f7fa}.duo-callout .leaflet-popup-content{margin:13px;min-width:250px;max-width:310px;font:13px Arial;line-height:1.5}
     .duo-callout table{width:100%;border-collapse:collapse}.duo-callout td{padding:4px;border-bottom:1px solid #ffffff22}.duo-callout summary{cursor:pointer;padding:8px 0}.duo-callout .duo-bars{display:flex;align-items:flex-end;height:72px;gap:1px;overflow:hidden}.duo-callout .duo-bars i{flex:1;background:#78bdde;min-width:1px}
+    .duo-callout small{display:block;line-height:1.5;margin:6px 0}
     .duo-route-controls{display:flex;flex-wrap:wrap;gap:5px;padding:8px}.duo-route-controls button{font-size:12px}.duo-leg-label{background:#fffef4e8;color:#193d59;padding:3px 6px;border:1px solid #5f7890;border-radius:8px;white-space:nowrap;font:11px Arial}
     @media(prefers-reduced-motion:reduce){.duo-motion-note{display:block!important}}
   `;
   map.getContainer().appendChild(style);
-  const controls=[],layers=[];let animation=0,playing=0,alive=true,popup=null;
+  const controls=[],layers=[];let animation=0,playing=0,alive=true,popup=null,popupObserver=null,popupFrame=0;
   const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   function event(kind,value){
     const state=window.__GLOBAL_DATA__; if(!state)return;
@@ -33,7 +35,20 @@ function installDuoModes(map, data) {
   const toggle=menu.querySelector('.duo-menu-toggle'),items=menu.querySelector('.duo-menu-items');
   toggle.onclick=()=>{items.hidden=!items.hidden;toggle.setAttribute('aria-expanded',String(!items.hidden));};
   menu.querySelectorAll('[data-mode]').forEach(button=>button.onclick=()=>{button.textContent='Loading…';event('mode',button.dataset.mode);});
-  function callout(latlng,markup){if(popup)map.closePopup(popup);popup=L.popup({className:'duo-callout',maxWidth:340,maxHeight:350,autoPan:true,autoPanPadding:[20,30]}).setLatLng(latlng).setContent(markup).openOn(map);popup.getElement().querySelectorAll('details').forEach(d=>d.ontoggle=()=>popup.update());}
+  function callout(latlng,markup){
+    if(popupObserver)popupObserver.disconnect();cancelAnimationFrame(popupFrame);
+    if(popup)map.closePopup(popup);
+    // Retain the DOM node: Leaflet update() rewrites string content, which
+    // would close details and discard their handlers during layout updates.
+    const content=document.createElement('div');content.innerHTML=markup;
+    const opened=popup=L.popup({className:'duo-callout',maxWidth:340,maxHeight:350,autoPan:true,autoPanPadding:[20,30]}).setLatLng(latlng).setContent(content).openOn(map);
+    opened.getElement().querySelectorAll('details').forEach(d=>d.ontoggle=()=>opened.update());
+    // A restored flag can precede Leaflet's stylesheet in the Streamlit iframe.
+    // Recalculate its anchor after layout, including late CSS and detail changes.
+    const reposition=()=>{cancelAnimationFrame(popupFrame);popupFrame=requestAnimationFrame(()=>{if(alive&&popup===opened&&map.hasLayer(opened))opened.update();});};
+    if(typeof ResizeObserver!=='undefined'){popupObserver=new ResizeObserver(reposition);popupObserver.observe(opened.getElement());}
+    reposition();
+  }
   function nearest(lat,lon){let best=null,distance=Infinity;for(const p of data.samples){const d=Math.hypot((lat-p.lat)*111,(lon-p.lon)*111*Math.cos(lat*Math.PI/180));if(d<distance){best=p;distance=d;}}return distance<=120?{...best,distance}:null;}
   function val(x,digits=1){return x===null||x===undefined?'Unavailable':Number(x).toFixed(digits);}
   function soaringText(lat,lon){const p=nearest(lat,lon);return !p?'No supported forecast sample here.':
@@ -56,6 +71,7 @@ function installDuoModes(map, data) {
     const bar=control('bottomleft','duo-route-controls','<button data-action="undo" title="Remove the last point from this date’s task.">↶ Undo last</button><button data-action="clear" title="Clear this route and its completion state.">Clear route</button><button data-action="finish" title="Use the last selected point as Finish and open the task sheet.">✓ Finish here</button><button data-action="home" title="Append Start as Finish and open the task sheet.">⌂ Return home</button><button data-action="optimize" title="Open route distance and optimisation controls below the map.">✦ Optimise route</button><small>Click BGA markers in order: Start → turnpoints → Finish. Finish here or Return home opens your task sheet.</small>');
     bar.querySelectorAll('[data-action]').forEach(button=>button.onclick=()=>event('action',button.dataset.action));
   }
+  let radarClick=null;
   if(data.mode==='radar'){
     if(data.rate_grid){
       const g=data.rate_grid,layer=L.imageOverlay(g.image,g.bounds,{opacity:1,attribution:esc(g.source)}).addTo(map);layers.push(layer);
@@ -64,7 +80,42 @@ function installDuoModes(map, data) {
       const layer=L.tileLayer(data.radar.url,{opacity:.8,maxNativeZoom:7,maxZoom:19,attribution:'Radar © RainViewer · observed'}).addTo(map);layers.push(layer);
       control('bottomleft','duo-legend','<b>Observed radar · '+esc(new Date(data.radar.time).toLocaleTimeString('en-GB',{timeZone:'Europe/London'}))+'</b><small>RainViewer Universal Blue · public maximum zoom 7. Enlarging tiles does not add detail.</small>');
     }else control('bottomleft','duo-legend','Observed radar unavailable.');
-    control('bottomright','duo-legend','<b>mm/h reference scale</b><div class="duo-ramp" style="background:linear-gradient(90deg,#2867bb,#35d1d5,#39ae55,#f5e84a,#f88c30,#ed3239,#c836d8)"></div><div class="duo-labels"><span>0</span><span>0.6</span><span>3</span><span>12</span><span>50</span><span>200</span></div><small>'+(data.rate_grid?'Calibrated provider rates · dry cells clear; unavailable cells have no rate.':'Reference only. Public image colours cannot be read as calibrated mm/h.')+'</small>');
+    const legend=control('bottomright','duo-legend','<b>Point precipitation · mm/h</b><div class="duo-ramp duo-rain-ramp" style="background:linear-gradient(90deg,#2867bb,#35d1d5,#39ae55,#f5e84a,#f88c30,#ed3239,#c836d8)"><span class="duo-rain-pointer" hidden>▼</span></div><div class="duo-labels"><span>0</span><span>0.6</span><span>3</span><span>12</span><span>50</span><span>100</span><span>200+</span></div><span class="duo-rain-value" aria-live="polite">Click the map for a rain estimate</span><small>Open-Meteo hourly mean · selected forecast hour. '+(data.rate_grid?'Calibrated radar grid rates are listed separately.':'RainViewer tile colours use their own scale.')+'</small>');
+    const ticks=[0,.6,3,12,50,100,200];
+    function markRate(rate,label){
+      legend.querySelector('.duo-rain-value').textContent=label;
+      const pointer=legend.querySelector('.duo-rain-pointer');pointer.hidden=rate===null;
+      if(rate===null)return;
+      const capped=Math.min(200,Math.max(0,rate));let i=ticks.findIndex(t=>t>=capped);if(i<1)i=1;
+      pointer.style.left=((i-1+(capped-ticks[i-1])/(ticks[i]-ticks[i-1]))/(ticks.length-1)*100)+'%';
+      pointer.title=rate.toFixed(1)+' mm/h · Open-Meteo hourly mean';
+    }
+    function observedText(ll){
+      const g=data.rate_grid;if(!g)return '';
+      let rate=null;
+      if(ll.lat>=g.bounds[0][0]&&ll.lat<=g.bounds[1][0]&&ll.lng>=g.bounds[0][1]&&ll.lng<=g.bounds[1][1]){
+        const y=Math.min(g.values.length-1,Math.floor((ll.lat-g.bounds[0][0])/(g.bounds[1][0]-g.bounds[0][0])*g.values.length));
+        const x=Math.min(g.values[0].length-1,Math.floor((ll.lng-g.bounds[0][1])/(g.bounds[1][1]-g.bounds[0][1])*g.values[0].length));rate=g.values[y][x];
+      }
+      return '<hr><b>Calibrated radar: '+(rate===null?'rate unavailable':Number(rate).toFixed(1)+' mm/h')+'</b><br><small>Provider grid-cell rate · '+esc(g.observed_at)+' · '+esc(g.source)+'</small>';
+    }
+    const localTime=iso=>new Date(iso).toLocaleString('en-GB',{timeZone:'Europe/London',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',timeZoneName:'short'});
+    radarClick=(coordinate,result=null)=>{
+      const ll=L.latLng(coordinate).wrap();
+      const rate=result&&typeof result.rate==='number'&&Number.isFinite(result.rate)?result.rate:null;
+      const label=result?(rate===null?'rate unavailable':rate.toFixed(1)+' mm/h'):'loading…';
+      markRate(rate,result?(rate===null?'Point estimate unavailable':rate.toFixed(1)+' mm/h · modelled'):'Loading point estimate…');
+      let detail='<small>Open-Meteo · modelled hourly mean, not an instantaneous radar measurement.</small>';
+      if(result){
+        detail+='<small>'+esc(result.model)+' · hour ending '+esc(localTime(result.valid_at))+'</small>';
+        if(result.error)detail+='<small>'+esc(result.error)+'</small>';
+        if(rate!==null)detail+='<details><summary>Source and hourly period</summary><small>'+esc(localTime(result.interval_start))+' → '+esc(localTime(result.valid_at))+'<br>Precipitation includes rain, showers and snowfall water equivalent.<br>Nearest model grid cell: '+Number(result.grid_latitude).toFixed(4)+', '+Number(result.grid_longitude).toFixed(4)+'<br>Retrieved '+esc(localTime(result.fetched_at))+'.</small></details>';
+      }else detail+='<small>Querying this coordinate for the selected forecast hour…</small>';
+      callout(ll,'<b>Weather radar: '+label+'</b><br>'+ll.lat.toFixed(4)+', '+ll.lng.toFixed(4)+detail+observedText(ll));
+      if(!result)event('radar',ll.lat+':'+ll.lng);
+    };
+    if(data.radar_point&&new Date(data.radar_point.valid_at).getTime()===new Date(data.when).getTime())
+      radarClick([data.radar_point.latitude,data.radar_point.longitude],data.radar_point);
   }
   let windClick=null;
   if(data.mode==='wind'&&data.wind){
@@ -117,17 +168,10 @@ function installDuoModes(map, data) {
   }
   function click(e){
     if(data.mode==='wind'&&windClick)windClick(e.latlng);
-    if(data.mode==='radar'){
-      let rate=null;const g=data.rate_grid,lat=e.latlng.lat,lon=e.latlng.lng;
-      if(g&&lat>=g.bounds[0][0]&&lat<=g.bounds[1][0]&&lon>=g.bounds[0][1]&&lon<=g.bounds[1][1]){
-        const y=Math.min(g.values.length-1,Math.floor((lat-g.bounds[0][0])/(g.bounds[1][0]-g.bounds[0][0])*g.values.length));
-        const x=Math.min(g.values[0].length-1,Math.floor((lon-g.bounds[0][1])/(g.bounds[1][1]-g.bounds[0][1])*g.values[0].length));rate=g.values[y][x];
-      }
-      callout(e.latlng,'<b>Weather radar: '+(rate===null?'rate unavailable':Number(rate).toFixed(1)+' mm/h')+'</b><br>'+lat.toFixed(4)+', '+lon.toFixed(4)+'<small>'+(g?'Provider grid-cell rate · '+esc(g.observed_at)+' · '+esc(g.source):'RainViewer provides a coloured image, not a calibrated point rate. No mm/h number is inferred from its pixels.')+'</small>');
-    }
+    if(data.mode==='radar'&&radarClick)radarClick(e.latlng);
     if(['thermal','pfd','xc','stf'].includes(data.mode))callout(e.latlng,soaringText(e.latlng.lat,e.latlng.lng));
   }
   map.on('click',click);
-  map._duoCleanup=()=>{alive=false;cancelAnimationFrame(animation);clearInterval(playing);map.off('click',click);controls.forEach(c=>c.remove());layers.forEach(l=>l.remove());style.remove();};
+  map._duoCleanup=()=>{alive=false;cancelAnimationFrame(animation);cancelAnimationFrame(popupFrame);if(popupObserver)popupObserver.disconnect();if(popup)map.closePopup(popup);clearInterval(playing);map.off('click',click);controls.forEach(c=>c.remove());layers.forEach(l=>l.remove());style.remove();};
   map.on('unload',map._duoCleanup);
 }

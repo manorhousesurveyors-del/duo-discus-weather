@@ -214,6 +214,13 @@ def process_map_event(interaction,catalog,day,mode):
     from map_modes import MODES
     from route_tools import complete_task
     for tag in fresh:
+        if tag.startswith('duo:radar:') and st.session_state.get('visual_mode')=='radar':
+            try:
+                fields=tag.split(':')
+                selected=GeoPoint('radar-click','Radar click',float(fields[2]),float(fields[3]))
+                coordinate=(selected.latitude,selected.longitude)
+            except (IndexError,ValueError):
+                pass
         if tag.startswith('duo:mode:'):
             selected_mode=tag.split(':')[2]
             if selected_mode in MODES: st.session_state['visual_mode']=selected_mode
@@ -259,7 +266,10 @@ def process_map_event(interaction,catalog,day,mode):
         if thermal.endswith(':off'): layers=[layer for layer in layers if layer!='Thermals']
         st.session_state['map_layers']=layers
     visual=st.session_state.get('visual_mode')
-    if coordinate and visual in ('wind','radar','thermal','pfd','xc','stf'):
+    if coordinate and visual=='radar':
+        st.session_state['radar_coordinate']=coordinate
+        return
+    if coordinate and visual in ('wind','thermal','pfd','xc','stf'):
         return  # These modes handle point flags inside the map without a weather fetch/rerender.
     if coordinate:
         st.session_state['inspector_coordinate']=coordinate

@@ -60,11 +60,30 @@ RainViewer's current personal-use API supplies observed past PNG radar, Universa
 Blue colours and maximum native zoom 7 (512 px). This was confirmed against its
 [public example repository](https://github.com/rainviewer/rainviewer-api-example).
 The app does not label enlarged public tiles as HD or invert image colours into
-invented mm/h. In default radar mode, the requested colourful mm/h legend is
-explicitly a **reference scale**, and point flags say **rate unavailable**.
+invented mm/h.
+
+Click anywhere in **Weather Radar** for an **Open-Meteo point precipitation**
+lookup using the sidebar's selected model, date and hour. The dark flag displays
+`Weather radar: X.X mm/h`, explicitly labelled as a **modelled hourly mean**.
+Open-Meteo supplies precipitation in mm accumulated over the preceding hour;
+the same number is that hour's average mm/h. It includes rain, showers and
+snowfall water equivalent, and is not an instantaneous radar measurement.
+The nearest model cell is queried at the clicked coordinate. Source details
+show the grid coordinate, hourly period and retrieval time.
+
+The colourful **Point precipitation · mm/h** bar marks the returned value from
+blue/cyan through green/yellow/orange/red/magenta, at 0 / 0.6 / 3 / 12 / 50 / 100 /
+200+ mm/h. It describes the point estimate; RainViewer's blue tiles retain their
+own observed colour scale and timestamp. Changing the forecast hour does not
+change the observed radar frame. Values are cached for up to five minutes per
+coordinate, model and hour. Dry weather displays **0.0 mm/h**; null values,
+uncovered model hours and failed requests display **rate unavailable**. No
+regional-sample interpolation or extrapolation fills gaps. Recorded-snapshot
+mode makes no live point requests and labels this explicitly. No API key is needed.
 
 A separately supplied calibrated feed can enable the requested quantitative
-colour ramp and point rates. Set `DUO_RADAR_RATE_GRID_URL` to a credential-free
+colour ramp across the map and observed point rates. These are listed separately
+from the Open-Meteo estimate. Set `DUO_RADAR_RATE_GRID_URL` to a credential-free
 HTTPS JSON endpoint (without query/fragment), allow its host if necessary, and
 restart the app. No such feed is bundled or provisioned. Contract:
 

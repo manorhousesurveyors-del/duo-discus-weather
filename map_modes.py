@@ -10,14 +10,14 @@ MODES = {'clean':'Off / Clean Map', 'wind':'Windy-style Wind Stream', 'radar':'W
          'xc':'XC Speed', 'stf':'Speed to Fly · kt', 'route':'Route Forecast Planner','extras':'Other weather layers'}
 
 
-def add_map_modes(map_view,forecasts,when,anchor,loading,*,mode='clean',radar=None,task=(),rate_grid=None):
+def add_map_modes(map_view,forecasts,when,anchor,loading,*,mode='clean',radar=None,task=(),rate_grid=None,radar_point=None):
     if mode not in MODES: mode='clean'
     samples=soaring_samples(forecasts,when,loading) if mode in ('thermal','pfd','xc','stf') else []
     contours=contour_features(samples,mode) if mode in BANDS else {'type':'FeatureCollection','features':[]}
     wind=wind_payload(forecasts,anchor) if mode=='wind' else None
     payload={'mode':mode,'modes':MODES,'when':when.isoformat(),'wind':wind,'samples':samples,
              'contours':contours,'bands':BANDS.get(mode),'radar':radar,'points':len(task),
-             'date':when.date().isoformat(),'loading':loading,'rate_grid':rate_grid}
+             'date':when.date().isoformat(),'loading':loading,'rate_grid':rate_grid,'radar_point':radar_point}
     if radar: payload['radar']={**radar,'time':radar['time'].isoformat()}
     element=MacroElement()
     # No network script dependency: all controls and animation are bundled.

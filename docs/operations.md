@@ -19,6 +19,15 @@ not handset/inbox receipt.
 Put all files and `.github/workflows/soaring_watchdog.yml` on the default branch.
 In repository **Settings → Secrets and variables → Actions**:
 
+For Gmail plus CallMeBot, create exactly two repository secrets:
+**`GMAIL_APP_PASSWORD`** and **`CALLMEBOT_API_KEY`**. Use the sending Gmail
+account's app password (not its ordinary login password). Keep the sender,
+recipient and provider settings in the **Variables** tab, using the defaults
+below if appropriate. The Twilio secrets are needed only when selecting Twilio.
+GitHub supplies `github.token` automatically for workflow operations; neither
+workflow needs a manually created GitHub token secret. Weather map lookups,
+including Open-Meteo point precipitation, need no API key.
+
 | Kind | Name | Value/use |
 | --- | --- | --- |
 | Secret | `GMAIL_APP_PASSWORD` | Gmail app password for the sending account |

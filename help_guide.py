@@ -12,7 +12,7 @@ TOPICS = (
     ('🎨 What the Colours Mean', (
         ('Step 1 · Thermals and distance', 'Purple and blue mean less lift or distance. Green, yellow and red mean more. Clear areas may mean poor weather or missing data.'),
         ('Step 2 · Wind', 'Blue means lighter wind. Yellow, red and purple mean stronger wind. White trails move with the air.'),
-        ('Step 3 · Radar', 'Radar shows recent rain. The public radar uses blue shades. Its pictures do not supply exact rain rates.'))),
+        ('Step 3 · Radar', 'The blue radar picture shows recent rain. Click for a model’s hourly rain estimate. The coloured bar marks this estimate. It uses your chosen forecast hour.'))),
     ('📍 How to Build a Glider Task on the Map', (
         ('Step 1 · Start your route', 'Open Route Forecast Planner. Zoom in. Click a BGA marker for your start.'),
         ('Step 2 · Add turning points', 'Click more BGA markers in order. Each line becomes one leg of your task. Undo removes your last choice.'),

@@ -174,6 +174,21 @@ briefing_panel(b.load_catalog(),date(2026,6,10),'dry','ifs025',1,(),None,None,()
             self.assertNotIn('inspector_coordinate',ui.st.session_state)
             self.assertNotIn('tasks_by_day',ui.st.session_state)
 
+    def test_radar_click_uses_exact_tag_coordinate_without_changing_task(self):
+        catalog=b.Catalog((A,B),'test','',b.content_hash((A,B)))
+        with patch.object(ui.st,'session_state',{'visual_mode':'radar'}):
+            event={'selected_tags':['duo:radar:52.518:-2.88:123'],
+                   'last_clicked':{'lat':52,'lng':-3}}
+            ui.process_map_event(event,catalog,DAY,'Add to task')
+            ui.process_map_event(event,catalog,DAY,'Add to task')
+            self.assertEqual(ui.st.session_state['radar_coordinate'],(52.518,-2.88))
+            self.assertNotIn('inspector_coordinate',ui.st.session_state)
+            self.assertNotIn('tasks_by_day',ui.st.session_state)
+            ui.process_map_event({'last_clicked':{'lat':53,'lng':-2}},catalog,DAY,'Add to task')
+            self.assertEqual(ui.st.session_state['radar_coordinate'],(53,-2))
+            ui.process_map_event({'selected_tags':['duo:radar:nan:0:124']},catalog,DAY,'Add to task')
+            self.assertEqual(ui.st.session_state['radar_coordinate'],(53,-2))
+
     def test_optimizer_ui_loads_verified_candidate_and_opens_exports(self):
         from streamlit.testing.v1 import AppTest
         from task_planning import corridor_points,task_distance
