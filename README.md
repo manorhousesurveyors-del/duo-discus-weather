@@ -41,12 +41,23 @@ Every custom leg is checked hourly using sampled corridor forecasts, the chosen
 planner reports achievability, launch windows, elapsed time and the weakest leg.
 A separate local day-capacity estimate highlights 100/250/300/500 km potential.
 
-Thermals use a fixed blue–cyan–yellow–orange–red net-climb scale with a legend,
-switchable in the sidebar and map control. Bookmark `?thermals=on` to start with
+The collapsed floating **Map modes** menu selects wind animation, observed radar,
+thermal contours, potential flight distance, XC speed, speed to fly or the route
+planner. The default map is clean. Soaring contours use stepped purple-to-red
+bands with black outlines; zero/unsupported areas stay clear. Bookmark `?thermals=on` to start with
 it enabled. **Help & Briefing Bot** answers from the selected forecasts/catalog
 and checks suggested BGA triangles and out-and-returns before offering to load
 them. It requires no LLM key. Controls, metrics, table columns and map markers
 have hover explanations.
+
+**Help Guide** provides dyslexia-friendly step cards and a plain-language weather
+bot. Completing a route opens its **BGA / SeeYou Task Sheet**, with PDF, Word,
+CUP/TSK downloads and direct HTTP links/QR codes. The route optimiser checks
+200/300/500 km or custom-distance BGA candidates before loading a complete flight.
+See [map modes, radar limits and task-sheet operation](docs/map-modes-and-task-sheets.md).
+The public RainViewer feed is image-only, native zoom 7; calibrated mm/h and
+higher-resolution radar require a separate provider feed. These are independent
+Windy/SkySight-inspired displays, not those services' proprietary products.
 
 Data quality supports CUP/CSV/JSON uploads and a manual BGA update check.
 [Quarterly synchronization](.github/workflows/update_bga_turnpoints.yml) runs

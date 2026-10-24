@@ -145,6 +145,19 @@ class LaunchWindow:
 
 
 @dataclass(frozen=True)
+class FlightLeg:
+    leg_index: int
+    distance_km: float
+    elapsed_hours: float
+    groundspeed_kmh: float
+    cruise_airspeed_kmh: float
+    wind_u_mps: float
+    wind_v_mps: float
+    started_at: datetime
+    finished_at: datetime
+
+
+@dataclass(frozen=True)
 class FlightSolution:
     launch: datetime
     finish: datetime
@@ -153,6 +166,7 @@ class FlightSolution:
     average_maccready_kmh: float
     weakest_leg: str
     risk_flags: tuple[str, ...]
+    legs: tuple[FlightLeg, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -218,7 +232,7 @@ def assess_task(points: Iterable[Turnpoint], forecasts: Iterable[Forecast], day:
                     min(thermal.cloud_base_ft_amsl,other.cloud_base_ft_amsl),
                     (u*math.sin(angle)+v*math.cos(angle))*MPS_TO_KNOTS,
                     abs(u*math.cos(angle)-v*math.sin(angle))*MPS_TO_KNOTS,
-                    thermal.cloud_streets is True or other.cloud_streets is True,flags)
+                    thermal.cloud_streets is True or other.cloud_streets is True,flags,u,v)
         for hour in range(9):
             rows=[conditions[sid,hour] for sid,_ in leg_segments]
             missing=any(row is None for row in rows)
@@ -239,6 +253,8 @@ def assess_task(points: Iterable[Turnpoint], forecasts: Iterable[Forecast], day:
     for minutes in range(0,480,15):
         launch=start+timedelta(minutes=minutes); now=launch; risk=[]; cruise_hours=0.; successful=True
         leg_time=[0.] * len(legs); leg_distance=[0.] * len(legs)
+        leg_cruise=[0.] * len(legs); leg_u=[0.] * len(legs); leg_v=[0.] * len(legs)
+        leg_start=[None] * len(legs); leg_finish=[None] * len(legs)
         for segment_id,(leg_index,distance) in enumerate(segments):
             remaining=distance
             while remaining>1e-7:
@@ -249,17 +265,24 @@ def assess_task(points: Iterable[Turnpoint], forecasts: Iterable[Forecast], day:
                 next_hour=start+timedelta(hours=hour+1)
                 duration=min((next_hour-now).total_seconds()/3600,remaining/row[0])
                 if duration<=0: successful=False; break
+                if leg_start[leg_index] is None: leg_start[leg_index]=now
                 travelled=min(remaining,row[0]*duration)
                 remaining-=travelled; now+=timedelta(hours=duration)
                 if abs((next_hour-now).total_seconds())<.00001: now=next_hour
                 cruise_hours+=row[1]*duration
                 leg_time[leg_index]+=duration; leg_distance[leg_index]+=travelled; risk.extend(row[8])
+                leg_cruise[leg_index]+=row[1]*duration
+                leg_u[leg_index]+=row[9]*duration; leg_v[leg_index]+=row[10]*duration
+                leg_finish[leg_index]=now
             if not successful: break
         if successful:
             elapsed=(now-launch).total_seconds()/3600
             weakest=min(range(len(legs)),key=lambda i:leg_distance[i]/leg_time[i])
             solutions.append(FlightSolution(launch,now,elapsed,length/elapsed,cruise_hours/elapsed,
-                              f'{points[weakest].code} → {points[weakest+1].code}',tuple(dict.fromkeys(risk))))
+                              f'{points[weakest].code} → {points[weakest+1].code}',tuple(dict.fromkeys(risk)),
+                              tuple(FlightLeg(i,leg_distance[i],leg_time[i],leg_distance[i]/leg_time[i],
+                                  leg_cruise[i]/leg_time[i],leg_u[i]/leg_time[i],leg_v[i]/leg_time[i],
+                                  leg_start[i],leg_finish[i]) for i in range(len(legs)))))
     windows=[]
     for solution in solutions:
         if windows and solution.launch-windows[-1].latest==timedelta(minutes=15):
@@ -330,8 +353,8 @@ def classify_day(forecasts: Iterable[Forecast], origin: GeoPoint, day: date, loa
 
 
 def candidate_tasks(catalog: Iterable[Turnpoint], origin: Turnpoint, target_km: int, *, limit=24) -> tuple[tuple[Turnpoint, ...], ...]:
-    if target_km not in (100,250,300,500,750):
-        raise ValueError('Choose 100, 250, 300, 500 or 750 km')
+    if not isinstance(target_km, (int, float)) or not math.isfinite(target_km) or not 50 <= target_km <= 1000:
+        raise ValueError('Choose a task distance from 50 to 1000 km')
     polar=[]
     for point in catalog:
         if not point.official or point.code==origin.code: continue
@@ -368,7 +391,7 @@ def _cup_coordinate(value: float, latitude: bool) -> str:
     return f'{degrees:0{2 if latitude else 3}d}{remaining:06.3f}'+(('N' if value>=0 else 'S') if latitude else ('E' if value>=0 else 'W'))
 
 
-def export_cup(points: Iterable[Turnpoint], title='Duo Discus task') -> str:
+def export_cup(points: Iterable[Turnpoint], title='Duo Discus task', *, bga_zones=False) -> str:
     points=validate_task(points); stream=io.StringIO(newline=''); writer=csv.writer(stream,lineterminator='\r\n')
     writer.writerow(('name','code','country','lat','lon','elev','style','rwdir','rwlen','freq','desc'))
     def safe(value):
@@ -387,10 +410,17 @@ def export_cup(points: Iterable[Turnpoint], title='Duo Discus task') -> str:
     writer.writerow(('-----Related Tasks-----',))
     # SeeYou order: task name, takeoff, start, turnpoints, finish, landing.
     writer.writerow((safe(title),safe(names[points[0].code]),*(safe(names[p.code]) for p in points),safe(names[points[-1].code])))
+    if bga_zones:
+        writer.writerow(('Options','WpDis=True','TaskType=0'))
+        for i in range(len(points)):
+            if i == 0: zone=('Style=2','R1=2500m','A1=180','Line=1')
+            elif i == len(points)-1: zone=('Style=1','R1=1000m','A1=180','Line=0')
+            else: zone=('Style=1','R1=20000m','A1=45','R2=500m','A2=180','Line=0')
+            writer.writerow((f'ObsZone={i}',*zone))
     return stream.getvalue()
 
 
-def export_tsk(points: Iterable[Turnpoint]) -> str:
+def export_tsk(points: Iterable[Turnpoint], *, bga_zones=False) -> str:
     points=validate_task(points)
     root=ET.Element('Task',{'type':'RT','task_scored':'1','aat_min_time':'0','start_max_speed':'0',
         'start_max_height':'0','start_max_height_ref':'MSL','finish_min_height':'0','finish_min_height_ref':'AGL',
@@ -403,7 +433,12 @@ def export_tsk(points: Iterable[Turnpoint]) -> str:
         if p.elevation_m is not None: attributes['altitude']=f'{p.elevation_m:.1f}'
         waypoint=ET.SubElement(point,'Waypoint',attributes)
         ET.SubElement(waypoint,'Location',{'latitude':f'{p.latitude:.8f}','longitude':f'{p.longitude:.8f}'})
-        ET.SubElement(point,'ObservationZone',{'type':'Cylinder','radius':'500'} if kind=='Turn' else {'type':'Line','length':'1000'})
+        if bga_zones:
+            zone = {'type':'BGAFixedCourse'} if kind=='Turn' else (
+                {'type':'Line','length':'5000'} if kind=='Start' else {'type':'Cylinder','radius':'1000'})
+        else:
+            zone = {'type':'Cylinder','radius':'500'} if kind=='Turn' else {'type':'Line','length':'1000'}
+        ET.SubElement(point,'ObservationZone',zone)
     ET.indent(root)
     return '<?xml version="1.0" encoding="UTF-8"?>\n'+ET.tostring(root,encoding='unicode')+'\n'
 

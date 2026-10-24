@@ -230,3 +230,58 @@ during verification.
 Runtime evidence remains under ignored `var/` (test logs, live-task JSON,
 browser results, screenshots and downloaded task files). These contain no alert
 credentials. No live notifications were sent.
+
+## Floating map modes, accessible help and task-sheet exports · 24 October 2026
+
+Validated with Python 3.12, the pinned dependencies and the bundled DejaVu font.
+The full offline suite passes **144 tests**, none skipped, in 15.450 seconds.
+`pip check`, Python compilation, `node --check assets/map_modes.js` and
+`git diff --check` passed. These checks do not validate an actual flight or
+establish certification by Windy, SkySight, BGA or Naviter.
+
+New automated coverage includes six wind levels, log-pressure interpolation,
+missing and below-terrain data, the 120-hour timeline across the autumn clock
+change, geographic coverage, contour ring geometry, zero/unknown transparency,
+ballast-dependent STF, rain-blocked XC/PFD, calibrated radar units and grids,
+route completion/undo/clear, 200 km/custom candidates, optimisation objectives,
+an optimiser UI flow that verifies and loads a candidate, and clear Help Guide
+responses. Per-leg distances/times reconcile to the selected integrated flight.
+
+PDF containers include the map image and page structure. Word documents are
+opened with python-docx and their complete tables inspected. CUP waypoint/task
+order and explicit observation zones are checked against the TSK XML structure.
+Wind-correction direction and WMM2025 validity are exercised. Failed/missing
+weather exports retain unavailable flight figures instead of invented values.
+Generated QR images were independently decoded with ZXing-C++; the decoded
+text exactly matched the intended HTTP file URL. ZXing is a validation-only tool,
+not a runtime dependency.
+
+A live ECMWF map request returned **40/40 UK land samples**, zero failures, and
+usable wind at all 40 samples in the final hour of the **120-hour** timeline.
+The pressure-level bar contains all six requested levels; individually unavailable
+levels remain gaps. The live RainViewer manifest and a 512×512 RGBA tile were
+retrieved successfully. No calibrated live radar provider was configured.
+
+Chromium checks used a clearly labelled synthetic recorded forecast and an
+isolated task store. External assets were fetched through the environment's
+verified TLS proxy; certificate verification was not disabled. Checks covered:
+
+- Collapsed menu and switches through wind, thermal, PFD, XC, STF, radar and route.
+- Six wind altitude choices, timeline movement, point flag and six-row profile.
+- Painted contour canvases and point flags showing XC speed and STF. Leaflet uses
+  canvas rendering, so SVG-path DOM counts are not a contour-coverage measure.
+- The default radar flag correctly says rate unavailable. Separate synthetic
+  calibrated-grid checks distinguish 50.0 mm/h, dry 0.0 mm/h and missing coverage.
+- All 18 Help Guide cards at 18 px, 31.5 px line height, left alignment and cream
+  backgrounds; the live-context bot answers in numbered steps.
+- Physical clicks on MYN and BIE markers, Return home, automatic sheet opening,
+  Undo and Clear. Stored codes exactly matched MYN → BIE → MYN before undo.
+- PDF, Word, CUP and TSK browser downloads reopened successfully. Direct CUP and
+  TSK URLs both returned HTTP 200 and contained the full task declaration.
+- No Streamlit exceptions, JavaScript errors or failed external assets in the
+  successful dashboard and physical-marker checks.
+
+The PDF was also rendered and visually inspected, and text extracted with
+Poppler. Actual instrument hardware/SeeYou application import, a live calibrated
+radar feed, and screenshot-perfect matching were not available for verification.
+See [operation and data limits](map-modes-and-task-sheets.md).

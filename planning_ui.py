@@ -49,6 +49,10 @@ def set_task(day,points,*,rerun=True):
     save_daily_task(day,points)
     st.session_state.setdefault('tasks_by_day',{})[day.isoformat()]=points
     st.session_state['task_message']=f'Saved {len(points)} task points for {day:%d %b}.'
+    if len(points)>=3 and points[0]==points[-1]:
+        from route_tools import complete_task
+        try:complete_task(day,points)
+        except ValueError:pass
     if rerun: st.rerun()
 
 
@@ -124,6 +128,12 @@ def task_builder(catalog,day,*,location):
 
 
 @st.cache_data(ttl=900,show_spinner=False)
+def fetch_map_grid(model_key,refresh_bucket):
+    from map_weather import national_grid
+    return OpenMeteoClient().fetch_batched(national_grid(),(FORECAST_MODELS[model_key],))
+
+
+@st.cache_data(ttl=900,show_spinner=False)
 def fetch_corridor(points: tuple[GeoPoint, ...], model_key: str, refresh_bucket: int):
     return OpenMeteoClient().fetch_batched(points,(FORECAST_MODELS[model_key],))
 
@@ -136,7 +146,7 @@ def task_weather(points,base_forecasts,model_key,bucket,*,recorded=False):
     return batch.forecasts,tuple(f'{f.target}: {f.message}' for f in batch.failures)
 
 
-def task_result(points,assessment):
+def task_result(points,assessment,*,key='map'):
     if not points:
         st.info('Build a task in the sidebar or below. The map starts without a preset route.')
         return
@@ -151,10 +161,10 @@ def task_result(points,assessment):
     except ValueError as exc:
         st.warning(str(exc)); return
     columns=st.columns(2)
-    columns[0].download_button('Export SeeYou .cup',export_cup(points),'duo-task.cup','text/plain',
+    columns[0].download_button('Export SeeYou .cup',export_cup(points,bga_zones=True),'duo-task.cup','text/plain',key=key+'_export_cup',
         help='Download the selected waypoint definitions and ordered SeeYou task. Check observation zones and competition requirements in your flight computer.')
-    columns[1].download_button('Export XCSoar .tsk',export_tsk(points),'duo-task.tsk','application/xml',
-        help='Download an XCSoar racing task with 1 km start/finish lines and 500 m turn cylinders. Review these default zones and aircraft settings before use.')
+    columns[1].download_button('Export XCSoar .tsk',export_tsk(points,bga_zones=True),'duo-task.tsk','application/xml',key=key+'_export_tsk',
+        help='Download an XCSoar racing task with a 5 km start line, BGA fixed-course turning zones and a 1 km finish ring. Review these default zones and aircraft settings before use.')
 
     if assessment is None:
         st.warning('Task assessment is unavailable.'); return
@@ -175,7 +185,7 @@ def task_result(points,assessment):
     st.caption(f'Modelled corridor assessment · {assessment.sample_count} weather sample points. '+assessment.warnings[0])
     with st.expander('Every leg, every hour'):
         weather_table([{'Time':r.valid_at.astimezone(LOCAL_TIMEZONE).strftime('%H:%M'),'Leg':r.leg,
-            'Ground km/h':r.groundspeed_kmh,'Cruise km/h':r.cruise_airspeed_kmh,'Net climb kt':r.net_climb_knots,
+            'Ground km/h':r.groundspeed_kmh,'Cruise km/h':r.cruise_airspeed_kmh,'STF kt':None if r.cruise_airspeed_kmh is None else r.cruise_airspeed_kmh/1.852,'Net climb kt':r.net_climb_knots,
             'Usable depth m':r.usable_depth_m,'Cloud base ft AMSL':r.cloud_base_ft_amsl,
             'Along wind kt':r.along_wind_knots,'Crosswind kt':r.cross_wind_knots,'Streets':r.cloud_streets,
             'Notes':'; '.join(r.risk_flags)} for r in assessment.hourly_legs],
@@ -183,6 +193,7 @@ def task_result(points,assessment):
              'Leg':'Task endpoints; weather is also sampled between them at intervals no larger than 35 km.',
              'Ground km/h':'Harmonic leg progress including climb time and vector wind correction. Zero means a blocking condition; blank means missing weather.',
              'Cruise km/h':'MacCready cruise airspeed averaged along this leg; bounded to the supported polar fit.',
+             'STF kt':'Recommended MacCready cruise airspeed in knots for this leg and hour, using the selected wing loading.',
              'Net climb kt':'Lowest conservative net thermal climb along this leg, after the 1.6 kt circling sink deduction.',
              'Usable depth m':'Minimum usable thermal height above model terrain. The default hard minimum is 500 m AGL.',
              'Cloud base ft AMSL':'Lowest estimated condensation height along the leg; usable mixing top can be lower.',
@@ -199,6 +210,27 @@ def process_map_event(interaction,catalog,day,mode):
     st.session_state['last_map_event']=interaction.copy()
     point=None; coordinate=None
     tags=interaction.get('selected_tags') or []
+    fresh=[str(tag) for tag in tags if tag not in (previous.get('selected_tags') or [])]
+    from map_modes import MODES
+    from route_tools import complete_task
+    for tag in fresh:
+        if tag.startswith('duo:mode:'):
+            selected_mode=tag.split(':')[2]
+            if selected_mode in MODES: st.session_state['visual_mode']=selected_mode
+            return
+        if tag.startswith('duo:action:'):
+            action=tag.split(':')[2];points=active_task(day)
+            try:
+                if action=='undo':set_task(day,points[:-1],rerun=False)
+                elif action=='clear':set_task(day,(),rerun=False)
+                elif action=='finish':complete_task(day,points)
+                elif action=='home':
+                    if len(points)<2:raise ValueError('Choose Start and at least one turnpoint first')
+                    if points[-1]!=points[0]:points=(*points,points[0]);set_task(day,points,rerun=False)
+                    complete_task(day,points)
+                elif action=='optimize':st.session_state['open_optimizer']=True
+            except (ValueError,OSError) as exc:st.session_state['task_error']=str(exc)
+            return
     selection=next((tag for tag in tags if str(tag).startswith('duo:point:') and
                     tag not in (previous.get('selected_tags') or [])),None)
     if selection:
@@ -226,13 +258,19 @@ def process_map_event(interaction,catalog,day,mode):
         if thermal.endswith(':on') and 'Thermals' not in layers: layers.append('Thermals')
         if thermal.endswith(':off'): layers=[layer for layer in layers if layer!='Thermals']
         st.session_state['map_layers']=layers
+    visual=st.session_state.get('visual_mode')
+    if coordinate and visual in ('wind','radar','thermal','pfd','xc','stf'):
+        return  # These modes handle point flags inside the map without a weather fetch/rerender.
     if coordinate:
         st.session_state['inspector_coordinate']=coordinate
         st.session_state['inspector_selection']='Map coordinate'
-        if mode=='Add to task':
+        if mode=='Add to task' or visual=='route':
             try:
                 point=point or coordinate_turnpoint(*coordinate)
-                set_task(day,add_task_point(active_task(day),point,st.session_state.get('task_add_role','Append')),rerun=False)
+                new_points=add_task_point(active_task(day),point,'Append' if visual=='route' else st.session_state.get('task_add_role','Append'))
+                validate_task(new_points,allow_incomplete=True)
+                set_task(day,new_points,rerun=False)
+                if len(new_points)>=3 and new_points[-1]==new_points[0]:complete_task(day,new_points)
             except (ValueError,OSError) as exc: st.session_state['task_error']=str(exc)
 
 

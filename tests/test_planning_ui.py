@@ -18,7 +18,7 @@ from tests.test_task_planning import A, B, DAY, TASK
 class PlanningUiTests(unittest.TestCase):
     def test_all_controls_metrics_and_map_markers_have_hover_help(self):
         controls={'selectbox','multiselect','slider','radio','toggle','text_input','button','download_button','file_uploader','metric'}
-        for path in ('app.py','planning_ui.py'):
+        for path in ('app.py','planning_ui.py','route_tools.py','help_guide.py'):
             tree=ast.parse(Path(path).read_text())
             for node in ast.walk(tree):
                 if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute):
@@ -84,13 +84,13 @@ class PlanningUiTests(unittest.TestCase):
                 self.assertFalse(at.exception)
                 points=at.session_state['tasks_by_day'][prefix.removeprefix('sidebar_')]
                 self.assertEqual([p.code for p in points],['MYN','BIE','MYN'])
-                self.assertEqual(len(at.get('download_button')),2)
+                self.assertEqual(len(at.get('download_button')),6)
                 original_day=at.selectbox(key='forecast_day').value
                 at.selectbox(key='forecast_day').select(original_day+1).run()
                 self.assertFalse(at.exception)
                 self.assertEqual(len(at.get('download_button')),0)
                 at.selectbox(key='forecast_day').select(original_day).run()
-                self.assertEqual(len(at.get('download_button')),2)
+                self.assertEqual(len(at.get('download_button')),6)
                 at.selectbox(key=prefix+'_edit').select(1).run()
                 at.button(key=prefix+'_up').click().run()
                 self.assertFalse(at.exception)
@@ -147,3 +147,57 @@ briefing_panel(b.load_catalog(),date(2026,6,10),'dry','ifs025',1,(),None,None,()
             ui.process_map_event(event,catalog,DAY,'Add to task')
             ui.process_map_event(event,catalog,DAY,'Add to task')
             self.assertEqual(ui.active_task(DAY),(A,))
+
+    def test_floating_modes_and_route_actions_are_idempotent(self):
+        from route_tools import is_complete
+        catalog=b.Catalog((A,B),'test','',b.content_hash((A,B)))
+        with tempfile.TemporaryDirectory() as directory,patch.dict('os.environ',{'DUO_TASK_STORE':directory}),patch.object(ui.st,'session_state',{}):
+            event={'selected_tags':['duo:mode:route:1']}
+            ui.process_map_event(event,catalog,DAY,'Inspect weather')
+            self.assertEqual(ui.st.session_state['visual_mode'],'route')
+            for n,point in enumerate((A,B)):
+                ui.process_map_event({'selected_tags':[f'duo:point:{point.code}:{n}']},catalog,DAY,'Inspect weather')
+            self.assertEqual(ui.active_task(DAY),(A,B))
+            home={'selected_tags':['duo:action:home:3']}
+            ui.process_map_event(home,catalog,DAY,'Inspect weather')
+            ui.process_map_event(home,catalog,DAY,'Inspect weather')
+            self.assertEqual(ui.active_task(DAY),TASK);self.assertTrue(is_complete(DAY,TASK))
+            ui.process_map_event({'selected_tags':['duo:action:undo:4']},catalog,DAY,'Inspect weather')
+            self.assertEqual(ui.active_task(DAY),(A,B));self.assertFalse(is_complete(DAY,(A,B)))
+            ui.process_map_event({'selected_tags':['duo:action:clear:5']},catalog,DAY,'Inspect weather')
+            self.assertEqual(ui.active_task(DAY),())
+
+    def test_wind_click_does_not_append_to_task_or_override_inspector(self):
+        catalog=b.Catalog((A,B),'test','',b.content_hash((A,B)))
+        with patch.object(ui.st,'session_state',{'visual_mode':'wind'}):
+            ui.process_map_event({'last_clicked':{'lat':52,'lng':-3}},catalog,DAY,'Add to task')
+            self.assertNotIn('inspector_coordinate',ui.st.session_state)
+            self.assertNotIn('tasks_by_day',ui.st.session_state)
+
+    def test_optimizer_ui_loads_verified_candidate_and_opens_exports(self):
+        from streamlit.testing.v1 import AppTest
+        from task_planning import corridor_points,task_distance
+        from route_tools import build_exports
+        build_exports.clear()
+        with tempfile.TemporaryDirectory() as directory:
+            snapshot=Path(directory)/'snapshot.json'
+            save_bundle(ForecastBundle(tuple(forecast(p,start=NOW.replace(hour=0)) for p in forecast_locations()),(),.5,(),NOW),snapshot)
+            def corridor(points,*args,**kwargs):
+                return tuple(forecast(p,start=NOW.replace(hour=0)) for p in corridor_points(points)),()
+            with patch.dict('os.environ',{'DUO_TASK_STORE':directory+'/tasks','DUO_DASHBOARD_SNAPSHOT':str(snapshot)}), \
+                 patch('planning_ui.task_weather',side_effect=corridor), \
+                 patch('route_tools.publish_downloads',return_value='app/static/tasks/test/duo-task'):
+                at=AppTest.from_file(str(Path(app.__file__)),default_timeout=40).run()
+                at.button(key='optimise_route').click().run()
+                self.assertFalse(at.exception)
+                tasks=list(at.session_state['tasks_by_day'].values());points=next(p for p in tasks if p)
+                self.assertGreaterEqual(task_distance(points),200)
+                self.assertLessEqual(task_distance(points),216)
+                self.assertEqual(points[0],points[-1])
+                self.assertIn('Loaded',at.session_state['optimiser_result'])
+                self.assertTrue(any(e.label=='BGA / SeeYou Task Sheet' for e in at.expander))
+                self.assertEqual(len(at.get('download_button')),6)
+                at.text_input(key='help_question').set_value('Why is my task achievable?').run()
+                at.button(key='help_ask').click().run()
+                self.assertFalse(at.exception)
+                self.assertIn('Step 1',at.session_state['easy_briefing'])

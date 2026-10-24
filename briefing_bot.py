@@ -16,7 +16,7 @@ from config import LOCAL_TIMEZONE
 from data_ingestion import Forecast
 from soaring_physics import WaveResult
 from task_planning import (DayClassification, TaskAssessment, assess_task, candidate_tasks,
-                           corridor_points, nearby_forecasts)
+                           corridor_points, nearby_forecasts, classify_day)
 
 
 @dataclass(frozen=True)
@@ -123,6 +123,9 @@ def shortlist_tasks(catalog: Catalog, origin: Turnpoint, target_km: int, forecas
     candidates=candidate_tasks(catalog.turnpoints,origin,target_km,limit=30)
     if shape=='triangle': candidates=tuple(t for t in candidates if len(t)==4)
     elif shape=='out-and-return': candidates=tuple(t for t in candidates if len(t)==3)
+    forecasts=tuple(forecasts)
+    capacities={f.location.key:classify_day((f,),f.location,day,loading,preference=(f.model,)).distance_km for f in forecasts}
+    from soaring_physics import distance_bearing
     scored=[]
     for task in candidates:
         approximate=nearby_forecasts(corridor_points(task),forecasts,maximum_km=75)
@@ -130,6 +133,14 @@ def shortlist_tasks(catalog: Catalog, origin: Turnpoint, target_km: int, forecas
         good=result.best is not None
         street=sum(row.cloud_streets for row in result.hourly_legs)
         progress=max((r.groundspeed_kmh or 0 for r in result.hourly_legs),default=0)
-        score=(good,result.verdict!='INSUFFICIENT DATA',progress,street,-abs(result.distance_km-target_km))
+        corridor_capacity=[]
+        for point in corridor_points(task):
+            nearest=min(forecasts,key=lambda f:distance_bearing(point,f.location)[0],default=None)
+            if nearest and distance_bearing(point,nearest.location)[0]<=75:
+                capacity=capacities.get(nearest.location.key)
+                if capacity is not None:corridor_capacity.append(capacity)
+        bottleneck=min(corridor_capacity,default=0)
+        speed=result.best.average_groundspeed_kmh if result.best else progress
+        score=(good,result.verdict!='INSUFFICIENT DATA',speed,bottleneck,street,-abs(result.distance_km-target_km))
         scored.append((score,task))
     return tuple(task for _,task in sorted(scored,key=lambda item:item[0],reverse=True)[:limit])
