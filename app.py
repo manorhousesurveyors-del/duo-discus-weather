@@ -26,7 +26,7 @@ import importlib
 import runtime_imports
 
 # The compatibility registry itself may also predate this deployment.
-if getattr(runtime_imports,'API_REVISION',0)<4:
+if getattr(runtime_imports,'API_REVISION',0)<5:
     importlib.reload(runtime_imports)
 optional_module=runtime_imports.optional_module
 
@@ -45,7 +45,7 @@ from data_ingestion import (AviationWeatherClient, Forecast, IngestionError, Jso
 from soaring_physics import (CP, RD, Profile, dewpoint_c, distance_bearing,
                              evaluate_thermals, evaluate_wave, rank_wave_sites)
 
-MODEL_LABELS = {'ifs025':'ECMWF · medium range', 'ukmo':'Met Office · UK 2 km', 'icon_eu':'DWD ICON-EU · 7 km'}
+MODEL_LABELS = {'ukmo':'Met Office · UKV / seamless', 'ifs025':'ECMWF · medium range', 'icon_eu':'DWD ICON-EU · 7 km'}
 CATEGORY_COLOURS = {'VFR':'#15835d','MVFR':'#2674c5','IFR':'#d84949','LIFR':'#a342ac','UNKNOWN':'#6c7780'}
 
 
@@ -174,9 +174,9 @@ def sounding_figure(profile: Profile) -> go.Figure:
     return fig
 
 
-def meteogram_figure(forecast: Forecast, day) -> go.Figure:
+def meteogram_figure(forecast: Forecast, day, loading='dry') -> go.Figure:
     times = [t for t in forecast.times if t.astimezone(LOCAL_TIMEZONE).date()==day]
-    thermal = [evaluate_thermals(Profile.from_forecast(forecast,t)) for t in times]
+    thermal = [evaluate_thermals(Profile.from_forecast(forecast,t),loading) for t in times]
     fig = make_subplots(rows=3,cols=1,shared_xaxes=True,vertical_spacing=.08,
                         subplot_titles=('Net climb · kt','Potential cloud base · ft AMSL','Wind / precipitation'),
                         specs=[[{}],[{}],[{'secondary_y':True}]])
@@ -199,8 +199,8 @@ def cached_sounding(run_id,when,*,_forecast):
 
 
 @st.cache_data(ttl=1800,max_entries=32,show_spinner=False)
-def cached_meteogram(run_id,day,*,_forecast):
-    return meteogram_figure(_forecast,day).to_plotly_json()
+def cached_meteogram(run_id,day,loading='dry',*,_forecast):
+    return meteogram_figure(_forecast,day,loading).to_plotly_json()
 
 
 def _destination(latitude,longitude,bearing,distance_km):
@@ -350,7 +350,7 @@ def build_map(forecasts, when, *, layers, aviation=None, radar=None, convergence
     for forecast in (forecasts if visual_mode is None or set(layers)&{'Thermals','Cloud base','Wave sites'} else ()):
         try: profile=Profile.from_forecast(forecast,when)
         except KeyError: continue
-        t=evaluate_thermals(profile); lat,lon=forecast.location.latitude,forecast.location.longitude
+        t=evaluate_thermals(profile,loading); lat,lon=forecast.location.latitude,forecast.location.longitude
         if t.net_climb_knots is not None: thermal_samples.append([lat,lon,t.net_climb_knots])
         if t.cloud_base_ft_amsl is not None: cloud_samples.append([lat,lon,t.cloud_base_ft_amsl])
         label=html.escape(forecast.location.name)
@@ -503,8 +503,9 @@ def _main():
         st.subheader('Forecast controls')
         visual_mode=st.selectbox('Map mode',list(MODES),format_func=MODES.get,key='visual_mode',
             help='Choose one main map view. The floating Map modes menu offers the same choices; Clean Map hides weather overlays.')
+        if 'forecast_model' not in st.session_state:st.session_state['forecast_model']='ifs025' if recorded else 'ukmo'
         model_key=st.selectbox('Forecast model',list(MODEL_LABELS),format_func=MODEL_LABELS.get,key='forecast_model',
-            help='Choose one model for the displayed weather and task calculations. UKMO covers about two days; ECMWF provides the longer-range fallback as an explicit selection.')
+            help='UKMO seamless prioritises UKV over the UK. The probe labels ECMWF fallback columns if the preferred model lacks usable data. Other selections remain model-specific.')
         if 'bot_forecast_day' in st.session_state:
             st.session_state['forecast_day']=st.session_state.pop('bot_forecast_day')
         default_day=1 if anchor.astimezone(LOCAL_TIMEZONE).hour>=13 else 0
@@ -514,7 +515,7 @@ def _main():
         hour=st.slider('Local time · Europe/London',9,19,13,format='%d:00',key='forecast_hour',
             help='Select the map and sounding hour, using BST in summer and GMT in winter. Task assessment still checks the whole 10:00–18:00 soaring window.')
         loading=st.radio('Wing loading',['dry','ballasted'],format_func=lambda v:'Dry · 34 kg/m²' if v=='dry' else 'Ballasted · 43 kg/m²',
-            horizontal=True,key='wing_loading',help='Select the Duo Discus polar used for MacCready cruise and task ground speed. The thermal estimate retains the specified 1.6 kt circling sink.')
+            horizontal=True,key='wing_loading',help='Select the Duo Discus polar used for MacCready cruise and task ground speed. The same polar gives the bank-adjusted circling sink, deducted once from estimated thermal-core lift.')
         with st.expander('More layers and click settings',expanded=False):
             st.toggle('Thermals on by default',value=default_thermal,key='thermal_default',on_change=thermal_default_changed,
                 help='Choose whether the thermal overlay starts enabled. This preference is stored in the page URL, so bookmarking or reopening that URL preserves it.')
@@ -568,7 +569,8 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
     from help_guide import render_help
     from app_cache import forecast_run_id
     if recorded:
-        forecasts=tuple(f for f in recorded.forecasts if f.model==FORECAST_MODELS[model_key].api_name); errors=recorded.errors
+        forecasts=tuple(f for f in recorded.forecasts if f.model==FORECAST_MODELS[model_key].api_name or (model_key=='ukmo' and f.model=='ukmo_uk_deterministic_2km')); errors=recorded.errors
+        st.session_state['forecast_fallback:'+model_key]=tuple(f for f in recorded.forecasts if model_key=='ukmo' and f.model=='ecmwf_ifs025')
     elif active_page in ('Help Guide','Help & Briefing Bot','Data quality','Live OGN Glider Radar'):
         forecasts=st.session_state.get('forecast_bundle:'+model_key,())
         errors=()
@@ -577,7 +579,9 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
         pending=load_sites(model_key,bucket)
         if pending.done():
             batch=pending.result()
-            forecasts,errors=batch.forecasts,tuple(f.message for f in batch.failures)
+            forecasts=tuple(f for f in batch.forecasts if f.model==FORECAST_MODELS[model_key].api_name)
+            st.session_state['forecast_fallback:'+model_key]=tuple(f for f in batch.forecasts if f.model!=FORECAST_MODELS[model_key].api_name)
+            errors=tuple(f.message for f in batch.failures)
         else:
             forecasts=st.session_state.get('forecast_bundle:'+model_key,())
             errors=()
@@ -703,10 +707,10 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
         if convergence is None or convergence.valid_surface_cells<.8*convergence.total_cells:
             st.warning('Convergence coverage is incomplete at this hour.')
     profiles=profiles_at(combined,when)
-    local=profiles.get('region:shropshire'); thermal=evaluate_thermals(local) if local else None
+    local=profiles.get('region:shropshire'); thermal=evaluate_thermals(local,loading) if local else None
     metrics=st.columns(4)
     metrics[0].metric('LONG MYND · NET CLIMB','—' if thermal is None or thermal.net_climb_knots is None else f'{thermal.net_climb_knots:.1f} kt',
-        help='Estimated convective climb after the 1.6 kt Duo Discus circling sink. Task decisions use the conservative soil-moisture estimate, which may be lower.')
+        help='Estimated core updraught after one polar-derived Duo Discus circling sink deduction, floored at zero. Task decisions use the conservative soil-moisture estimate, which may be lower.')
     metrics[1].metric('POTENTIAL CLOUD BASE','—' if thermal is None or thermal.cloud_base_ft_amsl is None else f'{thermal.cloud_base_ft_amsl:,.0f} ft',
         help='Hennig condensation-height estimate in feet AMSL. Compare with usable mixing top; cumulus may not form if mixing ends below this height.')
     metrics[2].metric('USABLE MIXING TOP','—' if thermal is None or thermal.usable_top_ft_amsl is None else f'{thermal.usable_top_ft_amsl:,.0f} ft',
@@ -746,6 +750,8 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
             completed=bundle.completed(model_key) if bundle is not None and bundle.cycle==bucket else None
             if completed is not None:
                 probe_forecasts=tuple({(f.location.key,f.model):f for f in (*combined,*completed.batch.forecasts)}.values())
+        if probe_enabled and model_key=='ukmo':
+            probe_forecasts=(*probe_forecasts,*st.session_state.get('forecast_fallback:'+model_key,()))
         from map_component import document_version
         document_key=document_version(map_forecasts,when,visual_mode,tuple(layers),loading,
             catalog.content_sha256,points,show_airfields,bool(recorded),
@@ -758,9 +764,9 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
             if probe_enabled:
                 try:
                     probe=importlib.import_module('point_forecast_meteogram')
-                    if getattr(probe,'PROBE_API_REVISION',0)<2:
+                    if getattr(probe,'PROBE_API_REVISION',0)<3:
                         probe=importlib.reload(probe)
-                    probe.add_probe(view,probe_forecasts,day,aviation=aviation)
+                    probe.add_probe(view,probe_forecasts,day,aviation=aviation,loading=loading)
                 except Exception:
                     # An optional chart or stale module must never prevent maps
                     # or other pages loading. Keep the ordinary map operational.
@@ -827,9 +833,9 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
             else:
                 st.plotly_chart(cached_sounding(forecast_run_id((chosen,)),when,_forecast=chosen),width='stretch',key='sounding')
                 st.caption('Skew-T: temperature orange, dewpoint green. Hover for actual °C; dry/saturated adiabats are guides.')
-            st.plotly_chart(cached_meteogram(forecast_run_id((chosen,)),day,_forecast=chosen),width='stretch',key='meteogram')
+            st.plotly_chart(cached_meteogram(forecast_run_id((chosen,)),day,loading,_forecast=chosen),width='stretch',key='meteogram')
             with st.expander('Profile assumptions'):
-                for note in evaluate_thermals(selected_profile).notes: st.write(note)
+                for note in evaluate_thermals(selected_profile,loading).notes: st.write(note)
 
 
 def main():

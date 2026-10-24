@@ -3,9 +3,9 @@
 ## Architecture inputs
 
 The nine monitoring coordinates, reciprocal ridge wind azimuths, 15 ICAO codes,
-alert recipients, task distances and estimated 1.6 kt circling sink are from the
-user's [master specification](specification.md). The circling sink estimate is
-not inferred from the straight-flight polar. The recipients are defaults for
+alert recipients and task distances are from the
+user's [master specification](specification.md). The current circling estimate
+uses the retained straight-flight polar with the bank correction described below. The recipients are defaults for
 later configuration; Modules 1 and 2 do not send messages.
 
 The specification describes Route A returning to Church Stretton in Module 1,
@@ -83,20 +83,21 @@ Documentation: [forecast API](https://open-meteo.com/en/docs),
 [DWD](https://open-meteo.com/en/docs/dwd-api), and
 [ECMWF](https://open-meteo.com/en/docs/ecmwf-api).
 The documentation/API hosts were blocked by the environment's proxy during
-implementation, so the provider's published source was inspected through the
+the initial implementation, so the provider's published source was inspected through the
 available GitHub connection at commit
 [`ae5caa86c8b8b5e9c6d5f0b8b48f69dc36487bb4`](https://github.com/open-meteo/open-meteo/tree/ae5caa86c8b8b5e9c6d5f0b8b48f69dc36487bb4).
 Source inspection establishes the intended contract, not deployment equivalence
 or a successful live service check.
 
 - `Sources/App/Controllers/ForecastapiController.swift` exposes
-  `ukmo_uk_deterministic_2km`, `icon_eu` and **`ecmwf_ifs025`** at `/v1/forecast`.
+  `ukmo_seamless`, `icon_eu` and **`ecmwf_ifs025`** at `/v1/forecast`.
   `ifs025` remains the local configuration key, not the outbound API name.
 - `Sources/App/Helper/ForecastapiQuery.swift` defines `forecast_hours` starting at
-  the current hour. Requests use 49, 121 and 145 samples to include the 48-,
-  120- and 144-hour endpoints respectively. Model data can stop earlier or be null.
+  the current hour. Single-model requests now use 121 or 145 samples for the
+  120- and 144-hour endpoints. Paired regional/grid requests use 120 forward hours
+  plus 24 past hours. Model data can stop earlier or be null.
 - `ForecastapiController.swift` represents unsupported hourly fields with null
-  arrays and undefined units. All 61 requested variables are sent; the normalizer
+  arrays and undefined units. The current 108-field schema includes pressure-level cloud cover; the normalizer
   preserves missing arrays, counts and units without substituting another model.
 - `Sources/App/UKMO/UkmoVariable.swift` excludes pressure-level vertical velocity
   from the UK 2 km download. The generic pressure variable exists in the API but
@@ -148,3 +149,15 @@ revealed empty-string visibility in conditional groups at EGOS, EGTC and EGXW;
 this is now retained as unspecified visibility and covered by a regression test.
 Offline tests are synthetic and exercise successful and failing response
 contracts, data quality, transport handling and database concurrency.
+
+
+The 25 October probe correction retains the published Duo polar coefficients and
+uses a 25° bank correction (about 1.37 kt dry / 1.54 kt ballasted) for circling sink.
+See `docs/physics.md` for the explicit estimated heat/core/usable-height method.
+Live sessions default to UKMO seamless, which uses UKV over the UK where available
+and Met Office global data beyond that coverage; “2 km” is not promised for every
+lead time. Regional UKMO requests include `models=ukmo_seamless,ecmwf_ifs025` and
+`cell_selection=land`. Returned suffixed columns remain separate models. The
+optional probe prefers usable UKMO samples, labels ECMWF fallback by hour, and
+never blends variables from two models into a single source profile. Older
+recorded UK deterministic snapshots remain readable.

@@ -113,7 +113,7 @@ def soaring_samples(forecasts, when, loading):
     for f in forecasts:
         try: profile = Profile.from_forecast(f, when)
         except KeyError: continue
-        thermal = evaluate_thermals(profile)
+        thermal = evaluate_thermals(profile,loading)
         climb, top = thermal.conservative_climb_knots, thermal.usable_top_ft_amsl
         wind = wind_vector(profile, 925) or wind_vector(profile, 850)
         xc = stf = None

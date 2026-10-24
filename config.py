@@ -25,7 +25,7 @@ MPS_TO_KNOTS = 3600 / 1852
 AIRCRAFT_REGISTRATION = "G-CKML"
 AIRCRAFT_MODEL = "Schempp-Hirth Duo Discus (original)"
 TASK_DISTANCES_KM = (250, 300, 500, 750)
-CIRCLING_SINK_KNOTS = 1.6  # User's estimate for 40-degree bank, not a polar fit.
+CIRCLING_SINK_KNOTS = 1.4  # Rounded dry reference; calculations use the polar below.
 TASK_LOCAL_HOURS = tuple(range(10, 19))
 DASHBOARD_LOCAL_HOURS = tuple(range(9, 20))
 ALERT_HORIZONS_DAYS = (5, 2)
@@ -194,6 +194,19 @@ DUO_DISCUS_POLARS: Mapping[str, Polar] = MappingProxyType({
     "dry": _scaled_polar(34.0), "ballasted": _scaled_polar(43.0),
 })
 
+def duo_circling_sink_knots(loading='dry', bank_degrees=25.0):
+    """Polar minimum within its fitted range, scaled for a coordinated bank.
+
+    s_bank = s_straight * load_factor**1.5, with speed scaled by sqrt(load_factor).
+    The default is a representative thermalling turn, not a measured aircraft value.
+    """
+    if not math.isfinite(bank_degrees) or not 0 <= bank_degrees <= 60:
+        raise ValueError('Thermalling bank must be between 0 and 60 degrees')
+    polar=DUO_DISCUS_POLARS[loading]
+    speed=max(polar.min_fit_speed_mps,min(polar.max_fit_speed_mps,-polar.b/(2*polar.a)))
+    return polar.sink_mps(speed)*MPS_TO_KNOTS/math.cos(math.radians(bank_degrees))**1.5
+
+
 SURFACE_VARIABLES = (
     "temperature_2m", "dew_point_2m", "surface_pressure", "pressure_msl",
     "cloud_cover", "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high",
@@ -205,7 +218,7 @@ SURFACE_VARIABLES = (
 PRESSURE_LEVELS_HPA = (1000, 950, 925, 850, 800, 700, 600, 500, 400, 300, 250, 200)
 PRESSURE_VARIABLES = (
     "temperature", "relative_humidity", "wind_speed", "wind_direction",
-    "geopotential_height", "vertical_velocity",
+    "geopotential_height", "vertical_velocity", "cloud_cover",
 )
 def forecast_variables():
     """Surface and pressure fields, including high cloud through 200 hPa."""
@@ -228,8 +241,9 @@ class ForecastModel:
 
 
 FORECAST_MODELS: Mapping[str, ForecastModel] = MappingProxyType({
-    "ukmo": ForecastModel("ukmo", "ukmo_uk_deterministic_2km", 2, 48,
-        "Pressure vertical velocity, soil moisture and boundary layer height may be unavailable."),
+    "ukmo": ForecastModel("ukmo", "ukmo_seamless", 2, 120,
+        "UKV at UK points with global Met Office coverage beyond its range; effective resolution varies. "
+        "Missing fields remain explicit; the probe can use a labelled ECMWF fallback."),
     "icon_eu": ForecastModel("icon_eu", "icon_eu", 7, 120,
         "120-hour lead on main runs; shorter intermediate runs. No pressure vertical velocity."),
     "ifs025": ForecastModel("ifs025", "ecmwf_ifs025", 25, 144,

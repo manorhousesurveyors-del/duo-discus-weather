@@ -35,7 +35,7 @@ class PointDataTests(unittest.TestCase):
             'geopotential_height_200hPa':12000.,'temperature_200hPa':-56.})
         row=probe.hour_sample(source,NOW);values=dict(zip(probe.FIELDS,row['s']))
         thermal=evaluate_thermals(Profile.from_forecast(source,NOW))
-        self.assertAlmostEqual(values['climb'],thermal.conservative_climb_knots,places=3)
+        self.assertAlmostEqual(values['climb'],thermal.net_climb_knots,places=3)
         self.assertAlmostEqual(values['gust'],20*1.943844,places=3)
         self.assertEqual(values['mslp'],1011.)
         level=row['p'][probe.LEVELS.index(250)]
@@ -52,7 +52,7 @@ class PointDataTests(unittest.TestCase):
         self.assertTrue(all(x is None for x in missing['s']))
         self.assertTrue(all(x is None for p in missing['p'] for x in p))
         row=probe.hour_sample(source,NOW)
-        self.assertEqual(row['p'][probe.LEVELS.index(250)],[None]*4)
+        self.assertEqual(row['p'][probe.LEVELS.index(250)],[None]*5)
         self.assertIsNone(row['s'][probe.FIELDS.index('gust')])
         json.dumps(row,allow_nan=False)
 
@@ -64,7 +64,7 @@ class PointDataTests(unittest.TestCase):
             self.assertEqual(compute.call_count,26)
             probe.prepare_bundle(forecast_run_id(forecasts),NOW.date()+timedelta(days=1),_forecasts=forecasts)
             self.assertEqual(compute.call_count,52)
-        other=replace(source,model=FORECAST_MODELS['ukmo'].api_name)
+        other=replace(source,model=FORECAST_MODELS['icon_eu'].api_name)
         with self.assertRaisesRegex(ValueError,'single named'):
             probe.prepare_bundle(('different',),NOW.date(),_forecasts=(source,other))
 
@@ -119,7 +119,7 @@ class PointIsolationTests(unittest.TestCase):
                 self.assertEqual(probe.PROBE_API_REVISION,1)  # Off remains dormant.
                 at.toggle(key='point_probe_enabled').set_value(True).run()
                 self.assertFalse(at.exception)
-                self.assertEqual(probe.PROBE_API_REVISION,2)
+                self.assertEqual(probe.PROBE_API_REVISION,3)
                 self.assertFalse(any('temporarily unavailable' in w.value for w in at.warning))
 
     def test_off_never_imports_probe_other_pages_reset_and_import_failure_is_local(self):

@@ -216,7 +216,7 @@ def task_result(points,assessment,*,key='map'):
              'Ground km/h':'Harmonic leg progress including climb time and vector wind correction. Zero means a blocking condition; blank means missing weather.',
              'Cruise km/h':'MacCready cruise airspeed averaged along this leg; bounded to the supported polar fit.',
              'STF kt':'Recommended MacCready cruise airspeed in knots for this leg and hour, using the selected wing loading.',
-             'Net climb kt':'Lowest conservative net thermal climb along this leg, after the 1.6 kt circling sink deduction.',
+             'Net climb kt':'Lowest conservative net thermal climb along this leg, after one loading-specific, polar-derived circling sink deduction.',
              'Usable depth m':'Minimum usable thermal height above model terrain. The default hard minimum is 500 m AGL.',
              'Cloud base ft AMSL':'Lowest estimated condensation height along the leg; usable mixing top can be lower.',
              'Along wind kt':'Positive is tailwind along this leg; negative is headwind. Both climb and glide drift enter the speed calculation.',

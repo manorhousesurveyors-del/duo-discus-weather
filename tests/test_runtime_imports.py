@@ -72,7 +72,7 @@ runtime_imports.LAZY_APIS={}
 del map_component.cached_document
 map_modes.add_map_modes=lambda view:None
 import app
-assert runtime_imports.API_REVISION==4
+assert runtime_imports.API_REVISION==5
 assert callable(map_component.cached_document)
 assert runtime_imports._supports(map_modes,{'add_map_modes':('wind_product',)})
 """

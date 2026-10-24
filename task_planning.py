@@ -26,7 +26,7 @@ MAX_TASK_POINTS = 20
 SAMPLE_SPACING_KM = 35.0
 MINIMUM_USABLE_DEPTH_M = 500.0
 FULL_MARGIN_DEPTH_M = 650.0
-FORECAST_PREFERENCE = ('ukmo_uk_deterministic_2km','icon_eu','ecmwf_ifs025')
+FORECAST_PREFERENCE = ('ukmo_seamless','ukmo_uk_deterministic_2km','icon_eu','ecmwf_ifs025')
 
 
 def validate_task(points: Iterable[Turnpoint], *, allow_incomplete=False) -> tuple[Turnpoint, ...]:
@@ -196,7 +196,7 @@ def assess_task(points: Iterable[Turnpoint], forecasts: Iterable[Forecast], day:
             forecast=select_forecast(forecasts,point.key,when,preference)
             if forecast is None:
                 weather[point.key,hour]=None; missing_any=missing_any or hour<8; continue
-            profile=Profile.from_forecast(forecast,when); thermal=evaluate_thermals(profile)
+            profile=Profile.from_forecast(forecast,when); thermal=evaluate_thermals(profile,loading)
             wind=next((l for l in (profile.level(925),profile.level(850)) if l and l.u_mps is not None),None)
             if thermal.conservative_climb_knots is None or thermal.usable_top_ft_amsl is None or wind is None:
                 weather[point.key,hour]=None; missing_any=missing_any or hour<8; continue
@@ -329,7 +329,7 @@ def classify_day(forecasts: Iterable[Forecast], origin: GeoPoint, day: date, loa
         when=utc_datetime(datetime.combine(day,time(hour),LOCAL_TIMEZONE))
         forecast=select_forecast(forecasts,origin.key,when,preference)
         if forecast is None: run=0.; continue
-        profile=Profile.from_forecast(forecast,when); thermal=evaluate_thermals(profile)
+        profile=Profile.from_forecast(forecast,when); thermal=evaluate_thermals(profile,loading)
         wind=next((l for l in (profile.level(925),profile.level(850)) if l and l.u_mps is not None),None)
         if thermal.conservative_climb_knots is None or thermal.usable_top_ft_amsl is None or wind is None:
             run=0.; continue

@@ -409,3 +409,20 @@ python scripts/verify_point_probe.py
 The fixture is synthetic and explicitly presented as a recorded snapshot. Browser
 checks abort external traffic and retain screenshots/timings under
 `var/point-probe-browser/`. No new dependency, secret or network hostname is needed.
+
+
+### Thermal-core and cloud correction (25 October probe)
+
+Probe API revision 3 adds loading, raw core/sink fields, distinct UKMO/ECMWF series
+and pressure-level cloud cover. Runtime compatibility revision 5 refreshes the
+physics providers and their already-loaded consumers in dependency order;
+forecast-derived cache identities include physics revision 2. The optional probe
+is still imported only when enabled, and OGN workers are not reloaded. A paired
+regional request is cached by forecast cycle and model; switching day/hour or
+clicking a point never issues another paired request.
+
+`python scripts/verify_thermal_probe.py` runs the actual production Python physics
+and JavaScript canvas in Chromium with explicitly synthetic 25 October cases.
+It checks nominal/ballasted climb, zero floors, usable AGL/MSL, distinct per-hour
+fallback models, near-base cumulus, all three cloud bands, and actual blue/grey/
+white pixels. No public data or notifications are requested by that test.

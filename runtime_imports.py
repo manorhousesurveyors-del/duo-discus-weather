@@ -10,7 +10,7 @@ import sys
 from threading import RLock
 
 # Bump when new compatibility contracts must reach an already-running app.
-API_REVISION = 4
+API_REVISION = 5
 
 _lock = RLock()
 _log = logging.getLogger(__name__)
@@ -18,11 +18,16 @@ _log = logging.getLogger(__name__)
 # Dependency order matters: a reloaded consumer must bind the current providers.
 # Empty tuples check function presence; other tuples check newly added keywords.
 LAZY_APIS = {
-    'config': {'forecast_variables': ()},
-    'data_ingestion': {'parse_forecast': ('variables',)},
+    'config': {'forecast_variables': (), 'duo_circling_sink_knots': ()},
+    'data_ingestion': {'parse_forecast': ('variables',), 'split_model_response': ()},
+    'soaring_physics': {'evaluate_thermals': ('loading',), 'thermal_usable_depth': ()},
+    'task_planning': {'assess_task': ()},
+    'map_weather': {'soaring_samples': ()},
+    'day_rating': {'rate_day': ()},
+    'alerts': {'load_bundle': ()},
     'uk_map_grid': {'grid_variables': ()},
     'json_payload': {'display_coordinates': ()},
-    'app_cache': {'file_version': (), 'catalog_resource': (), 'forecast_run_id': (),
+    'app_cache': {'file_version': (), 'catalog_resource': (), 'forecast_run_id': ('physics_revision',),
                   'day_summary': (), 'assessed_task': (), 'gemini_discovery': ()},
     'terrain_wave': {'prepare_terrain': (), 'solve_field': ('prepared',)},
     'briefing_bot': {'site_evidence': ('maximum_km',)},
@@ -57,7 +62,9 @@ def refresh_cached_modules():
     with _lock:
         for name, api in LAZY_APIS.items():
             module = sys.modules.get(name)
-            if module is not None and not _supports(module, api):
+            # Consumers must rebind functions after the physics/config update.
+            changed_physics=bool({'config','data_ingestion','soaring_physics'} & set(refreshed))
+            if module is not None and (not _supports(module, api) or changed_physics):
                 importlib.invalidate_caches()
                 module = importlib.reload(module)
                 if not _supports(module, api):

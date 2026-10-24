@@ -58,7 +58,7 @@ def energy_line(points,forecasts,when,loading='dry',airspace=None):
         if f is None:return None
         try:p=Profile.from_forecast(f,when)
         except KeyError:return None
-        t=evaluate_thermals(p);wind=p.level(925) or p.level(850)
+        t=evaluate_thermals(p,loading);wind=p.level(925) or p.level(850)
         if (t.conservative_climb_knots is None or t.conservative_climb_knots<=0 or t.usable_top_ft_amsl is None
             or t.usable_top_ft_amsl/METRES_TO_FEET-f.terrain_elevation_m<500
             or p.values.get('precipitation') is None or p.values['precipitation']>=1 or wind is None or wind.u_mps is None):return None

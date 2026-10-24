@@ -192,7 +192,7 @@ async def verify(args):
         await page.screenshot(path=str(output/'briefing.png'),full_page=True)
         # The recorded fixture has no UKMO data. Every map must still mount.
         await page.get_by_role('combobox',name='Forecast model',exact=True).click()
-        await page.get_by_role('option',name='Met Office · UK 2 km',exact=True).click()
+        await page.get_by_role('option',name='Met Office · UKV / seamless',exact=True).click()
 
         result['missing_forecast_maps']={}
         for name,selector in [('Task planner','[data-action="clear"]'),('Wave watch','[data-wave-level="0"]'),('Live OGN Glider Radar','[data-ogn="demo"]')]:

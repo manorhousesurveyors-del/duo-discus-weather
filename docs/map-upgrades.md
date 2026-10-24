@@ -162,12 +162,13 @@ astronomical times, not a prediction of sunlight through cloud). The numerical
 table beneath the canvas provides accessible values.
 
 - The lower 7,000 ft receives extra vertical space; the scale reaches 38,000 ft.
-- Clouds are a relative-humidity/model-cover proxy. Hatching means missing data.
-- Indigo, blue, cyan and mint contours show conservative net thermal strength
-  below the estimated thermal top.
+- Grey decks from 1,500–38,000 ft use pressure-level RH/cloud cover and low/mid/high cover. They remain cloud proxies; hatching marks unavailable layers.
+- Indigo, blue, cyan and mint contours show non-negative Duo net thermal strength
+  below its usable zero-net-climb height.
 - Rose is the LCL: terrain feet + `400 × max(0, T₂m − Td₂m)`.
 - Solid black is the estimated thermal/mixing top. Stacked scalloped puffs fill
-  positive thermal-top minus LCL depth; deep stacks show deeper possible cloud
+  positive thermal-top minus LCL depth, with shallow puffs at contact or within
+  250 ft when boundary-layer RH >80% or low cloud >20%; deep stacks show deeper possible cloud
   and high low-cloud cover darkens the stacks. These are model cloud estimates,
   not confirmation of towering cumulus or a thunderstorm prediction.
 - The bordered **Soarable Height** rows exclude cloud depth. An unsoarable hour
@@ -195,3 +196,13 @@ initialisation time in this response. Missing forecast days or pressure levels
 are not extrapolated. The standard cached profiles now include 250 and 200 hPa,
 so new responses can bracket the upper part of the plot. Existing older snapshots
 continue to show unavailable upper bands until refreshed.
+
+
+The probe carries raw core updraught and the selected Duo polar's bank-adjusted
+sink separately. Spatial/half-hour interpolation happens before **one** sink
+subtraction and rounding; negative net lift displays 0. Usable AGL comes from the
+same column profile, capped at cloud base, rather than a blanket “500 ft depth”
+cutoff. Select **Met Office · UKV / seamless** for UKMO-first samples and labelled
+ECMWF fallback; explicit ECMWF/ICON selections remain model-specific. The chart's
+accessible table gives the source model for every hourly cell. No point click
+starts a network request.

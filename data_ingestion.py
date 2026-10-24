@@ -12,7 +12,7 @@ import argparse
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from http.client import HTTPException
@@ -291,6 +291,15 @@ def _expected_units(variable: str) -> set[str]:
     }.get(variable, {"m"} if variable.startswith("geopotential_height_") else set())
 
 
+def split_model_response(body, model_name):
+    """Open-Meteo multi-model columns carry a model suffix; never blend them."""
+    suffix='_'+model_name
+    return {**body,'hourly':{'time':body.get('hourly',{}).get('time'),
+        **{key[:-len(suffix)]:value for key,value in body.get('hourly',{}).items() if key.endswith(suffix)}},
+        'hourly_units':{'time':body.get('hourly_units',{}).get('time'),
+        **{key[:-len(suffix)]:value for key,value in body.get('hourly_units',{}).items() if key.endswith(suffix)}}}
+
+
 def parse_forecast(response: JsonResponse, location: GeoPoint, model: ForecastModel, *, variables=HOURLY_VARIABLES) -> Forecast:
     body = response.body
     if not isinstance(body, dict) or not isinstance(body.get("hourly"), dict) or not isinstance(body.get("hourly_units"), dict):
@@ -395,6 +404,40 @@ class OpenMeteoClient:
                     failures[i, j] = FetchFailure(point.key, model.api_name, str(exc))
         return ForecastBatch(tuple(results[key] for key in sorted(results)),
                              tuple(failures[key] for key in sorted(failures)))
+
+    def fetch_paired(self, locations, *, batch_size=20):
+        """Fetch UKMO + ECMWF together, retaining distinct models and missing fields."""
+        points=tuple(locations)
+        if not points or len(points)>self.settings.max_grid_points or not 1<=batch_size<=50:
+            raise ValueError('Invalid paired forecast point budget or batch size')
+        models=(FORECAST_MODELS['ukmo'],FORECAST_MODELS['ifs025'])
+        def chunk_job(chunk):
+            response=self.http.get_json(OPEN_METEO_URL,{
+                'latitude':','.join(str(p.latitude) for p in chunk),
+                'longitude':','.join(str(p.longitude) for p in chunk),
+                'models':','.join(m.api_name for m in models),'hourly':','.join(HOURLY_VARIABLES),
+                'forecast_hours':120,'past_hours':24,'timezone':'GMT','timeformat':'unixtime',
+                'wind_speed_unit':'ms','temperature_unit':'celsius','precipitation_unit':'mm',
+                'cell_selection':'land'},ttl_seconds=self.settings.forecast_cache_seconds)
+            bodies=[response.body] if isinstance(response.body,dict) else response.body
+            if not isinstance(bodies,list) or len(bodies)!=len(chunk):raise SchemaError('Paired response count does not match request')
+            forecasts=[];failures=[]
+            for index,(point,body) in enumerate(zip(chunk,bodies)):
+                if not isinstance(body,dict) or body.get('location_id',index)!=index:raise SchemaError('Paired response order is invalid')
+                for model in models:
+                    try:
+                        forecasts.append(parse_forecast(JsonResponse(split_model_response(body,model.api_name),response.fetched_at,response.from_cache),point,model))
+                    except IngestionError as exc:failures.append(FetchFailure(point.key,model.api_name,str(exc)))
+            return forecasts,failures
+        forecasts=[];failures=[]
+        with ThreadPoolExecutor(max_workers=self.settings.http_workers) as pool:
+            jobs={pool.submit(chunk_job,points[i:i+batch_size]):points[i:i+batch_size] for i in range(0,len(points),batch_size)}
+            for future in as_completed(jobs):
+                try:
+                    good,bad=future.result();forecasts.extend(good);failures.extend(bad)
+                except IngestionError as exc:
+                    failures.extend(FetchFailure(p.key,m.api_name,str(exc)) for p in jobs[future] for m in models)
+        return ForecastBatch(tuple(sorted(forecasts,key=lambda f:(f.location.key,f.model))),tuple(failures))
 
     def fetch_batched(self, locations: Iterable[GeoPoint], models: Iterable[ForecastModel], *,
                       variables: Iterable[str] = HOURLY_VARIABLES, batch_size: int = 20) -> ForecastBatch:
@@ -795,6 +838,8 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
 def forecast_from_snapshot(record: Mapping[str, Any]) -> Forecast:
     """Revalidate an exported Forecast rather than trusting serialized arrays."""
     model = next((m for m in FORECAST_MODELS.values() if m.api_name == record.get('model')), None)
+    if model is None and record.get('model')=='ukmo_uk_deterministic_2km':
+        model=replace(FORECAST_MODELS['ukmo'],api_name='ukmo_uk_deterministic_2km',horizon_hours=48)
     if model is None:
         raise SchemaError('Snapshot has an unknown forecast model')
     location = GeoPoint(**record['location'])

@@ -91,7 +91,7 @@ class PointPrecipitationTests(unittest.TestCase):
             result = app.radar_point_result((53, -2), NOW, 'ukmo', 1)
             self.assertIsNone(result['rate']); self.assertIn('Timed out', result['error'])
             self.assertEqual(result['latitude'], 53)
-            self.assertEqual(result['model'], 'ukmo_uk_deterministic_2km')
+            self.assertEqual(result['model'], 'ukmo_seamless')
             fetch.reset_mock()
             result = app.radar_point_result((53, -2), NOW, 'ukmo', 1, recorded=True)
             self.assertIsNone(result['rate']); self.assertIn('Recorded snapshot', result['error'])

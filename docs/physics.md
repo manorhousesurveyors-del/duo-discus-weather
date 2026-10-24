@@ -20,31 +20,50 @@ excess is added. The initial surface comparison has a 0.01 K numerical tolerance
 An unbracketed top remains unavailable. Pressure levels below model terrain
 are excluded. This estimate cannot resolve shallow inversions between levels.
 
-Usable thermal top is the smaller of the LCL and mixing top. If the mixing
-top is more than 200 ft below the LCL, the result is labelled potential blue
-thermals instead of implying cumulus will form. Threshold flags retain net
-climb ≥3.5/4.5 kt and potential cloud base ≥4,500/5,000 ft. Alert eligibility
-uses **usable** top ≥4,500 ft, which also requires LCL ≥4,500 ft.
+The Duo Discus calculation uses **total shortwave radiation**, including diffuse
+light. The previous direct-radiation-only implementation omitted that energy and
+used a large missing-soil penalty; it subtracted sink once, not twice.
 
-Sensible heat is an explicit proxy, not a flux measured by these APIs:
+Sensible heat and core velocity remain explicit estimates:
 
 ```
-available_energy = max(direct_radiation, 0) × 0.8 × 0.7
+available_energy = max(shortwave_radiation, 0) × 0.8 × 0.7
+fraction = clamp(0.55 + 0.025 × max(T₂m − Td₂m, 0), 0.55, 0.8)
 wetness = clamp((soil_moisture − 0.05) / 0.35, 0, 1)
-Bowen_ratio = 4 × (1 − wetness) + 0.25 × wetness
-H = available_energy × Bowen_ratio / (1 + Bowen_ratio)
+H = available_energy × fraction × (1 − 0.35 × wetness)
 rho = surface_pressure_Pa / (287.05 × temperature_K)
 w_star = [g / temperature_K × H / (rho × 1004) × mixing_depth_m]^(1/3)
-net_climb_knots = w_star × 3600/1852 − 1.6
+w_core_kt = 1.35 × w_star × 3600/1852
+net_climb_kt = max(0, round(w_core_kt − circling_sink_kt, 1))
 ```
 
-The fixed albedo/energy factors and moisture-to-Bowen mapping have **not** been
-calibrated against UK glider observations. Direct radiation excludes diffuse
-input. `w*` is a convective velocity scale, not a measured thermal-core updraft.
-Missing soil moisture uses Bowen 1 nominal and 0.25 conservative; alerts and
-task capacity use the conservative climb. Missing radiation/depth/pressure/
-temperature does not produce a climb estimate. Zero radiation produces −1.6 kt
-after the requested circling sink deduction.
+When soil moisture is absent, the spread-derived fraction is used directly;
+a separate conservative sensitivity uses 15% less heat for task planning and
+alerts. It is not an additional sink deduction. Missing shortwave, temperature,
+dewpoint, pressure or mixing depth remains unavailable. Night-time zero radiation
+produces zero climb, never a negative thermal-strength cell.
+
+The existing dry (34 kg/m²) and ballasted (43 kg/m²) Duo Discus polar coefficients
+are unchanged. Minimum sink within the supported fit is adjusted for a
+representative **25° thermalling bank**, using `s_bank = s_straight / cos(bank)^1.5`.
+This gives about **1.37 kt dry** and **1.54 kt ballasted**. These are model estimates,
+not measured pilot/aircraft performance or the original 40°/1.6 kt assumption.
+The selected loading reaches the probe, task engine, day rating and map layers.
+
+Usable height is the upper zero-net-climb crossing of an idealised entraining
+column, capped at LCL. Above the 40%-depth core maximum,
+`w(z) = w_core × [(1 − z/zi) / 0.6]^(1/3)`, giving
+`z_usable = min(LCL_AGL, zi × [1 − 0.6 × (sink/w_core)^3])`.
+If rounded net climb is zero, usable AGL is zero and MSL is terrain; unavailable
+inputs remain dashes. A deep boundary layer by itself does not force positive
+lift. Rain and launch hazards continue to constrain tasks independently.
+
+The energy fraction, 1.35 core multiplier and vertical profile are transparent
+heuristics, not reverse-engineered SkySight physics or validation against UK
+flights. The requested moderate synthetic cases (300–350 W/m², 500–600 m mixing
+depth, 8°C / 4°C, missing soil) give 1.7–2.0 kt dry and usable height above 1,000 ft
+AGL. Wetter ground, lower cloud base or different temperature profiles change
+those results; the application does not force a target climb or height.
 
 Spread-out risk requires RH >85% at the available level nearest mixing top and
 low cloud >60%. Cloud-street potential requires mean available 925/850 hPa wind

@@ -872,3 +872,48 @@ cross-sections, all ten terrain coverage checks, seven demo gliders and maps wit
 missing model data. Its event accounting separates cache acknowledgements and
 explicit task recovery messages from actual user edits. All five headless
 browser scripts passed; no JavaScript errors or notifications were produced.
+
+
+## Duo thermal-core correction and cloud layers — 24 October 2026
+
+The full automated suite passed **266 tests** in 36.73 seconds. New cases cover
+300–350 W/m² total radiation and 500–600 m AGL depth, a single polar-derived sink
+deduction, zero night-time climb, positive usable height, ballast sensitivity,
+pressure cloud fields, separate UKMO/ECMWF API columns and legacy UK snapshots.
+The rain-gap integration test now uses a fixed cruise speed so its launch-window
+assertion tests temporal gaps independently of thermal recalibration. A final
+focused run passed 19 tests after extending legacy UK model selection.
+
+`verify_thermal_probe.py` executed the real Python and JavaScript implementations
+with labelled synthetic **Sun 25 Oct** cases. The dry case produced 1.8 kt during
+325 W/m² heating and 1,600 ft usable AGL at the chosen 1,460 ft site elevation.
+Night cells stayed at 0 kt / 0 ft AGL / terrain MSL. Dry, ballasted and paired-model
+renders took 16.6–64.8 ms; pixel checks confirmed blue contours, grey cloud decks
+and white cloud puffs, with shading in low/mid/high bands. The two-day paired test
+used UKMO on day one and distinctly labelled ECMWF on day two, without mixing
+variables across those source profiles. Actual charts are retained under the
+ignored `var/thermal-probe-browser/` directory.
+
+The full Streamlit probe browser passed coordinate/airfield/BGA clicks, default
+OFF, close/re-enable, isolation across all seven pages, cache recovery and high-DPI
+scenes, with no click-time requests/reruns or JavaScript errors. Coordinate and
+airfield draws reached the next paint frame in 25.7–42 ms; warm navigation medians
+were 189–323 ms. These are local recorded-fixture measurements, not a guarantee
+for every client or deployment. The separate lazy-page, physical route-drag and
+mocked Gemini browser checks passed as well; drag updates were 0.8–1.1 ms.
+
+A real, verified-TLS request to Open-Meteo used
+`models=ukmo_seamless,ecmwf_ifs025`, `cell_selection=land` and the full 108-field
+schema at Midland Gliding Club. Both models returned successfully within the
+configured single-attempt 3.5-second request timeout. Both omitted BLH, so the
+labelled dry-parcel fallback supplied mixing depth. On 25 October at 11:00–14:00
+UTC, ECMWF yielded 1.1–1.5 kt and roughly 1,120–1,524 ft usable AGL; UKMO differed
+because its temperature, radiation and pressure profiles differed. No values
+were forced to match SkySight, and this check does not validate model skill.
+No alert emails, WhatsApp messages or push notifications were sent.
+
+The broader client-map browser also passed route editing and completion, all
+three task soaring overlays, nine wave altitude controls, click/drag sections,
+all terrain coverage checks, demo traffic and missing-model map rendering. All
+six browser scripts passed. Dependency, Python compilation, JavaScript syntax
+and whitespace checks were clean.

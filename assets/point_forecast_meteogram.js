@@ -41,31 +41,45 @@ function installDuoPointProbe(map, data) {
   }return null;
  }
  function profileAt(point) {
-  let nearest=data.stations.map(station=>({station,d:distance(point,station)})).filter(s=>s.d<=data.max_distance_km).sort((a,b)=>a.d-b.d).slice(0,4);
+  const candidates=data.stations.map(station=>({station,d:distance(point,station)})).filter(s=>s.d<=data.max_distance_km).sort((a,b)=>a.d-b.d);
+  let nearest=candidates.slice(0,4);const usedStations=new Map();
   if(nearest[0]?.d<.05)nearest=nearest.slice(0,1);
   const raw=nearest.map(s=>1/Math.max(.05,s.d)**2),sum=raw.reduce((a,b)=>a+b,0),weights=raw.map(w=>w/sum);
   const terrain=finite(point.terrain)?point.terrain:nearest.length?weighted(nearest.map(s=>s.station.terrain),weights):null;
   const rows=data.columns.map(column=>{
+   const valid=series=>column.indices.every(i=>[0,2,data.fields.indexOf('core')].every(k=>finite(series.hours[i]?.s[k])));
+   const options=candidates.map(({station,d})=>{
+    const choices=station.series||[{model:data.model,hours:station.hours}];
+    return {station,d,series:choices.find(valid)||choices[0]};
+   });
+   let chosen=options.filter(o=>valid(o.series)).slice(0,4);
+   if(!chosen.length)chosen=options.slice(0,4);
+   if(chosen[0]?.d<.05)chosen=chosen.slice(0,1);
+   const providers=chosen.map(o=>o.series),rawWeights=chosen.map(o=>1/Math.max(.05,o.d)**2),total=rawWeights.reduce((a,b)=>a+b,0),columnWeights=rawWeights.map(w=>w/total);
+   chosen.forEach(o=>usedStations.set(o.station.name+'|'+o.series.model,{name:o.station.name+' · '+o.series.model,d:o.d,retrieved:o.series.retrieved||o.station.retrieved}));
    const avg=(part,index,field)=>{
-    if(!nearest.length)return null;
-    const values=nearest.map(({station})=>{
-     const [a,b]=column.indices.map(i=>station.hours[i]);
+    if(!providers.length)return null;
+    const values=providers.map(series=>{
+     const [a,b]=column.indices.map(i=>series.hours[i]);
      return part==='s'?mix(a?.s[index],b?.s[index],.5):mix(a?.p[index]?.[field],b?.p[index]?.[field],.5);
-    });return weighted(values,weights);
+    });return weighted(values,columnWeights);
    };
    const row=Object.fromEntries(data.fields.map((name,i)=>[name,avg('s',i)]));
-   row.levels=data.levels.map((_,i)=>Array.from({length:4},(_,j)=>avg('p',i,j))).filter(p=>finite(p[0])&&p[0]>terrain);
+   row.levels=data.levels.map((_,i)=>Array.from({length:5},(_,j)=>avg('p',i,j))).filter(p=>finite(p[0])&&p[0]>terrain);
    row.lcl=finite(terrain)&&finite(row.temperature)&&finite(row.dewpoint)?terrain+400*Math.max(0,row.temperature-row.dewpoint):null;
    row.top=finite(terrain)&&finite(row.depth)?terrain+Math.max(0,row.depth):null;
    row.cu=finite(row.top)&&finite(row.lcl)?Math.max(0,row.top-row.lcl):null;
-   const known=[terrain,row.top,row.lcl,row.climb,row.rain,row.solar].every(finite);
-   row.soar=known?row.climb>0&&row.depth>500&&row.rain<1&&row.solar>0:null;
-   row.ceiling=row.soar===null?null:row.soar?Math.min(row.top,row.lcl):0;
-   row.displayMsl=row.soar===null?null:row.soar?row.ceiling:terrain;
-   row.agl=row.ceiling===null?null:row.soar?Math.max(0,row.ceiling-terrain):0;
+   const known=[terrain,row.top,row.lcl,row.core,row.sink,row.solar].every(finite);
+   row.climb=known?Math.max(0,Math.round((row.core-row.sink)*10)/10):null;
+   row.soar=known?row.climb>0&&row.depth>0&&row.solar>0:null;
+   row.agl=known?(row.soar?Math.max(0,Math.min(row.depth*(1-.6*(row.sink/row.core)**3),row.lcl-terrain)):0):null;
+   row.ceiling=known?terrain+row.agl:null;row.displayMsl=row.ceiling;
+   row.sources=[...new Set(providers.map(s=>s.model))];
+   row.retrieved=[...new Set(providers.map(s=>s.retrieved).filter(Boolean))];
    const rh=finite(row.temperature)&&finite(row.dewpoint)?clamp(100*Math.exp(17.625*row.dewpoint/(243.04+row.dewpoint)-17.625*row.temperature/(243.04+row.temperature)),0,100):null;
-   row.profile=[[terrain+32.8084,rh,row.u,row.v],...row.levels].filter(p=>finite(p[0])).sort((a,b)=>a[0]-b[0]);
+   row.profile=[[terrain+32.8084,rh,row.u,row.v,row.cloud_low],...row.levels].filter(p=>finite(p[0])).sort((a,b)=>a[0]-b[0]);
    row.topU=finite(row.top)?vertical(row.profile,row.top,2):null;row.topV=finite(row.top)?vertical(row.profile,row.top,3):null;
+   row.boundaryRh=finite(row.top)?vertical(row.profile,row.top,1):null;
    return {...row,...column};
   });
   const dates=[...new Set(data.columns.map(c=>c.day))];
@@ -73,7 +87,7 @@ function installDuoPointProbe(map, data) {
    r.forEach((row,i)=>{if(row.soar){if(start===null)start=row.label;end=row.label;}if(start!==null&&(!row.soar||i===r.length-1)){segments.push(start+'–'+end);start=null;}});
    return day+': '+(segments.join(', ')||(r.some(r=>r.soar===null)?'unavailable':'none'));
   });
-  return {point,rows,terrain,nearest:nearest.map(s=>({name:s.station.name,d:s.d,retrieved:s.station.retrieved})),windows,sun:dates.map((_,i)=>solarTimes(point,data.columns[i*12].iso.slice(0,10))),observation:nearestObservation(point)};
+  return {point,rows,terrain,nearest:[...usedStations.values()],windows,sun:dates.map((_,i)=>solarTimes(point,data.columns[i*12].iso.slice(0,10))),observation:nearestObservation(point)};
  }
 
  // Deliberately expand the lowest 7,000 ft; never extrapolate cloud/wind data.
@@ -111,8 +125,19 @@ function installDuoPointProbe(map, data) {
   const station=usable[0],samples=usable.filter(o=>o.station===station.station).sort((a,b)=>Date.parse(a.time)-Date.parse(b.time));return {...samples.at(-1),samples};
  }
  function cloudColumn(row){
-  if(!finite(row.top)||!finite(row.lcl)||row.top<=row.lcl)return null;
-  return {base:row.lcl,top:row.top,overcast:row.cloud_low>=85,depth:row.top-row.lcl};
+  if(!finite(row.top)||!finite(row.lcl))return null;
+  const moist=(finite(row.boundaryRh)&&row.boundaryRh>80)||(finite(row.cloud_low)&&row.cloud_low>20);
+  if(row.top<row.lcl&&!(row.lcl-row.top<=250&&moist))return null;
+  return {base:row.lcl,top:Math.max(row.lcl,row.top),overcast:row.cloud_low>=85,depth:Math.max(0,row.top-row.lcl),nearBase:row.top<=row.lcl};
+ }
+ function cloudOpacity(row,height){
+  if(height<1500)return 0;
+  const rh=vertical(row.profile,height,1),pressureCover=vertical(row.profile,height,4);
+  const band=height<7000?row.cloud_low:height<16000?row.cloud_mid:row.cloud_high;
+  const humidity=finite(rh)?clamp((rh-75)/23,0,1):null;
+  const cover=finite(pressureCover)?pressureCover:band;
+  if(humidity===null&&!finite(cover))return null;
+  return clamp(Math.max(humidity===null?0:humidity*(finite(cover)?.4+.6*cover/100:1),finite(cover)?cover/100*.72:0),0,.92);
  }
  const GRAPH={width:1605,height:1046,left:165,cell:60,sky:66,skyHeight:310};
  const plain=(v,n=0)=>finite(v)?v.toFixed(n):'—';
@@ -121,7 +146,7 @@ function installDuoPointProbe(map, data) {
   const {width:W,height:H,left,cell:cw,sky:top,skyHeight:gh}=GRAPH,ratio=Math.min(2,window.devicePixelRatio||1);
   const width=W-left,rows=result.rows,x=i=>left+cw*(i+.5),y=ft=>top+12+(gh-24)*fraction(ft);
   canvas.width=W*ratio;canvas.height=H*ratio;const c=canvas.getContext('2d');c.scale(ratio,ratio);
-  const stats={clouds:[],contours:0,barbs:0,observations:0,legendWidth:left,borderedCells:0};
+  const stats={clouds:[],contours:0,barbs:0,observations:0,cloudPixels:{low:0,mid:0,high:0},legendWidth:left,borderedCells:0};
   const ink='#111111',grey='#C8D0D8',red='#E05246',blue='#399DCA';
   c.fillStyle='#FFFFFF';c.fillRect(0,0,W,H);c.textBaseline='middle';c.lineJoin='round';
   const text=(value,xx,yy,colour=ink,align='left',bold=false,size=12)=>{c.font=(bold?'bold ':'')+size+'px Arial';c.fillStyle=colour;c.textAlign=align;c.fillText(value,xx,yy);};
@@ -155,14 +180,13 @@ function installDuoPointProbe(map, data) {
   // A bounded, smoothly scaled RH raster keeps every click comfortably local.
   const raster=document.createElement('canvas'),rw=144,rh=112;raster.width=rw;raster.height=rh;
   const rc=raster.getContext('2d'),pixels=rc.createImageData(rw,rh),heights=Array.from({length:rh},(_,j)=>altitude(clamp((j/(rh-1)*gh-12)/(gh-24),0,1)));
-  const humidity=rows.map(r=>heights.map(h=>vertical(r.profile,h,1)));
+  const cloudiness=rows.map(r=>heights.map(h=>cloudOpacity(r,h)));
   for(let ix=0;ix<rw;ix++){
    const day=ix<rw/2?0:1,offset=day*12,pos=clamp((ix-day*rw/2)/(rw/2)*12-.5,0,11),lo=Math.floor(pos)+offset,hi=Math.min(offset+11,lo+1),t=pos%1;
    for(let j=0;j<rh;j++){
-    const h=heights[j],rhValue=mix(humidity[lo][j],humidity[hi][j],t),idx=(j*rw+ix)*4;let colour=[179,221,242];
-    if(rhValue===null)colour=(ix+j)%6<2?[219,226,231]:[237,241,244];
-    else if(h>=7000){const key=h<16000?'cloud_mid':'cloud_high',cover=mix(rows[lo][key],rows[hi][key],t),opacity=clamp((rhValue-75)/23,0,.92)*(cover===null?1:.4+.6*cover/100);
-     colour=colour.map((v,k)=>mix(v,[137,147,160][k],opacity));}
+    const h=heights[j],opacity=mix(cloudiness[lo][j],cloudiness[hi][j],t),idx=(j*rw+ix)*4;let colour=[179,221,242];
+    if(opacity===null)colour=(ix+j)%6<2?[219,226,231]:[237,241,244];
+    else if(opacity>0){colour=colour.map((v,k)=>mix(v,[124,134,149][k],opacity));stats.cloudPixels[h<7000?'low':h<16000?'mid':'high']++;}
     for(let k=0;k<3;k++)pixels.data[idx+k]=colour[k];pixels.data[idx+3]=255;
    }
   }
@@ -170,11 +194,11 @@ function installDuoPointProbe(map, data) {
   c.save();c.beginPath();c.rect(left,top,width,gh);c.clip();
   if(finite(result.terrain)){c.fillStyle='#D4D5C9';c.fillRect(left,y(result.terrain),width,top+gh-y(result.terrain));}
   // Nested time/height bell contours, capped at the estimated thermal top.
-  for(const [threshold,colour] of [[.05,'#4B4FA8'],[.8,'#3A7CE1'],[1.5,'#38BDF8'],[2.5,'#4ADE80']]){
+  for(const [threshold,colour] of [[.05,'#4B4FA8'],[.6,'#3B82F6'],[1.2,'#38BDF8'],[2,'#34D399']]){
    for(let day=0;day<2;day++){let points=[];
     const flush=()=>{if(points.length){c.beginPath();path([[points[0][0]-cw/2,y(result.terrain)],...points,[points.at(-1)[0]+cw/2,y(result.terrain)]]);c.closePath();c.fillStyle=colour;c.fill();stats.contours++;points=[];}};
     for(let i=day*12;i<(day+1)*12;i++){const r=rows[i];
-     if(r.soar&&r.climb>threshold&&r.solar>0){const height=result.terrain+(r.top-result.terrain)*Math.sqrt((r.climb-threshold)/r.climb);points.push([x(i),y(height)]);}else flush();
+     if(r.soar&&r.climb>threshold&&r.solar>0){const height=result.terrain+r.agl*(threshold===.05?1:Math.sqrt((r.climb-threshold)/r.climb));points.push([x(i),y(height)]);}else flush();
     }flush();
    }
   }
@@ -182,7 +206,7 @@ function installDuoPointProbe(map, data) {
   // way to the thermal top. Overcast cover darkens/joins these estimated decks.
   rows.forEach((r,i)=>{
    const cloud=cloudColumn(r);if(!cloud)return;
-   const base=y(cloud.base),ceiling=y(cloud.top),depth=base-ceiling;if(depth<=0)return;
+   const base=y(cloud.base)+(cloud.nearBase?3:0),ceiling=cloud.nearBase?base-10:y(cloud.top),depth=base-ceiling;if(depth<=0)return;
    const layers=Math.min(24,Math.max(1,Math.ceil(depth/14))),span=cloud.overcast?cw+2:cw*.86;
    stats.clouds.push({...cloud,index:i,layers,baseY:base,topY:ceiling});
    c.save();c.beginPath();c.rect(x(i)-span/2,ceiling,span,depth);c.clip();
@@ -210,7 +234,7 @@ function installDuoPointProbe(map, data) {
   row(['Soarable Height','MSL (ft)'],376,r=>plain(r.displayMsl),red);
   row(['Soarable Height','AGL (ft)'],408,r=>plain(r.agl),ink,()=> '#FFFFFF',true);
   row(['Thermal Strength (kt)'],440,r=>plain(r.climb,1),ink,r=>finite(r.climb)?tint([255,255,255],[250,220,177],r.climb/5):'#F1F3F5');
-  row(['Sfc Heating','W/m²'],472,r=>plain(r.solar),ink,r=>!finite(r.solar)?'#F1F3F5':r.solar<=0?'#FFFFFF':r.solar<400?tint([255,255,255],[254,252,232],r.solar/400):tint([254,252,232],[253,224,71],(r.solar-400)/600));
+  row(['Sfc Heating','W/m²'],472,r=>plain(r.solar),ink,r=>!finite(r.solar)?'#F1F3F5':r.solar<=0?'#FFFFFF':r.solar<100?tint([255,255,255],[254,252,232],r.solar/100):r.solar<300?tint([254,252,232],[254,240,138],(r.solar-100)/200):tint([254,240,138],[253,224,71],(r.solar-300)/300));
   // Forecast temperature/dewpoint and genuine cached observations only.
   box(0,504,left,128);box(left,504,width,128);
   text('Surface Temp (c)',10,522,red,'left',true);text('Surface Dewpoint (c)',10,543,blue,'left',true);
@@ -269,12 +293,13 @@ function installDuoPointProbe(map, data) {
   const near=nearestFeature(point),name=point.name||(near?'Near '+near.name+' · '+fmt(near.d,1)+' km':'Map coordinate');
   const climbs=result.rows.map(r=>r.climb).filter(finite),ceilings=result.rows.map(r=>r.ceiling).filter(finite);
   const soar=result.rows.filter(r=>r.soar),status=!soar.length?(result.rows.some(r=>r.soar===null)?'Unavailable / incomplete':'No usable thermals'):soar.some(r=>r.cu>0)?soar.some(r=>r.cu===0)?'Cumulus & blue':'Cumulus':'Blue thermals';
-  const retrieval=[...new Set(result.nearest.map(p=>p.retrieved))].sort();
-  panel.innerHTML='<header class="duo-point-header"><div><h2>Duo · G-CKML · '+esc(name)+'</h2><small>'+fmt(point.lat,4)+'°, '+fmt(point.lon,4)+'° · '+fmt(result.terrain)+' ft AMSL '+(finite(point.terrain)?'(feature elevation)':'(interpolated model terrain)')+'</small><small>'+esc(data.model)+' · retrieved '+esc(retrieval.length?retrieval.join(' to '):'unavailable')+'</small></div><div><button type="button" data-probe-another title="Hide this chart and choose another map point without disabling the probe.">Pick another point</button> <button type="button" data-probe-close title="Hide the meteogram and restore normal map clicks.">× Close / Turn Off Probe</button></div></header>'+
-   '<div class="duo-point-summary"><span><b title="Maximum conservative thermal climb after Duo Discus circling sink, across the displayed two days.">Peak net climb</b>'+fmt(climbs.length?Math.max(...climbs):null,1)+' kt</span><span><b title="The lower of the mixing top and LCL during usable thermal samples. Cloud depth is excluded.">Peak working ceiling</b>'+fmt(ceilings.length?Math.max(...ceilings):null)+' ft AMSL</span><span><b title="Cumulus is possible when mixing reaches the LCL. Blue means the mixing top stays below it.">Thermal type</b>'+status+'</span><span><b>Usable samples · local time</b>'+result.windows.map(esc).join('<br>')+'</span></div>'+
-   '<div class="duo-point-notes">'+esc(data.cycle_note)+' '+esc(data.notes)+'<br>Net climb uses the conservative Duo circling estimate. Black thermal top = estimated mixing top. Pink = condensation level. The table excludes cloud depth from usable height; an unsoarable MSL cell shows terrain, with 0 ft AGL. Cloud stacks are estimates, not a thunderstorm forecast.</div>'+
+  const retrieval=[...new Set(result.rows.flatMap(r=>r.retrieved))].sort();
+  const modelNote=result.rows.map(r=>r.day+' '+r.label+': '+r.sources.join(' + ')).join('; ');
+  panel.innerHTML='<header class="duo-point-header"><div><h2>Duo · G-CKML · '+esc(name)+'</h2><small>'+fmt(point.lat,4)+'°, '+fmt(point.lon,4)+'° · '+fmt(result.terrain)+' ft AMSL '+(finite(point.terrain)?'(feature elevation)':'(interpolated model terrain)')+'</small><small>'+esc(data.model)+' · '+esc(data.loading||'dry')+' · retrieved '+esc(retrieval.length?retrieval.join(' to '):'unavailable')+'</small></div><div><button type="button" data-probe-another title="Hide this chart and choose another map point without disabling the probe.">Pick another point</button> <button type="button" data-probe-close title="Hide the meteogram and restore normal map clicks.">× Close / Turn Off Probe</button></div></header>'+
+   '<div class="duo-point-summary"><span><b title="Estimated core updraught minus the selected Duo Discus polar circling sink once; floored at zero.">Peak net climb</b>'+fmt(climbs.length?Math.max(...climbs):null,1)+' kt</span><span><b title="Estimated upper zero-net-climb height in the thermal column, capped below cloud base.">Peak working ceiling</b>'+fmt(ceilings.length?Math.max(...ceilings):null)+' ft AMSL</span><span><b title="Cumulus is possible when mixing reaches the LCL. Blue means the mixing top stays below it.">Thermal type</b>'+status+'</span><span><b>Usable samples · local time</b>'+result.windows.map(esc).join('<br>')+'</span></div>'+
+   '<div class="duo-point-notes">'+esc(data.cycle_note)+' '+esc(data.notes)+'<br>Net climb = max(0, 1.35 w* − polar circling sink), rounded once. Selected loading: '+esc(data.loading||'dry')+'. Black thermal top = estimated mixing top. Pink = condensation level. The table excludes cloud depth from usable height; an unsoarable MSL cell shows terrain, with 0 ft AGL. Cloud stacks are estimates, not a thunderstorm forecast.</div>'+
    '<div class="duo-point-notes">Scroll right for day two; scroll down for the aligned hourly weather strips.</div><div class="duo-point-graphic"><div class="duo-point-grid"><canvas class="duo-point-canvas" role="img" aria-label="Two-day vertical point forecast with bordered hourly values. The following table provides accessible numbers."></canvas><canvas class="duo-point-labels" aria-hidden="true"></canvas></div></div>'+
-   '<details><summary>Accessible hourly values and data coverage</summary><div style="overflow:auto"><table><thead><tr><th>Local time</th><th>Ceiling AMSL / AGL ft</th><th>Net climb kt</th><th>T / Td °C</th><th>Wind / gust kt</th><th>Wind from °T</th><th>MSLP hPa</th></tr></thead><tbody>'+result.rows.map(r=>'<tr><td>'+esc(r.day+' '+r.label+' '+r.zone)+'</td><td>'+fmt(r.displayMsl)+' / '+fmt(r.agl)+'</td><td>'+fmt(r.climb,1)+'</td><td>'+fmt(r.temperature,1)+' / '+fmt(r.dewpoint,1)+'</td><td>'+fmt(speed(r.u,r.v),1)+' / '+fmt(r.gust,1)+'</td><td>'+fmt(heading(r.u,r.v))+'</td><td>'+fmt(r.mslp,1)+'</td></tr>').join('')+'</tbody></table></div><p>Samples: '+esc(result.nearest.map(s=>s.name+' ('+fmt(s.d,1)+' km)').join(', ')||'No cached forecast within 120 km')+'. Dashes and hatching mean unavailable.</p>'+ (result.observation?'<p>Nearest cached observations: '+esc(result.observation.name)+' · '+fmt(result.observation.d,1)+' km. '+result.observation.samples.map(o=>esc(o.time)+' · '+fmt(o.temperature,1)+'°C'+(o.stale?' (stale)':'')).join('; ')+'. Dashed segments join reports no more than three hours apart; no forecast bias or future observations are invented.</p>':'<p>No cached observations are available. The temperature lines show model forecasts only.</p>')+'</details>';
+   '<details><summary>Accessible hourly values and data coverage</summary><div style="overflow:auto"><table><thead><tr><th>Local time</th><th>Ceiling AMSL / AGL ft</th><th>Net climb kt</th><th>Raw core kt</th><th>Circling sink kt</th><th>T / Td °C</th><th>Wind / gust kt</th><th>Wind from °T</th><th>MSLP hPa</th><th>Model</th></tr></thead><tbody>'+result.rows.map(r=>'<tr><td>'+esc(r.day+' '+r.label+' '+r.zone)+'</td><td>'+fmt(r.displayMsl)+' / '+fmt(r.agl)+'</td><td>'+fmt(r.climb,1)+'</td><td>'+fmt(r.core,2)+'</td><td>'+fmt(r.sink,2)+'</td><td>'+fmt(r.temperature,1)+' / '+fmt(r.dewpoint,1)+'</td><td>'+fmt(speed(r.u,r.v),1)+' / '+fmt(r.gust,1)+'</td><td>'+fmt(heading(r.u,r.v))+'</td><td>'+fmt(r.mslp,1)+'</td><td>'+esc(r.sources.join(' + '))+'</td></tr>').join('')+'</tbody></table></div><p>Hourly model sources: '+esc(modelNote)+'</p><p>Samples: '+esc(result.nearest.map(s=>s.name+' ('+fmt(s.d,1)+' km)').join(', ')||'No cached forecast within 120 km')+'. Dashes and hatching mean unavailable.</p>'+ (result.observation?'<p>Nearest cached observations: '+esc(result.observation.name)+' · '+fmt(result.observation.d,1)+' km. '+result.observation.samples.map(o=>esc(o.time)+' · '+fmt(o.temperature,1)+'°C'+(o.stale?' (stale)':'')).join('; ')+'. Dashed segments join reports no more than three hours apart; no forecast bias or future observations are invented.</p>':'<p>No cached observations are available. The temperature lines show model forecasts only.</p>')+'</details>';
   container.appendChild(panel);L.DomEvent.disableClickPropagation(panel);L.DomEvent.disableScrollPropagation(panel);
   panel.querySelector('[data-probe-close]').onclick=event=>{event.preventDefault();event.stopPropagation();disable(true);};panel.querySelector('[data-probe-another]').onclick=event=>{event.preventDefault();event.stopPropagation();panel.remove();panel=null;};
   const canvas=panel.querySelector('.duo-point-canvas');map._duoProbe.lastRenderDetails=draw(canvas,result);
@@ -302,5 +327,5 @@ function installDuoPointProbe(map, data) {
  }
  const unload=()=>disable(false);
  container.addEventListener('click',click,true);container.addEventListener('pointerdown',down,true);container.addEventListener('pointermove',move,true);map.on('unload',unload);
- map._duoProbe={show,profileAt,barbParts,fraction,altitude,solarTimes,nearestObservation,cloudColumn,render:draw,disable,get last(){return last;},get active(){return active;}};
+ map._duoProbe={show,profileAt,barbParts,fraction,altitude,solarTimes,nearestObservation,cloudColumn,cloudOpacity,render:draw,disable,get last(){return last;},get active(){return active;}};
 }

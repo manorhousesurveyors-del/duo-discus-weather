@@ -42,7 +42,7 @@ def fetch_chunk(points, model, http):
         'models': model.api_name, 'hourly': ','.join(grid_variables()),
         'forecast_hours': 120, 'past_hours': 24, 'timezone': 'GMT', 'timeformat': 'unixtime',
         'wind_speed_unit': 'ms', 'temperature_unit': 'celsius', 'precipitation_unit': 'mm',
-        'cell_selection': 'nearest',
+        'cell_selection': 'land',
     }, ttl_seconds=0)
     bodies = [response.body] if isinstance(response.body, dict) else response.body
     if not isinstance(bodies,list) or len(bodies) != len(points):
@@ -154,8 +154,9 @@ def session_grid(cycle):
 def regional_future(cycle,model_key):
     def fetch():
         http=GridHttpClient()
-        return OpenMeteoClient(http.settings,http=http).fetch_batched(
-            forecast_locations(),(FORECAST_MODELS[model_key],),batch_size=20)
+        client=OpenMeteoClient(http.settings,http=http)
+        if model_key=='ukmo':return client.fetch_paired(forecast_locations())
+        return client.fetch_batched(forecast_locations(),(FORECAST_MODELS[model_key],),batch_size=20)
     return _pool.submit(fetch)
 
 

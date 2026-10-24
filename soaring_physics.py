@@ -14,7 +14,7 @@ from typing import Iterable, Mapping
 
 import numpy as np
 
-from config import (CIRCLING_SINK_KNOTS, DUO_DISCUS_POLARS, LOCAL_TIMEZONE,
+from config import (duo_circling_sink_knots, DUO_DISCUS_POLARS, LOCAL_TIMEZONE,
                     METRES_TO_FEET, MPS_TO_KNOTS, PRESSURE_LEVELS_HPA, ROUTES,
                     TASK_DISTANCES_KM, GeoPoint, Polar, Route, WaveRidge)
 from data_ingestion import Forecast, utc_datetime
@@ -167,44 +167,73 @@ class ThermalResult:
     estimated: bool
     notes: tuple[str, ...]
 
+    core_updraught_knots: float | None = None
+    circling_sink_knots: float | None = None
+    conservative_core_knots: float | None = None
+
     @property
     def alert_eligible(self) -> bool:
         return (self.conservative_climb_knots is not None and self.conservative_climb_knots >= 3.5
                 and self.usable_top_ft_amsl is not None and self.usable_top_ft_amsl >= 4500)
 
 
-def evaluate_thermals(profile: Profile) -> ThermalResult:
+def thermal_net_climb(core_knots, sink_knots):
+    """One sink deduction, followed by the displayed one-decimal zero floor."""
+    return max(0.0, math.floor((core_knots-sink_knots)*10+0.5)/10)
+
+
+def thermal_usable_depth(depth_m, core_knots, sink_knots, lcl_agl_m):
+    """Upper zero-net-climb crossing in an idealised entraining thermal column.
+
+    Core speed peaks at 40% of the mixed layer, then decays as (1-z/zi)**(1/3).
+    Cloud depth is excluded. Positive daylight mixing alone is not usable lift.
+    """
+    if any(value is None for value in (depth_m,core_knots,sink_knots,lcl_agl_m)):
+        return None
+    if thermal_net_climb(core_knots,sink_knots)<=0 or depth_m<=0:return 0.0
+    crossing=depth_m*(1-0.6*(sink_knots/core_knots)**3)
+    return max(0.0,min(crossing,lcl_agl_m))
+
+
+def evaluate_thermals(profile: Profile, loading='dry') -> ThermalResult:
     p, values = profile.forecast, profile.values
     temperature, dewpoint = values.get('temperature_2m'), values.get('dew_point_2m')
     depth, depth_source = boundary_layer_height(profile)
     notes = [depth_source]
     base = None if temperature is None or dewpoint is None else max(0, temperature-dewpoint) * 400 + p.terrain_elevation_m * METRES_TO_FEET
     top = None if depth is None else (p.terrain_elevation_m + depth) * METRES_TO_FEET
-    usable = min(base, top) if base is not None and top is not None else None
     cumulus = None if base is None or top is None else base <= top + 200
     if cumulus is False:
         notes.append('Dry mixing top is below condensation level: blue thermals possible; cloud base is a potential LCL')
-    radiation, soil, pressure = values.get('direct_radiation'), values.get('soil_moisture_0_to_7cm'), values.get('surface_pressure')
-    heat = velocity = net = conservative = None
-    if all(value is not None for value in (radiation, temperature, pressure, depth)) and pressure > 0:
-        available = max(0, radiation) * 0.8 * 0.7  # Albedo 0.2, available-energy fraction 0.7.
+    radiation, soil, pressure = values.get('shortwave_radiation'), values.get('soil_moisture_0_to_7cm'), values.get('surface_pressure')
+    heat = velocity = net = conservative = core = low_core = None
+    sink=duo_circling_sink_knots(loading)
+    if all(value is not None for value in (radiation, temperature, dewpoint, pressure, depth)) and pressure > 0 and temperature > -273.15:
+        available = max(0, radiation) * 0.8 * 0.7  # Includes diffuse sunlight.
+        # Temperature/dewpoint spread estimates the sensible-energy fraction.
+        # Soil data adjusts it modestly, rather than treating missing soil as saturated.
+        fraction=min(.8,max(.55,.55+.025*max(0,temperature-dewpoint)))
         if soil is None:
-            bowen, low_bowen = 1.0, 0.25
-            notes.append('Soil moisture unavailable: Bowen ratio 1 nominal, 0.25 conservative')
+            low_fraction=fraction*.85
+            notes.append('Soil unavailable: spread-derived heat estimate; 15% lower heat sensitivity for planning')
         else:
-            wetness = min(1, max(0, (soil - 0.05) / 0.35))
-            bowen = low_bowen = 4 * (1-wetness) + 0.25 * wetness
-        heat = available * bowen / (1 + bowen)
-        low_heat = available * low_bowen / (1 + low_bowen)
-        density = pressure * 100 / (RD * (temperature + 273.15))
-        def climb(flux):
-            w = (G / (temperature+273.15) * flux / (density*CP) * max(0, depth))**(1/3)
-            return w, w * MPS_TO_KNOTS - CIRCLING_SINK_KNOTS
-        velocity, net = climb(heat)
-        _, conservative = climb(low_heat)
-        notes.append('Radiation-derived heat flux and w* are proxies for thermal core climb')
+            wetness=min(1,max(0,(soil-.05)/.35))
+            fraction*=1-.35*wetness
+            low_fraction=fraction
+        heat=available*fraction
+        density=pressure*100/(RD*(temperature+273.15))
+        def updraught(flux):
+            w=(G/(temperature+273.15)*flux/(density*CP)*max(0,depth))**(1/3)
+            return w,1.35*w*MPS_TO_KNOTS
+        velocity,core=updraught(heat)
+        _,low_core=updraught(available*low_fraction)
+        net=thermal_net_climb(core,sink)
+        conservative=thermal_net_climb(low_core,sink)
+        notes.append(f'Estimated core = 1.35 w*; {loading} Duo polar circling sink {sink:.2f} kt at 25° bank subtracted once')
     else:
-        notes.append('Climb unavailable: need temperature, pressure, direct radiation and bracketed mixing depth')
+        notes.append('Climb unavailable: need temperature, dewpoint, pressure, total shortwave radiation and bracketed mixing depth')
+    usable_depth=thermal_usable_depth(depth,core,sink,None if base is None else base/METRES_TO_FEET-p.terrain_elevation_m)
+    usable=None if usable_depth is None else (p.terrain_elevation_m+usable_depth)*METRES_TO_FEET
     nearest = min(profile.levels, key=lambda level: abs(level.height_m-(p.terrain_elevation_m+depth))) if depth is not None and profile.levels else None
     low_cloud = values.get('cloud_cover_low')
     overdevelopment = None if nearest is None or nearest.rh_percent is None or low_cloud is None else nearest.rh_percent > 85 and low_cloud > 60
@@ -220,7 +249,7 @@ def evaluate_thermals(profile: Profile) -> ThermalResult:
     return ThermalResult(net, conservative, base, usable, depth, heat, velocity,
                          None if net is None else net >= 3.5, None if net is None else net >= 4.5,
                          None if base is None else base >= 4500, None if base is None else base >= 5000,
-                         overdevelopment, streets, cumulus, True, tuple(notes))
+                         overdevelopment, streets, cumulus, True, tuple(notes),core,sink,low_core)
 
 
 @dataclass(frozen=True)
@@ -336,11 +365,12 @@ def cross_country_speed(climb_mps: float, bearing_deg: float, u_mps: float, v_mp
 
 
 def select_forecast(forecasts: Iterable[Forecast], location_key: str, when: datetime,
-                    preference: tuple[str, ...] = ('ukmo_uk_deterministic_2km', 'icon_eu', 'ecmwf_ifs025')) -> Forecast | None:
+                    preference: tuple[str, ...] = ('ukmo_seamless', 'ukmo_uk_deterministic_2km', 'icon_eu', 'ecmwf_ifs025')) -> Forecast | None:
     matching = [f for f in forecasts if f.location.key in {location_key, 'region:'+location_key}]
     for model in preference:
         for forecast in matching:
-            if forecast.model != model:
+            legacy_uk=model=='ukmo_seamless' and forecast.model=='ukmo_uk_deterministic_2km'
+            if forecast.model != model and not legacy_uk:
                 continue
             try:
                 if forecast.at(when).get('temperature_2m') is not None:
@@ -373,7 +403,7 @@ class TaskDay:
 
 
 def evaluate_task_day(route: Route, forecasts: Iterable[Forecast], day: date,
-                      loading: str = 'dry', preference: tuple[str, ...] = ('ukmo_uk_deterministic_2km', 'icon_eu', 'ecmwf_ifs025')) -> TaskDay:
+                      loading: str = 'dry', preference: tuple[str, ...] = ('ukmo_seamless', 'ukmo_uk_deterministic_2km', 'icon_eu', 'ecmwf_ifs025')) -> TaskDay:
     forecasts = tuple(forecasts)
     polar = DUO_DISCUS_POLARS[loading]
     lengths = [distance_bearing(a, b)[0] for a, b in route.legs]
@@ -389,7 +419,7 @@ def evaluate_task_day(route: Route, forecasts: Iterable[Forecast], day: date,
                     notes.append(f'{point.name}: missing forecast')
                     break
                 profile = Profile.from_forecast(forecast, when)
-                thermal = evaluate_thermals(profile)
+                thermal = evaluate_thermals(profile,loading)
                 # Use conservative moisture sensitivity for task capacity as well.
                 level = profile.level(925) or profile.level(850)
                 if thermal.conservative_climb_knots is None or level is None or level.u_mps is None:

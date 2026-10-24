@@ -91,7 +91,7 @@ It uses the attributed Duo Discus polar fit scaled to **34 kg/m² dry** or
 model terrain, and vector along/crosswind components. Adjacent weather samples
 use the weaker climb/height. Headwind, crosswind correction and climb drift enter
 MacCready ground progress; climb time is included. Cruise airspeed and total task
-ground speed are reported separately. The fixed 1.6 kt circling-sink deduction
+ground speed are reported separately. The loading-specific polar circling-sink deduction
 is inherited from the existing thermal model, not a measured loading-specific
 G-CKML climb performance curve.
 

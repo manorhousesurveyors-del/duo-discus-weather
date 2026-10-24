@@ -75,13 +75,16 @@ class TaskTests(unittest.TestCase):
         # A 244 km flight cannot cross the blocked fourth hour. Good hours after
         # it permit completion, but only a narrow late launch window remains.
         rain=[0,0,0,2,0,0,0,0,0,0]
-        result=t.assess_task(TASK,weather(precipitation=rain),DAY)
+        # Keep the gap-integration check independent of thermal recalibration.
+        with patch('task_planning.cross_country_speed',return_value=(90.,40.,False)):
+            result=t.assess_task(TASK,weather(precipitation=rain),DAY)
         self.assertIsNotNone(result.best)
         self.assertTrue(all(window.earliest>=START+timedelta(hours=4) or
                             window.latest<=START+timedelta(minutes=15) for window in result.launch_windows))
         self.assertTrue(all(row.groundspeed_kmh==0 for row in result.hourly_legs if row.valid_at==START+timedelta(hours=3)))
         late=[2]*5+[0]*5
-        result=t.assess_task(TASK,weather(precipitation=late),DAY)
+        with patch('task_planning.cross_country_speed',return_value=(90.,40.,False)):
+            result=t.assess_task(TASK,weather(precipitation=late),DAY)
         self.assertIn(result.verdict,('MARGINAL / NARROW WINDOW','NOT ACHIEVABLE'))
 
     def test_segment_integration_has_expected_elapsed_under_constant_speed(self):

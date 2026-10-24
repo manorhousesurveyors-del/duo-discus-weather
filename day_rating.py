@@ -52,7 +52,7 @@ def rate_day(forecasts,origin,day,loading='dry',*,preference=FORECAST_PREFERENCE
         when=datetime.combine(day,time(hour),LOCAL_TIMEZONE)
         f=select_forecast(forecasts,origin.key,when,preference)
         if f is None:run=0;continue
-        p=Profile.from_forecast(f,when);t=evaluate_thermals(p)
+        p=Profile.from_forecast(f,when);t=evaluate_thermals(p,loading)
         if (t.conservative_climb_knots is None or t.usable_top_ft_amsl is None
             or t.overdevelopment is None or p.values.get('precipitation') is None):run=0;continue
         known+=1;depth=t.usable_top_ft_amsl-f.terrain_elevation_m*METRES_TO_FEET
