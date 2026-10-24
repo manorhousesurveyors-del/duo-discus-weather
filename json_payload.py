@@ -22,5 +22,14 @@ def finite_data(value):
     return value
 
 
+def display_coordinates(value,coordinate=False):
+    """Round display geometry only. Source catalogs and export precision survive."""
+    if isinstance(value,Mapping):
+        return {k:display_coordinates(v,k in ('lat','lon','lng','latitude','longitude','coordinates','bounds')) for k,v in value.items()}
+    if isinstance(value,(list,tuple)):return [display_coordinates(v,coordinate) for v in value]
+    if coordinate and isinstance(value,float) and math.isfinite(value):return round(value,4)
+    return value
+
+
 def browser_json(value):
-    return json.dumps(finite_data(value), separators=(',', ':'), allow_nan=False).replace('<', '\\u003c')
+    return json.dumps(display_coordinates(finite_data(value)), separators=(',', ':'), allow_nan=False).replace('<', '\\u003c')

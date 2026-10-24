@@ -72,19 +72,20 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(len(context['site']['hours'][0]['wave_bands']),9)
         self.assertTrue(context['special_forecast'])
         text=local_response('weather forecast here',context)
-        for name in ('Goole','Didcot','Church Stretton','Snowdonia','South Wales','3.5–4.5','4,500–5,000','Five-day','STF'):
+        for name in ('Local synoptic','20 km','Base ft AGL','Ridge lift','Wave and upper winds'):
             self.assertIn(name,text)
+        for name in ('Goole','Didcot','Where the better sectors lie','Five-day outlook','circuit viability','Your task'):
+            self.assertNotIn(name,text)
         self.assertNotIn('No achievable 250',text)
-        self.assertTrue(all(len(row['five_days'])==5 for row in context['regions']))
-        self.assertTrue(all('hours' in day for row in context['regions'] for day in row['five_days']))
-        denbigh=next(row for row in context['regions'] if row['key']=='denbigh')
-        self.assertIsNotNone(denbigh['five_days'][1]['stars'])
+        self.assertEqual(context['regions'],[])
+        self.assertEqual(context['active_task'],[])
+        self.assertEqual(context['catalog'],[])
     def test_model_routes_must_resolve_catalog_and_missing_data_stays_unknown(self):
         response={'suggested_routes':[{'codes':['MYN','MNDN','MYN']},{'codes':['FAKE','MYN']}]}
         self.assertEqual(len(validated_suggestions(response,self.catalog)),1)
         context,_=build_context('Where should we fly tomorrow?',self.catalog,(),NOW.date()+timedelta(days=1),NOW.date(),'dry')
         text=local_response('Where should we fly tomorrow?',context)
-        self.assertIn('unknown',text);self.assertIn('Five-day outlook',text)
+        self.assertIn('unknown',text);self.assertIn('Local forecast',text)
         self.assertFalse(any(r['midday'] for r in context['regions']))
 
 class ContinuousTests(unittest.TestCase):

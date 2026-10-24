@@ -15,6 +15,15 @@ def script(map_view, filename, call, payload=None):
     element.add_to(map_view)
 
 
+def add_shared_task(map_view,points,when,*,editable=False):
+    from planning_ui import task_payload
+    payload=task_payload()
+    payload={**payload,'date':when.astimezone(LOCAL_TIMEZONE).date().isoformat(),
+        'points':[{'code':p.code,'name':p.name,'lat':p.latitude,'lon':p.longitude,'elevation_m':p.elevation_m} for p in points],
+        'editable':editable}
+    script(map_view,'shared_task.js','installDuoSharedTask',payload)
+
+
 def install_canvas(map_view):
     script(map_view,'canvas_points.js','installDuoCanvasAPI')
 
@@ -25,11 +34,21 @@ def add_waypoints(map_view,points,*,show=True):
     script(map_view,'canvas_waypoints.js','installDuoWaypoints',{'points':records,'show':show})
 
 
+import streamlit as st
+
+
+@st.cache_data(ttl=1800,show_spinner=False,max_entries=24)
+def task_soaring_layers(run_id,when,loading,_forecasts):
+    from map_weather import soaring_samples,contour_features
+    samples=soaring_samples(_forecasts,when,loading)
+    return samples,{key:contour_features(samples,key) for key in ('stf','thermal','pfd')}
+
+
 def add_task_editor(map_view,points,when,forecasts,loading):
     from map_modes import map_products
     from map_weather import contour_features,BANDS
-    samples,_,_=map_products(forecasts,when,when,loading,'stf')
-    contours={key:contour_features(samples,key) for key in ('stf','thermal','pfd')}
+    from app_cache import forecast_run_id
+    samples,contours=task_soaring_layers(forecast_run_id(forecasts),when,loading,_forecasts=forecasts)
     records=[{'code':p.code,'name':p.name,'lat':p.latitude,'lon':p.longitude,'elevation_m':p.elevation_m} for p in points]
     version=hashlib.sha256(json.dumps(records,sort_keys=True).encode()).hexdigest()[:16]
     from route_tools import is_complete

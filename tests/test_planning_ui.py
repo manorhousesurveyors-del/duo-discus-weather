@@ -65,8 +65,9 @@ class PlanningUiTests(unittest.TestCase):
             active,_=app.build_map((),NOW,layers=[],task=TASK)
         clean_html=clean.get_root().render();active_html=active.get_root().render()
         self.assertIn('BGA AAA',clean_html);self.assertNotIn('Active task',clean_html)
-        self.assertIn('Active task',active_html);self.assertIn('Start 1: AAA',active_html)
-        self.assertIn('Finish 3: AAA',active_html)
+        self.assertIn('duo_active_task_v1',active_html)
+        self.assertIn('Clear Task',active_html)
+        self.assertIn('\"code\":\"AAA\"',active_html)
         self.assertIn('DuoCanvasPoints',clean_html);self.assertNotIn('leaflet.markercluster',clean_html)
 
     def test_builder_sequence_reorder_clear_and_day_switch(self):
@@ -76,6 +77,7 @@ class PlanningUiTests(unittest.TestCase):
             save_bundle(ForecastBundle(tuple(forecast(p) for p in forecast_locations()),(),.5,(),NOW),snapshot)
             with patch.dict('os.environ',{'DUO_TASK_STORE':directory+'/tasks','DUO_DASHBOARD_SNAPSHOT':str(snapshot)}):
                 at=AppTest.from_file(str(Path(app.__file__)),default_timeout=30).run()
+                at.radio(key='active_page').set_value('Task planner').run()
                 self.assertFalse(at.exception)
                 seq=next(w for w in at.text_input if w.key.startswith('sidebar_') and w.key.endswith('_sequence'))
                 prefix=seq.key.removesuffix('_sequence')
@@ -204,6 +206,7 @@ briefing_panel(b.load_catalog(),date(2026,6,10),'dry','ifs025',1,(),None,None,()
                  patch('planning_ui.task_weather',side_effect=corridor), \
                  patch('route_tools.publish_downloads',return_value='app/static/tasks/test/duo-task'):
                 at=AppTest.from_file(str(Path(app.__file__)),default_timeout=40).run()
+                at.radio(key='active_page').set_value('Task planner').run()
                 at.button(key='optimise_route').click().run()
                 self.assertFalse(at.exception)
                 tasks=list(at.session_state['tasks_by_day'].values());points=next(p for p in tasks if p)
@@ -213,6 +216,7 @@ briefing_panel(b.load_catalog(),date(2026,6,10),'dry','ifs025',1,(),None,None,()
                 self.assertIn('Loaded',at.session_state['optimiser_result'])
                 self.assertTrue(any(e.label=='BGA / SeeYou Task Sheet' for e in at.expander))
                 self.assertEqual(len(at.get('download_button')),6)
+                at.radio(key='active_page').set_value('Help Guide').run()
                 at.text_input(key='help_question').set_value('Why is my task achievable?').run()
                 at.button(key='help_ask').click().run()
                 self.assertFalse(at.exception)

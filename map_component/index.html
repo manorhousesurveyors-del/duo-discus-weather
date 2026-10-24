@@ -18,16 +18,22 @@ const ready=Promise.all([
 let previous='',generation=0;
 window.addEventListener('message',async event=>{
  if(event.source!==parent||event.data.type!=='streamlit:render')return;
- const args=event.data.args,signature=args.script,token=++generation;
+ let args=event.data.args;const signature=args.document_id||args.script,token=++generation;
  send('streamlit:setFrameHeight',{height:720});
- if(signature===previous)return;
+ if(signature===previous){window.map_div?._duoAcceptTask?.(args.canonical_task);return;}
+ if(!args.script&&!args.compressed_document)return;
  try{
+  if(args.compressed_document){
+   const bytes=Uint8Array.from(atob(args.compressed_document),c=>c.charCodeAt(0));
+   const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
+   const decoded=JSON.parse(await new Response(stream).text());args={...args,...decoded};
+  }
   await ready;if(token!==generation)return;
   if(window.map_div?.remove)window.map_div.remove();
   document.getElementById('map-wrapper').innerHTML=args.header+args.html;
   window.__GLOBAL_DATA__={};
   new Function(args.script)();previous=signature;
-  const map=window.map_div;
+  const map=window.map_div;map._duoAcceptTask?.(args.canonical_task);
   map.on('click',e=>{if(map._duoClientClicks||performance.now()<(map._duoLocalClickUntil||0)||e.originalEvent?._duoSelected)return;
    const point={lat:e.latlng.lat,lng:e.latlng.lng};window.__GLOBAL_DATA__.lat_lng_clicked=point;
    if(!['wind','radar','thermal','pfd','xc','stf'].includes(map._duoMode))window.Streamlit.setComponentValue({last_clicked:point,last_object_clicked:null});

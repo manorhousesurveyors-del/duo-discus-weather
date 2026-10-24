@@ -197,3 +197,15 @@ compatibility, not meteorological accuracy. Use attributed historical profiles
 and observed flights to calibrate estimates before relying on numeric thresholds.
 The Gold-Standard storage API supports observations without silently replacing
 live model data. See [data sources](data-sources.md) for polar/ridge provenance.
+
+
+## Cached terrain preparation
+
+The continuous DEM and read-only smoothed terrain, x/y slopes, padded FFT and
+wavenumber grids are prepared once per server lifetime. Atmospheric solutions
+reuse those NumPy arrays; no wind or stability result is treated as static.
+Wave products are cached for 30 minutes by forecast retrieval identity and valid
+hour. The complete Wave Watch document also caches serialization/compression,
+with catalog and airspace versions in its key. A new forecast/hour recomputes the
+field; unsupported profiles stay unavailable. Display-only rounding never changes
+the terrain solution or task export coordinates.

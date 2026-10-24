@@ -29,32 +29,59 @@ def weather_table(records, descriptions, **kwargs):
 
 
 def current_catalog():
-    try: return bga.active_catalog()
+    try:
+        from app_cache import catalog_resource,file_version
+        return catalog_resource(file_version((bga.CATALOG_PATH,bga.LOCAL_CATALOG_PATH,bga.IMPORT_PATH)))
     except (OSError,ValueError,KeyError) as exc:
         st.warning(f'BGA catalog unavailable: {exc}. Use Data quality to check sources or import a waypoint file.')
         return bga.Catalog((),'Unavailable','',bga.content_hash(()))
 
 
 def active_task(day):
-    tasks=st.session_state.setdefault('tasks_by_day',{})
-    if day.isoformat() not in tasks:
-        try: tasks[day.isoformat()]=load_daily_task(day)
+    """One active route, with separate persisted plans retained for other dates."""
+    date_key=day.isoformat();tasks=st.session_state.setdefault('tasks_by_day',{})
+    if date_key not in tasks:
+        try:tasks[date_key]=load_daily_task(day)
         except (OSError,ValueError,KeyError) as exc:
-            st.warning(f'Saved task could not be read: {exc}')
-            tasks[day.isoformat()]=()
-    return tuple(tasks[day.isoformat()])
+            st.warning(f'Saved task could not be read: {exc}');tasks[date_key]=()
+    if st.session_state.get('active_task_day')!=date_key:
+        st.session_state['active_task_points']=tuple(tasks[date_key])
+        st.session_state['active_task_day']=date_key
+        st.session_state['task_version']=st.session_state.get('task_version',0)+1
+    return tuple(st.session_state.get('active_task_points',()))
 
 
-def set_task(day,points,*,rerun=True):
-    points=tuple(points)
-    save_daily_task(day,points)
+def set_task(day,points,*,rerun=True,client_version=None):
+    active_task(day)
+    if client_version is not None and client_version<=st.session_state.get('task_version',0):return False
+    points=tuple(points);save_daily_task(day,points)
+    st.session_state['active_task_points']=points
+    st.session_state['active_task_day']=day.isoformat()
+    st.session_state['task_version']=max(st.session_state.get('task_version',0)+1,client_version or 0)
     st.session_state.setdefault('tasks_by_day',{})[day.isoformat()]=points
     st.session_state['task_message']=f'Saved {len(points)} task points for {day:%d %b}.'
+    for key in ('route_analysis','_weather_map_state','published_tasks'):
+        st.session_state.pop(key,None)
+    st.session_state.setdefault('completed_tasks',{}).pop(day.isoformat(),None)
     if len(points)>=3 and points[0]==points[-1]:
         from route_tools import complete_task
         try:complete_task(day,points)
         except ValueError:pass
-    if rerun: st.rerun()
+    if rerun:st.rerun()
+    return True
+
+
+def task_payload():
+    import uuid
+    st.session_state.setdefault('task_session',str(uuid.uuid4()))
+    from datetime import date
+    day=st.session_state.get('active_task_day')
+    points=tuple(st.session_state.get('active_task_points',()))
+    from route_tools import is_complete
+    return {'session':st.session_state['task_session'],'date':day,
+        'version':st.session_state.get('task_version',0),
+        'points':[{'code':p.code,'name':p.name,'lat':p.latitude,'lon':p.longitude,'elevation_m':p.elevation_m} for p in points],
+        'complete':bool(day and is_complete(date.fromisoformat(day),points))}
 
 
 def preset_task(catalog,route_key):
@@ -128,7 +155,7 @@ def task_builder(catalog,day,*,location):
                 except ValueError as exc: st.error(str(exc))
 
 
-@st.cache_data(ttl=900,show_spinner=False)
+@st.cache_data(ttl=1800,show_spinner=False)
 def fetch_map_grid(model_key,refresh_bucket,kind='soaring'):
     from map_weather import national_grid,soaring_grid,WIND_VARIABLES
     from config import HOURLY_VARIABLES
@@ -136,7 +163,7 @@ def fetch_map_grid(model_key,refresh_bucket,kind='soaring'):
         (FORECAST_MODELS[model_key],),variables=WIND_VARIABLES if kind=='wind' else HOURLY_VARIABLES,batch_size=20)
 
 
-@st.cache_data(ttl=900,show_spinner=False)
+@st.cache_data(ttl=1800,show_spinner=False)
 def fetch_corridor(points: tuple[GeoPoint, ...], model_key: str, refresh_bucket: int):
     return OpenMeteoClient().fetch_batched(points,(FORECAST_MODELS[model_key],))
 
@@ -243,8 +270,14 @@ def process_map_event(interaction,catalog,day,mode,*,event_key='last_map_event',
                         point=airfield.turnpoint if airfield else coordinate_turnpoint(float(item['lat']),float(item['lon']))
                     selected.append(point)
                 validate_task(selected,allow_incomplete=True)
-                set_task(day,selected,rerun=False)
+                client_version=draft.get('version')
+                if client_version is not None and (not isinstance(client_version,int) or client_version<0):raise ValueError('Invalid task version')
+                if draft.get('session') and draft['session']!=st.session_state.get('task_session'):raise ValueError('Task belongs to another session')
+                if not set_task(day,selected,rerun=False,client_version=client_version):return
+                if draft.get('briefing_point'):
+                    p=draft['briefing_point'];st.session_state['briefing_point']=GeoPoint('clicked',p.get('name','Clicked point'),p['lat'],p['lon'])
                 if draft.get('complete') and len(selected)>=2:complete_task(day,selected)
+                if draft.get('action') in ('finish','analyse','optimize','clear'):st.session_state['_task_full_refresh']=True
                 if draft.get('action')=='analyse':st.session_state['analyse_client_task']=True
                 if draft.get('action')=='optimize':st.session_state['open_optimizer']=True
             except (ValueError,TypeError,KeyError,OSError) as exc:st.session_state['task_error']=str(exc)
@@ -389,18 +422,21 @@ def briefing_panel(catalog,day,loading,model_key,bucket,forecasts,assessment,cla
     try: secret=st.secrets.get('GEMINI_API_KEY','')
     except (FileNotFoundError,st.errors.StreamlitSecretNotFoundError):secret=''
     with st.expander('Gemini settings · connection and models'):
+        if 'gemini_runtime_key' not in st.session_state:st.session_state['gemini_runtime_key']=st.session_state.get('_gemini_runtime_saved','')
         runtime=st.text_input('GEMINI_API_KEY',type='password',key='gemini_runtime_key',help='Google API key or bearer token. Questions and forecast context go to Google only when you ask. The credential remains in server session memory.')
+        st.session_state['_gemini_runtime_saved']=runtime
         auth=st.selectbox('Credential type',['auto','key','bearer'],format_func=lambda v:{'auto':'Auto detect','key':'API key','bearer':'Bearer token'}[v],help='Auto tries the credential type suggested by its prefix, then the alternative on an authentication error. AQ prefixes alone do not prove token validity.')
         key=gemini_key(runtime,{'GEMINI_API_KEY':secret})
         fingerprint=hashlib.sha256((auth+key).encode()).hexdigest()
         refresh=st.button('Check connection / refresh models',help='Query Google’s model list for this credential. Only available text models appear in the selector.')
-        if st.button('Forget pasted key',help='Clear this session’s pasted credential.',on_click=lambda:st.session_state.pop('gemini_runtime_key',None)):st.rerun()
+        if st.button('Forget pasted key',help='Clear this session’s pasted credential.',on_click=lambda:(st.session_state.pop('gemini_runtime_key',None),st.session_state.pop('_gemini_runtime_saved',None))):st.rerun()
         saved=st.session_state.get('gemini_connection')
+        from app_cache import gemini_discovery
+        if refresh:gemini_discovery.clear(fingerprint,auth,_credential=key)
+        connection=gemini_discovery(fingerprint,auth,_credential=key)
         if saved is None or saved['fingerprint']!=fingerprint or refresh:
-            connection=GeminiREST(key,auth).connect()
-            st.session_state['gemini_connection']={'fingerprint':fingerprint,'connection':connection}
             st.session_state.pop('gemini_active_model',None);st.session_state.pop('gemini_last_error',None)
-        else:connection=saved['connection']
+        st.session_state['gemini_connection']={'fingerprint':fingerprint,'connection':connection}
         choices=list(connection.models)
         model=st.selectbox('Gemini model',choices or ['Local assistant'],help='Discovered from your account. Newer available Gemini versions appear first. Disabled models fall back to another listed model.')
         status=st.session_state.get('gemini_last_error') or connection.error
@@ -426,8 +462,23 @@ def briefing_panel(catalog,day,loading,model_key,bucket,forecasts,assessment,cla
         if not selected and st.session_state.get('selected_airfield'):
             from uk_airfields import airfield_by_id
             field=airfield_by_id(st.session_state['selected_airfield']);selected=field.turnpoint.point if field else None
-        with st.spinner('Comparing hourly weather, five-day sectors and your route…'):
-            evidence,proposed=build_context(question,catalog,forecasts,requested_day,today or day,loading,selected=selected,active=active_task(day),assessment=assessment)
+        from place_resolver import resolve_place,sector_radius,local_forecasts,PlaceError
+        try:
+            resolved=resolve_place(question,catalog,selected,allow_network=not recorded)
+        except PlaceError as exc:
+            history.extend([{'role':'user','content':question},{'role':'assistant','content':str(exc)}])
+            st.session_state['assistant_routes']={};st.rerun()
+        if not recorded:
+            with st.spinner('Loading the requested local forecast…'):
+                batch=local_forecasts(resolved.point,sector_radius(question),model_key,bucket)
+                forecasts=tuple({(f.location.key,f.model):f for f in (*forecasts,*batch.forecasts)}.values())
+                if batch.failures:st.warning('; '.join(f.message for f in batch.failures))
+                if re.search(r'\b(task|route|national|regions|sectors|triangle|cross.country)\b',question,re.I):
+                    from app import load_sites
+                    regional=load_sites(model_key,bucket)
+                    forecasts=tuple({(f.location.key,f.model):f for f in (*forecasts,*regional.forecasts)}.values())
+        with st.spinner('Preparing your requested briefing…'):
+            evidence,proposed=build_context(question,catalog,forecasts,requested_day,today or day,loading,selected=selected,active=active_task(day),assessment=assessment,resolved=resolved)
             response=local_response(question,evidence);suggestions=[]
             if proposed:
                 suggestions=[('Your described route','Review the weather verdict before loading.',proposed)]
@@ -447,9 +498,9 @@ def briefing_panel(catalog,day,loading,model_key,bucket,forecasts,assessment,cla
             if key and connection.models:
                 try:
                     client=GeminiREST(key,connection.auth)
-                    answer,active=client.generate(question,evidence,models=tuple(dict.fromkeys([model,*connection.models])),history=history)
+                    answer,active=client.generate(question,evidence,models=tuple(dict.fromkeys([model,*connection.models])),history=history if evidence['scope']['task_requested'] else ())
                     response=answer['answer']+'\n\n---\n\n**Checked weather evidence**\n\n'+response
-                    suggestions+=validated_suggestions(answer,catalog)
+                    if evidence['scope']['task_requested']:suggestions+=validated_suggestions(answer,catalog)
                     st.session_state['gemini_active_model']=active;st.session_state.pop('gemini_last_error',None)
                     source='Connected to Gemini ('+active+')'
                 except GeminiError as exc:

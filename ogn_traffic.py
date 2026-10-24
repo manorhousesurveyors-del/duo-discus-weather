@@ -91,6 +91,8 @@ class TrafficWorker:
         return parse_spot_xml(fetch(FEED,8_000_000),devices=self.devices)
     def run(self):
         while not self.stop.is_set():
+            if time.time()>getattr(self,'active_until',0):
+                self.stop.wait(.5);continue
             try:body=self.once()
             except (ValueError,OSError,ET.ParseError) as exc:
                 body={'schema':1,'status':'unavailable','fetched_at':datetime.now(UTC).isoformat(),'aircraft':[],
@@ -101,6 +103,7 @@ class TrafficWorker:
     def start(self):
         self.write({'schema':1,'status':'connecting','fetched_at':datetime.now(UTC).isoformat(),'aircraft':[],
                     'source':'OGN / SpotTheGlider','note':'Connecting to the live UK feed…'})
+        self.active_until=time.time()+35
         self.thread=Thread(target=self.run,name='duo-ogn-feed',daemon=True);self.thread.start();return self
 
 
@@ -113,8 +116,20 @@ def ensure_worker():
     return _worker
 
 
+def set_worker_active(active):
+    if _worker is not None:_worker.active_until=time.time()+35 if active else 0
+
+
+def traffic_heartbeat():
+    import streamlit as st
+    @st.fragment(run_every='20s')
+    def heartbeat():
+        ensure_worker();set_worker_active(True)
+    heartbeat()
+
+
 def add_traffic(map_view,*,show=False,recorded=False):
     from client_map import script
     from streamlit.runtime.scriptrunner import get_script_run_ctx
-    if not recorded and get_script_run_ctx(suppress_warning=True):ensure_worker()
+    if show and not recorded and get_script_run_ctx(suppress_warning=True):ensure_worker();set_worker_active(True)
     script(map_view,'ogn_traffic.js','installDuoTraffic',{'show':show,'recorded':recorded,'path':'app/static/ogn/uk.json'})

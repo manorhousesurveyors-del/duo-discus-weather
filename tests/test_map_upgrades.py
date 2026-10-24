@@ -62,12 +62,16 @@ class WindCoverageTests(unittest.TestCase):
         self.assertNotIn('coverage_km',body)
 
     def test_all_components_return_only_click_objects(self):
-        count=0
+        count=0;cached=0
         for path in ('app.py','route_analysis.py'):
             for node in ast.walk(ast.parse(Path(path).read_text())):
                 if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='st_folium':
                     kwargs={k.arg:k.value for k in node.keywords};self.assertEqual(ast.literal_eval(kwargs['returned_objects']),['last_object_clicked','last_clicked']);count+=1
-        self.assertEqual(count,4)
+                elif isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='render_document':
+                    kwargs={k.arg:k.value for k in node.keywords}
+                    self.assertEqual(ast.literal_eval(kwargs['key']),'wave_map')
+                    self.assertIn('on_change',kwargs);cached+=1
+        self.assertEqual((count,cached),(3,1))
 
     @unittest.skipUnless(shutil.which('node'),'Node is needed to parse generated map JavaScript')
     def test_generated_map_scripts_parse_with_route_markers_and_airfields(self):

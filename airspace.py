@@ -4,7 +4,7 @@ Airspace boundaries/activation are source data. No imported file can establish
 current NOTAM activity or grant clearance; absent geometry stays unassessed.
 """
 from datetime import UTC,date,datetime
-from functools import lru_cache
+import streamlit as st
 import hashlib
 from pathlib import Path
 import json
@@ -104,7 +104,7 @@ def import_airspace(data,filename):
     return validate_geojson(json.loads(text)) if filename.lower().endswith(('.json','.geojson')) else parse_openair(text)
 
 
-@lru_cache(maxsize=4)
+@st.cache_resource(show_spinner=False,max_entries=4)
 def _read_airspace(path,modified):
     raw=Path(path).read_bytes()
     if len(raw)>12_000_000:raise ValueError('Airspace file exceeds 12 MB')
@@ -143,7 +143,8 @@ def display_airspace(body,tolerance_m=100):
         metres=scale(shape(f['geometry']),xfact=66000,yfact=111195,origin=(0,0))
         simplified=metres.simplify(tolerance_m,preserve_topology=True)
         geometry=scale(simplified,xfact=1/66000,yfact=1/111195,origin=(0,0))
-        features.append({**f,'geometry':mapping(geometry)})
+        from json_payload import display_coordinates
+        features.append({**f,'geometry':display_coordinates(mapping(geometry))})
     result={**body,'features':features}
     if key[0]:
         if len(_display_cache)>3:_display_cache.clear()

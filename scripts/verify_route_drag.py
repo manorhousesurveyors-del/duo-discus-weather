@@ -21,8 +21,8 @@ async def main():
         page=await context.new_page();page.on('pageerror',lambda e:errors.append(str(e)))
         page.on('websocket',lambda w:w.on('framesent',lambda _:packets.append(1)))
         await page.goto('http://127.0.0.1:8504')
-        await page.get_by_role('tab',name='Task planner',exact=True).click(timeout=90000)
-        frame=page.get_by_role('tabpanel',name='Task planner',exact=True).frame_locator('iframe[title="map_component.duo_map"]')
+        await page.locator('.st-key-active_page').get_by_text('Task planner',exact=True).click(timeout=90000)
+        frame=page.locator('iframe[title="map_component.duo_map"]').last.content_frame
         root=frame.locator('.leaflet-container');await frame.locator('[data-action="clear"]').wait_for(timeout=90000)
         await frame.locator('[data-action="clear"]').click()
         await root.evaluate("el=>{const m=window.map_div;m.setView([52.5,-2.9],11,{animate:false});m._duoTask.add(m._duoBga.records.find(p=>p.code==='MYN'));}")
@@ -36,7 +36,7 @@ async def main():
         assert snapped<1,snapped
         await page.mouse.click(x,y);await page.wait_for_timeout(200)
         assert await root.evaluate("el=>window.map_div._duoTask.points.map(p=>p.code).join(',')==='MYN,CVN'")
-        assert len(packets)==baseline
+        assert len(packets)==baseline+1
         await frame.locator('[data-action="home"]').click();await page.wait_for_timeout(3500)
         async def drag(selector,target,expected):
             marker=frame.locator(selector);await marker.scroll_into_view_if_needed();box=await marker.bounding_box()

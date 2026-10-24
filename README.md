@@ -21,7 +21,7 @@ popups, and a map-click sounding/meteogram inspector. Choose model, day, local
 hour, wing loading and layers in the sidebar. Times follow **Europe/London**,
 including winter GMT. The initial view selects tomorrow at 13:00 after today's
 13:00 has passed. Refresh weather explicitly to request new data; cached
-forecasts last 15 minutes and aviation observations 60 seconds.
+forecasts last 30 minutes and aviation observations 60 seconds.
 
 Public weather APIs need no credentials. The first map/grid load can take a few
 minutes because requests respect Open-Meteo's weighted quota. Allow about 2 GB
@@ -54,13 +54,22 @@ client discovers your account’s available Gemini models, orders newer versions
 first and offers a selector. API-key and bearer authentication are supported.
 Connection errors show the HTTP reason; failed generation retains the local
 briefing. No Google SDK or guessed model availability is required.
-Controls, metrics, table columns and map markers
-have hover explanations.
+Local questions default to a **20 km sector** around the named or clicked place.
+The answer includes 09:00–18:00 local wind, gusts, climbs, cloud base AMSL/AGL and
+wave evidence. National tables, circuits and old task legs appear only when
+requested. Catalog lookup works offline; other UK towns use Open-Meteo/GeoNames
+geocoding. Ambiguous or unavailable places are explained rather than substituted.
+Controls, metrics, table columns and map markers have hover explanations.
 
-Task, Wave Watch and OGN maps mount even with missing forecasts. Each map uses
-a 680 px canvas inside a 720 px component, bundled Leaflet, CDN fallbacks and
-hidden-tab resize observers. Point clicks, cursor drawing and wave height
-changes stay in the browser; Finish/Analyse saves the task. Open-Meteo requests
+The horizontal page bar loads only the selected page. Help, briefing and data
+quality pages build no maps; OGN provider polling runs only while its radar page
+is active. Each selected map uses a 680 px canvas inside a 720 px component and
+bundled Leaflet. Missing weather does not prevent map mounting. Cursor drawing
+and wave altitude changes stay in the browser. Every added, dropped or removed
+task point saves through a small Streamlit fragment update. Weather and Task
+maps share one versioned route and both have a Clear Task button. Finish/Analyse
+updates the task weather tables. Static resources, terrain FFT preparation,
+30-minute weather/wave products and compressed map documents are cached. Open-Meteo requests
 include the previous 24 hours so today's star rating includes its morning window.
 
 **Help Guide** provides dyslexia-friendly step cards and a plain-language weather

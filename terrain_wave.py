@@ -5,6 +5,7 @@ propagates both phases through the forecast Scorer profile. It is a linear,
 coarse-atmosphere estimate, not a validated mesoscale or rotor forecast.
 """
 from functools import lru_cache
+import streamlit as st
 from pathlib import Path
 import hashlib
 import json
@@ -76,7 +77,20 @@ def atmosphere(profile,heading):
             'u':np.array([l.u_mps for l in levels]),'v':np.array([l.v_mps for l in levels])}
 
 
-def solve_field(heights,spacing_m,profile,altitudes_ft,*,pad_fraction=.5):
+def prepare_terrain(heights,spacing_m,*,pad_fraction=.5):
+    """Wind-independent slopes, frequencies and FFT, reused across every profile."""
+    shape=heights.shape
+    smooth=gaussian_filter(heights,.7)
+    gy,gx=np.gradient(smooth,spacing_m)
+    pad=(max(8,int(shape[0]*pad_fraction)),max(8,int(shape[1]*pad_fraction)))
+    h=np.pad(smooth,((pad[0],pad[0]),(pad[1],pad[1])),mode='reflect')
+    h=(h-h.mean())*np.outer(np.hanning(h.shape[0]),np.hanning(h.shape[1]))
+    return {'gx':gx,'gy':gy,'pad':pad,'spectrum':fft2(h),
+            'kx':2*np.pi*fftfreq(h.shape[1],spacing_m)[None,:],
+            'ky':2*np.pi*fftfreq(h.shape[0],spacing_m)[:,None]}
+
+
+def solve_field(heights,spacing_m,profile,altitudes_ft,*,pad_fraction=.5,prepared=None):
     """Return signed kt fields and diagnostics; unknown heights are null.
 
     Spatial frequencies 2–40 km retain ridge detail. A damped harmonic response
@@ -96,13 +110,9 @@ def solve_field(heights,spacing_m,profile,altitudes_ft,*,pad_fraction=.5):
     wavelength=2*math.pi/math.sqrt(lower)/1000
     # Keep diagnosed wavelengths, never force them into an attractive 5–18 km band.
     upper=float(np.interp(min(low.height_m+2500,a['z'][-1]),a['z'],a['scorer']))
-    smooth=gaussian_filter(heights,.7)
-    gy,gx=np.gradient(smooth,spacing_m)
-    slope=np.hypot(gx,gy);normal=np.sqrt(np.mean((u*gx+v*gy)**2)/max(np.mean(slope**2),1e-12))
-    pad=(max(8,int(shape[0]*pad_fraction)),max(8,int(shape[1]*pad_fraction)))
-    h=np.pad(smooth,((pad[0],pad[0]),(pad[1],pad[1])),mode='reflect')
-    h=(h-h.mean())*np.outer(np.hanning(h.shape[0]),np.hanning(h.shape[1]))
-    ky=2*np.pi*fftfreq(h.shape[0],spacing_m)[:,None];kx=2*np.pi*fftfreq(h.shape[1],spacing_m)[None,:]
+    prepared=prepared or prepare_terrain(heights,spacing_m,pad_fraction=pad_fraction)
+    gx,gy,pad,kx,ky= (prepared[k] for k in ('gx','gy','pad','kx','ky'))
+    normal=np.sqrt(np.mean((u*gx+v*gy)**2)/max(np.mean(gx*gx+gy*gy),1e-12))
     # Rows run south -> north, so positive ky is geographic north.
     intrinsic=kx*u+ky*v;kh2=kx*kx+ky*ky;kh=np.sqrt(kh2);safe=np.abs(intrinsic)>1e-5
     kparallel=intrinsic/max(speed,1e-9);wavenumber=2*math.pi/max(wavelength*1000,1)
@@ -112,7 +122,7 @@ def solve_field(heights,spacing_m,profile,altitudes_ft,*,pad_fraction=.5):
     # places poles in the upper half-plane and the response downwind in x.
     response=1+(.25*wavenumber**2)/(wavenumber**2-kparallel**2+2j*damping*kparallel)
     band=(kh>=2*math.pi/40000)&(kh<=2*math.pi/2000)&safe
-    forcing=1j*intrinsic*fft2(h)*band*response
+    forcing=1j*intrinsic*prepared['spectrum']*band*response
     fields=[]
     for feet in altitudes_ft:
         height=feet*.3048
@@ -153,13 +163,17 @@ def profile_for_domain(forecasts,when,domain):
 
 CONTINUOUS_PATH=Path(__file__).with_name('data')/'uk_continuous_terrain.npz'
 
-@lru_cache(maxsize=1)
+@st.cache_resource(show_spinner=False,max_entries=1)
 def load_continuous_terrain():
     meta=json.loads(CONTINUOUS_PATH.with_suffix('.json').read_text())
     if hashlib.sha256(CONTINUOUS_PATH.read_bytes()).hexdigest()!=meta['sha256']:raise ValueError('Continuous terrain checksum mismatch')
     with np.load(CONTINUOUS_PATH,allow_pickle=False) as data:heights=data['heights'].astype(float)
     if heights.shape!=(meta['rows'],meta['cols']) or not np.isfinite(heights).all():raise ValueError('Continuous terrain dimensions invalid')
-    return {**meta,'heights':heights}
+    prepared=prepare_terrain(heights,meta['spacing_m'],pad_fraction=.125)
+    for value in prepared.values():
+        if isinstance(value,np.ndarray):value.flags.writeable=False
+    heights.flags.writeable=False
+    return {**meta,'heights':heights,'prepared':prepared}
 
 
 def continuous_field(terrain,forecasts,when,altitudes_ft,*,maximum_profiles=8):
@@ -196,7 +210,7 @@ def continuous_field(terrain,forecasts,when,altitudes_ft,*,maximum_profiles=8):
         point=p.forecast.location;distance=np.hypot((yy-point.latitude)*111,(xx-point.longitude)*111*np.cos(np.radians(yy)))
         nearest=np.minimum(nearest,distance)
         weight=np.exp(-.5*(distance/110)**2)
-        fields,diagnostics=solve_field(h,terrain['spacing_m'],p,altitudes_ft,pad_fraction=.125)
+        fields,diagnostics=solve_field(h,terrain['spacing_m'],p,altitudes_ft,pad_fraction=.125,prepared=terrain.get('prepared'))
         profiles.append({'name':point.name,'lat':point.latitude,'lon':point.longitude,'diagnostics':diagnostics,
             'model':p.forecast.model,'retrieved':p.forecast.fetched_at.isoformat()})
         for i,field in enumerate(fields):

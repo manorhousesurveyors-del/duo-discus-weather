@@ -129,6 +129,14 @@ def wave_payload(forecasts,when,*,terrain=None):
         'terrain_status':'Verified continuous elevation mosaic loaded'}
 
 
+import streamlit as st
+
+
+@st.cache_data(ttl=1800,show_spinner=False,max_entries=12)
+def cached_wave_payload(forecast_run_id,when,_forecasts):
+    return wave_payload(_forecasts,when)
+
+
 def add_wave_map(map_view,forecasts,when):
     import streamlit as st
     from streamlit.runtime.scriptrunner import get_script_run_ctx
@@ -136,10 +144,10 @@ def add_wave_map(map_view,forecasts,when):
     from airspace import load_airspace,display_airspace
     from config import LOCAL_TIMEZONE
     import folium,html
-    key=(when.isoformat(),tuple((f.location.key,f.model,f.fetched_at.isoformat()) for f in forecasts if f.location.key.startswith(('region:','ridge:'))))
-    cache=st.session_state.setdefault('_wave_products',{}) if get_script_run_ctx(suppress_warning=True) else {}
-    if key not in cache:cache.clear();cache[key]=wave_payload(forecasts,when)
-    script(map_view,'wave_map.js','installDuoWave',cache[key])
+    from app_cache import forecast_run_id
+    sources=tuple(f for f in forecasts if f.location.key.startswith(('region:','ridge:')))
+    payload=cached_wave_payload(forecast_run_id(sources),when,_forecasts=sources)
+    script(map_view,'wave_map.js','installDuoWave',payload)
     body=load_airspace(when.astimezone(LOCAL_TIMEZONE).date())
     if body:
         display=display_airspace(body)

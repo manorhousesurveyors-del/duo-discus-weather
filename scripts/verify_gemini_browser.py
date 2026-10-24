@@ -11,21 +11,25 @@ async def main():
         # Maps use bundled libraries; this test needs no public tile requests.
         await page.route('https://**/*',lambda route:route.abort())
         await page.goto('http://127.0.0.1:8505')
-        await page.get_by_role('tab',name='Help & Briefing Bot',exact=True).click(timeout=90000)
-        panel=page.get_by_role('tabpanel',name='Help & Briefing Bot',exact=True)
+        await page.locator('.st-key-active_page').get_by_text('Help & Briefing Bot',exact=True).click(timeout=90000)
+        panel=page
         await panel.get_by_text('Gemini settings · connection and models',exact=True).click()
-        await panel.get_by_test_id('stAlertContentSuccess').get_by_text('Connected to Gemini (gemini-3.1-pro-preview)',exact=True).wait_for(timeout=60000)
+        await panel.get_by_text('Connected to Gemini (gemini-3.1-pro-preview)',exact=True).wait_for(timeout=60000)
         chat=page.get_by_placeholder('Ask for a task, day briefing, turnpoint or explanation…')
         await chat.fill('Can I potter around Denbigh tomorrow rather than fly a 250 km task?');await chat.press('Enter')
-        await panel.get_by_text('Mynd northern ridge option',exact=False).wait_for(timeout=90000)
+        await panel.get_by_text('Local synoptic and soaring summary',exact=True).wait_for(timeout=90000)
         await panel.get_by_test_id('stAlertContentSuccess').get_by_text('Connected to Gemini (gemini-3-flash-preview)',exact=True).wait_for(timeout=30000)
         answer=await panel.locator('[data-testid="stChatMessage"]').last.inner_text()
         assert 'Browser fixture · Gemini REST' in answer
         assert 'POT — Potton' not in answer and 'No achievable 250' not in answer
-        assert 'Denbigh' in answer and 'Five-day' in answer
+        assert 'Denbigh' in answer and '20 km' in answer
+        assert 'Five-day outlook' not in answer and 'Goole' not in answer
+        assert await panel.get_by_role('button',name='Load suggested route onto map',exact=True).count()==0
+        await chat.fill('Suggest a short task from the Mynd tomorrow');await chat.press('Enter')
+        await panel.get_by_role('button',name='Load suggested route onto map',exact=True).wait_for(timeout=90000)
         await panel.get_by_role('button',name='Load suggested route onto map',exact=True).click()
-        await page.get_by_role('tab',name='Task planner',exact=True).click()
-        root=page.get_by_role('tabpanel',name='Task planner',exact=True).frame_locator('iframe[title="map_component.duo_map"]').locator('.leaflet-container')
+        await page.locator('.st-key-active_page').get_by_text('Task planner',exact=True).click()
+        root=page.locator('iframe[title="map_component.duo_map"]').last.content_frame.locator('.leaflet-container')
         for _ in range(100):
             await page.wait_for_timeout(300)
             try:
@@ -43,7 +47,7 @@ async def main():
         point=await root.evaluate("el=>{const m=window.map_div,p=m._duoBga.records.find(p=>p.code==='DEN'),q=m.latLngToContainerPoint([p.lat,p.lon]);return {x:q.x,y:q.y};}")
         box=await root.bounding_box()
         await page.mouse.click(box['x']+point['x'],box['y']+point['y'])
-        await page.get_by_role('tab',name='Help & Briefing Bot',exact=True).click()
+        await page.locator('.st-key-active_page').get_by_text('Help & Briefing Bot',exact=True).click()
         await page.wait_for_timeout(2000)
         await chat.fill('weather forecast here for tomorrow');await chat.press('Enter')
         briefing_day=re.search(r'20\d{2}-\d{2}-\d{2}',answer).group()

@@ -637,3 +637,54 @@ Reproduction scripts: `scripts/verify_client_maps.py`,
 on port 8505). Both apps require a recorded `DUO_DASHBOARD_SNAPSHOT` and should
 use separate `DUO_TASK_STORE` directories. The Gemini fixture patches only the
 transport for its process; it is never imported by the production app.
+
+
+## Lazy pages, shared tasks and local briefings · 24 October 2026
+
+The full automated suite passed: **234 tests in 25.8 seconds**. Dependency checks,
+Python compilation, JavaScript syntax checks and `git diff --check` also passed.
+
+The page router now builds only the selected page. AppTest checks reject hidden
+wave calculations, OGN worker starts and map rendering on all three text pages.
+The expanded tests cover cached read-only terrain preparation and numerical
+solver equivalence, forecast-hour cache identity, coordinate precision, compressed
+map round-trips, credential-separated model discovery, versioned task clearing,
+local scope, UK-only geocoding and ambiguous/partial place names.
+
+Chromium verification used the recorded five-day weather fixture:
+
+- `verify_lazy_pages.py`: one iframe on the selected map page, zero on text
+  pages; task adds and clearing from either toolbar synchronize both maps.
+  Point saves preserved the browser map object and sent about 1–2 KB of state.
+- `verify_route_drag.py`: physical magnetic snap error 0 m in the fixture;
+  middle-point replacement, midpoint insertion and linked Start/Finish moves
+  passed. Drag handlers took 0.8–1.0 ms, with no movement packets and one per drop.
+- `verify_client_maps.py --proxy-assets`: all 1,390 turnpoints and 1,098 airfields,
+  task overlays, cursor line, completion, nine wave heights, click/drag sections,
+  UK wave coverage, OGN demo and missing-weather maps passed. No JavaScript errors
+  or failed public assets. Cursor update 0.7 ms; wave switches 0.5–0.9 ms after preload.
+- `verify_gemini_browser.py`: explicitly mocked model discovery and 404 fallback
+  from Pro to Flash, strictly local Denbigh answer, an explicitly requested route
+  proposal, route loading and a subsequent “here” briefing passed. This does not
+  verify a live Google credential or generation quota.
+
+In a separate AppTest timing run, text-page Python work took 5.6–20.7 ms. Warm
+Wave Watch took 257 ms, versus 5.25 seconds for its first field/document build.
+The browser's warm page-ready checks measured about 211–553 ms for text pages,
+867–976 ms for Task/Weather and 1.03–1.04 seconds for Wave Watch. These are measured
+fixture timings, not a guarantee of subsecond end-to-end response on every
+browser. Cold provider requests and Gemini generation still depend on the network.
+
+The representative Task Map document including airspace fell from 1,478,226 to
+285,647 bytes (80.7%) with compact display geometry and deflate/base64 transport.
+The source catalog and export coordinates retain original precision; the obstacle
+checker still uses unsimplified geometry.
+
+Live verified HTTPS lookup resolved Birmingham to 52.48142, −1.89983 and Church
+Stretton to 52.53778, −2.80149 through Open-Meteo/GeoNames. The latter regression
+also ensures the shorter BGA name “Stretton” cannot replace “Church Stretton”.
+No email, ntfy or WhatsApp notifications were sent during this validation.
+
+The uploaded request ended mid-sentence after “cloud base, and spread”. All
+complete requirements were implemented; the local lift breakdown includes
+spread-out risk from the forecast evidence.

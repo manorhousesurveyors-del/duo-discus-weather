@@ -253,3 +253,31 @@ To reproduce or refresh it, run `.venv/bin/python scripts/update_continuous_terr
 Inspect the metadata/hashes and rerun tests before committing the new archive.
 This fetches the bounded set of zoom-8 elevation tiles recorded in the metadata.
 The older `update_wave_terrain.py` reproduces the retained 500 m reference grids.
+
+
+## Lazy pages and local place lookup
+
+The active page is stored in `active_page`. Weather/API bundles, day summaries,
+task assessments and wave products use 30-minute caches. Gemini discovery uses a
+one-hour cache keyed by a credential fingerprint and authentication type. Runtime
+credentials remain only in server session memory; they are absent from map
+payloads. Static catalogs and terrain preparation use shared resource caches.
+Restart the server after replacing the static airfield or DEM files.
+
+UK town lookup needs HTTPS access to `geocoding-api.open-meteo.com`. Its domain
+was saved to the cloud network draft on 24 October 2026. Subsequent verified HTTPS
+checks resolved Birmingham and Church Stretton successfully. A new environment
+with a custom allowlist must include that domain. BGA/airfield lookup and
+map-coordinate selection continue without geocoding. Geocoding uses UK-only results and reports
+ambiguous names instead of picking an unverified location.
+
+Only the dedicated Live OGN Glider Radar page renews the provider worker's
+35-second activity lease. Leaving that page pauses it; closing the browser lets
+the lease expire. Other maps may display the last available traffic snapshot,
+with its existing stale-report filtering. Recorded/demo sessions never start a
+live worker. Browser polling and real provider access are separate operations.
+
+Run `scripts/verify_lazy_pages.py`, `scripts/verify_route_drag.py` and
+`scripts/verify_client_maps.py --proxy-assets` against the recorded test server
+on port 8504. `scripts/verify_gemini_browser.py` uses the explicitly mocked fixture
+server on port 8505 and cannot verify real Google quota or account access.

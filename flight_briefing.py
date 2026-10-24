@@ -32,21 +32,37 @@ def checked_route(points,forecasts,day,loading):
         'coverage':'Screening from loaded weather within 75 km; verify the exact corridor before flight.'}
 
 
-def build_context(question,catalog,forecasts,day,today,loading,*,selected=None,active=(),assessment=None):
-    origin=requested_site(question,selected)
-    site=site_evidence(forecasts,day,origin=origin)
-    site['stars']=asdict(rate_day(nearby_forecasts((origin,),forecasts,maximum_km=75),origin,day,loading))
+def build_context(question,catalog,forecasts,day,today,loading,*,selected=None,active=(),assessment=None,resolved=None):
+    from place_resolver import resolve_place,sector_radius
+    place=resolved or resolve_place(question,catalog,selected)
+    origin=place.point;radius=sector_radius(question)
+    explicit=resolve_turnpoints(question,catalog)
+    proposed=explicit if len(explicit)>=2 and re.search(r'\b(?:to|via|then|back)\b|→|->',question,re.I) else ()
+    task_request=bool(proposed or re.search(r'\b(?:task|route|legs?|triangle|turnpoints?)\b',question,re.I))
+    if re.search(r'\b(?:rather than|instead of|not) (?:fly(?:ing)? )?(?:a )?\d*\s*(?:km )?task\b',question,re.I):task_request=False;proposed=()
+    if re.search(r'\b(?:no|without|ignore) (?:my |the |any )?(?:task|route)\b',question,re.I):task_request=False;proposed=()
+    national=bool(re.search(r'\b(?:national|nationwide|all (?:uk |the )?regions|across (?:the )?(?:uk|britain)|compare regions|best sectors)\b',question,re.I))
+    if re.search(r'\b(?:no|without|ignore) (?:the |any )?(?:national|regional|regions)\b',question,re.I):national=False
+    named_circuit=(bool(re.search(r'\bgoole\b',question,re.I) and re.search(r'\bdidcot\b',question,re.I)) or
+                   bool(re.search(r'\bsnowdonia\b.*\b(?:to|→)\b.*\bsouth wales\b',question,re.I)))
+    regional_request=national or task_request
+    scope={'kind':'task' if task_request else 'regional' if national else 'local','radius_km':radius,
+           'task_requested':task_request,'national_requested':national,'circuits_requested':named_circuit,
+           'place_source':place.source}
+
+    site=site_evidence(forecasts,day,origin=origin,maximum_km=radius)
+    site['stars']=asdict(rate_day(nearby_forecasts((origin,),forecasts,maximum_km=radius),origin,day,loading))
     regional=[]
     from map_weather import soaring_samples
     # Preserve hourly evidence throughout the five-day outlook, not just ratings.
-    for key,point in SITES.items():
-        hours=site_evidence(forecasts,day,origin=point)
+    for key,point in (SITES.items() if regional_request else ()):
+        hours=site_evidence(forecasts,day,origin=point,maximum_km=75)
         nearest=min(forecasts,key=lambda f:distance_bearing(point,f.location)[0],default=None)
         local=nearby_forecasts((point,),forecasts,maximum_km=75)
         ratings=[]
         for i in range(5):
             forecast_day=today+timedelta(days=i)
-            daily=hours if forecast_day==day else site_evidence(forecasts,forecast_day,origin=point)
+            daily=hours if forecast_day==day else site_evidence(forecasts,forecast_day,origin=point,maximum_km=75)
             rating=asdict(rate_day(local,point,forecast_day,loading))
             rating['hours']=[{k:v for k,v in h.items() if k not in ('upper_winds','wave_bands')} for h in daily['hours']]
             ratings.append(rating)
@@ -61,17 +77,23 @@ def build_context(question,catalog,forecasts,day,today,loading,*,selected=None,a
     circuits=[]
     for name,keys in [('Long Mynd → Goole → Didcot → Church Stretton → Long Mynd',('shropshire','humberside','oxfordshire','church_stretton','shropshire')),
                       ('Snowdonia → South Wales',('snowdonia','south_wales'))]:
+        if not named_circuit:continue
+        if keys[0]=='shropshire' and not re.search(r'\bgoole\b',question,re.I):continue
+        if keys[0]=='snowdonia' and not re.search(r'\bsnowdonia\b',question,re.I):continue
         _,row=checked_route(tuple(geographic(SITES[k]) for k in keys),forecasts,day,loading);circuits.append({'name':name,**row})
-    explicit=resolve_turnpoints(question,catalog)
-    proposed=explicit if len(explicit)>=2 and re.search(r'\b(?:to|via|then|back)\b|→|->',question,re.I) else ()
-    route=proposed or active;route_context=None
+    route=(proposed or active) if task_request else ();route_context=None
     if route and len(route)>=2:
         try:_,route_context=checked_route(route,forecasts,day,loading)
         except ValueError:pass
-    return finite_data({'day':day,'today':today,'loading':loading,'site':site,'regions':regional,
+    return finite_data({'day':day,'today':today,'loading':loading,'site':site,'regions':regional,'scope':scope,
+        'coordinate':{'latitude':origin.latitude,'longitude':origin.longitude},
+        'sector_samples':[{'name':f.location.name,'distance_km':round(distance_bearing(origin,f.location)[0],1),
+            'hours':site_evidence((f,),day,origin=f.location,maximum_km=radius)['hours']}
+            for f in forecasts if distance_bearing(origin,f.location)[0]<=radius+.01][:9],
+        'local_outlook':[asdict(rate_day(nearby_forecasts((origin,),forecasts,maximum_km=radius),origin,today+timedelta(days=i),loading)) for i in range(5)] if re.search(r'\b(?:five|5|week|outlook)\b',question,re.I) else [],
         'special_forecast':bool(re.search(r'\b(?:soaring|weather) forecast\b',question,re.I)),
-        'circuits':circuits,'active_task':[p.code for p in active],'proposed_task':[p.code for p in proposed],
-        'task':route_context,'catalog':[{'code':p.code,'name':p.name,'lat':p.latitude,'lon':p.longitude} for p in (*catalog.turnpoints,*LOCAL_POINTS.values())],
+        'circuits':circuits,'active_task':[p.code for p in active] if task_request else [],'proposed_task':[p.code for p in proposed],
+        'task':route_context,'catalog':[{'code':p.code,'name':p.name,'lat':p.latitude,'lon':p.longitude} for p in (*catalog.turnpoints,*LOCAL_POINTS.values())] if task_request else [],
         'limits':'Loaded model forecasts; missing evidence remains unknown. No live NOTAM clearance, observed lift or launch approval.'}),proposed
 
 
@@ -84,6 +106,7 @@ def threshold(values,lower,upper,unit):
 
 
 def local_response(question,context):
+    if context.get('scope',{}).get('kind')=='local':return local_site_response(question,context)
     site=context['site'];hours=site['hours'];name=site['site'];day=context['day']
     lines=[f"**{name} · {day}**",'Let’s compare the wind, usable lift and the route options.']
     def f(v,d=0):return 'unknown' if v is None else f'{v:.{d}f}'
@@ -122,7 +145,7 @@ def local_response(question,context):
     lines+=['**Five-day outlook**']
     for row in context['regions']:
         lines.append(row['name']+': '+ '; '.join(f"{r['day']} {str(r['stars'])+'★' if r['stars'] else 'unknown'} / {f(r['distance_km'])} km" for r in row['five_days'])+'.')
-    lines+=['**Unpowered Duo Discus · circuit viability**']
+    if context['circuits']:lines+=['**Unpowered Duo Discus · circuit viability**']
     for circuit in context['circuits']:
         lines.append(f"**{circuit['name']}** · {circuit['briefing']} {circuit['coverage']} These geographic reference points are not a BGA declaration.")
     if context.get('task'):
@@ -150,3 +173,72 @@ def validated_suggestions(response,catalog):
         except ValueError:continue
         results.append((str(row.get('name','Suggested task'))[:100],str(row.get('reason',''))[:1000],task))
     return results
+
+
+def local_site_response(question,context):
+    """A bounded site briefing: never resurrect old tasks or national circuits."""
+    site=context['site'];hours=site['hours'];scope=context['scope'];radius=scope['radius_km']
+    def fmt(value,d=0):return 'unknown' if value is None else f'{value:.{d}f}'
+    usable=[h for h in hours if (h.get('climb_kt') or 0)>=1 and (h.get('usable_agl_ft') or 0)>=1600 and h.get('rain_mm') is not None and h['rain_mm']<1]
+    climbs=[h['climb_kt'] for h in hours if h.get('climb_kt') is not None]
+    bases=[h['cloud_base_ft'] for h in hours if h.get('cloud_base_ft') is not None]
+    winds=[h['wind_kt'] for h in hours if h.get('wind_kt') is not None]
+    rain=[h['time'] for h in hours if (h.get('rain_mm') or 0)>=1]
+    coordinate=context['coordinate']
+    lines=[f"**{site['site']} · {context['day']}**",
+        f"Local forecast · within {radius:g} km of {coordinate['latitude']:.4f}, {coordinate['longitude']:.4f}. {scope['place_source']}.",
+        '**Local synoptic and soaring summary**']
+    if hours:
+        lines.append((f"Surface wind ranges from {min(winds):.0f} to {max(winds):.0f} kt. " if winds else 'Surface wind is unknown. ')+
+            (f"Peak predicted thermal climb is {max(climbs):.1f} kt. " if climbs else 'Thermal strength is unknown. ')+
+            (f"The highest predicted cloud base is {max(bases):.0f} ft AMSL. " if bases else 'Cloud base is unknown. ')+
+            ('Rain may interrupt soaring at '+', '.join(rain)+'.' if rain else 'Check the hourly rain and cloud evolution before launch.'))
+        lines.append('Local day rating: '+str(site.get('stars',{}).get('stars') or 'unknown')+' stars. Model trends describe this sector; no pressure-system analysis or distant wave corridor is inferred.')
+    else:lines.append(site.get('coverage','No usable local forecast coverage')+'. Local wind, lift and cloud height remain unknown; no distant forecast has been substituted.')
+    rows=[];by_hour={int(h['time'][:2]):h for h in hours}
+    for hour in range(9,19):
+        h=by_hour.get(hour,{})
+        score=fmt(h.get('wave_score'))+(' provisional' if h.get('wave_score') is not None and not h.get('wave_complete') else '')
+        rows.append(f"| {hour:02d}:00 | {fmt(h.get('wind_kt'))} / {fmt(h.get('from_deg'))} | {fmt(h.get('gust_kt'))} | {fmt(h.get('climb_kt'),1)} | {fmt(h.get('cloud_base_ft'))} | {fmt(h.get('cloud_base_agl_ft'))} | {score} |")
+    lines+=['**Hourly local weather · Europe/London**',
+        '| Local hour | Surface wind kt / °T | Gust kt | Thermal climb kt | Base ft AMSL | Base ft AGL | Wave index /100 |\n|---|---|---|---|---|---|---|\n'+'\n'.join(rows),
+        '**Thermal lift and cloud**',
+        ('Sampled usable hours: '+', '.join(h['time'] for h in usable)+'.' if usable else 'The available hours do not establish a usable thermal window.')+
+        ' This screen needs at least 1 kt climb, 1,600 ft usable height and rain below 1 mm/h. Separate good hours are not one continuous window.']
+    risk=[h['time'] for h in hours if h.get('overdevelopment')]
+    lines.append('Spread-out risk: '+(', '.join(risk)+'. Broad cloud may reduce heating.' if risk else 'not indicated in the available complete samples.' if hours and all(h.get('overdevelopment') is not None for h in hours) else 'unknown where cloud evidence is missing.'))
+    lines.append('**Ridge lift at this site**')
+    ridge=next((h for h in hours if h.get('ridge')),None)
+    if ridge:
+        support=[h['time'] for h in hours if (h.get('ridge_component_kt') or 0)>=5]
+        lines.append(f"Nearby ridge reference: {ridge['ridge']}, facing {ridge['ridge_facing_deg']}°T. "+('Potential on-face flow at '+', '.join(support)+'.' if support else 'No sampled hour establishes useful on-face flow.')+' The 5 kt component is a screening guide, not a measured climb or launch limit.')
+    else:lines.append(f'No surveyed ridge orientation is loaded within this {radius:g} km sector. Local terrain alone does not establish usable ridge lift.')
+    lines.append('**Wave and upper winds**')
+    if hours:
+        noon=min(hours,key=lambda h:abs(int(h['time'][:2])-13))
+        upper=[]
+        for u in noon['upper_winds']:
+            if u['u_mps'] is None or u['v_mps'] is None:continue
+            speed=math.hypot(u['u_mps'],u['v_mps'])*1.94384;direction=math.degrees(math.atan2(-u['u_mps'],-u['v_mps']))%360
+            upper.append(f"{u['height_ft']:,} ft: {speed:.0f} kt from {direction:.0f}°T")
+        lines.append('Midday upper wind: '+('; '.join(upper) if upper else 'unknown')+'.')
+        bands=[f"{b['altitude_ft']:,} ft: {b['w']*1.94384:+.1f} kt" for b in noon['wave_bands'] if b.get('w') is not None]
+        lines.append('Background vertical air motion: '+('; '.join(bands) if bands else 'unknown')+'. These coarse model rates are not terrain-wave climb predictions.')
+        if not ridge:lines.append('Local wave potential is unassessed without a supported terrain-facing reference. It is not borrowed from another club.')
+    else:lines.append('Pressure-level evidence is missing. Wave potential and upper winds remain unknown.')
+    lines+=['**Launch and landing checks**','Check actual wind, gusts, crosswind, cloud and showers with the site operator. Strong lee-side flow can create rotor. Forecasts cannot approve a launch.']
+    if 'mynd' in site['site'].lower():lines.append('At the Mynd, confirm current West launch guidance and the available ground run.')
+    if hours:lines.append(f"Forecast source: {site['model']} at {site['forecast_point']}, {site['distance_km']:g} km away; retrieved {site['retrieved']}. AGL uses model terrain ({site['terrain_ft']:.0f} ft AMSL).")
+    sector=[h for row in context.get('sector_samples',[]) for h in row['hours']]
+    sector_climbs=[h['climb_kt'] for h in sector if h.get('climb_kt') is not None]
+    sector_bases=[h['cloud_base_ft'] for h in sector if h.get('cloud_base_ft') is not None]
+    if len(context.get('sector_samples',[]))>1 and sector_climbs:
+        lines.append(f"Across {len(context['sector_samples'])} loaded samples inside this sector, hourly climb estimates span {min(sector_climbs):.1f}–{max(sector_climbs):.1f} kt."+
+            (f" Cloud base spans {min(sector_bases):.0f}–{max(sector_bases):.0f} ft AMSL." if sector_bases else '')+' These are model samples, not uniform conditions throughout the sector.')
+    if context.get('local_outlook'):
+        lines.append('**Five-day local outlook**')
+        lines.extend(f"{r['day']}: {r['stars'] or 'unknown'} stars; local capacity {fmt(r['distance_km'])} km." for r in context['local_outlook'])
+    if context.get('circuits'):
+        lines.append('**Requested circuit assessment**')
+        lines.extend(r['name']+' · '+r['briefing'] for r in context['circuits'])
+    return '\n\n'.join(lines)

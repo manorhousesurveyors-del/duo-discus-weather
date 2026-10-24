@@ -64,7 +64,7 @@ def easy_answer(text):
     return '\n\n'.join(f'**Step {i+1}**\n\n{sentence}' for i,sentence in enumerate(sentences) if sentence)
 
 
-def render_help(catalog,assessment,classification,waves,*,forecasts=(),day=None,today=None):
+def render_help(catalog,assessment,classification,waves,*,forecasts=(),day=None,today=None,model_key='ifs025',bucket=0,recorded=False):
     st.subheader('Help Guide')
     st.caption('Small steps. Plain words. Take one card at a time.')
     st.markdown('''<style>
@@ -84,12 +84,19 @@ def render_help(catalog,assessment,classification,waves,*,forecasts=(),day=None,
     question=st.text_input('What would you like explained?',key='help_question',placeholder='Why is my task marginal?',
         help='Ask about your task, today’s distance, wind, clouds or a BGA turnpoint. Answers use the selected model and task.')
     if st.button('Explain in small steps',key='help_ask',help='Show a short, step-by-step answer based on the current forecast.'):
-        intent=parse_intent(question,catalog)
-        if intent.kind=='suggest':text='Open Route Forecast Planner. Choose your distance. Click Optimise Route. The planner checks the weather before loading a route.'
-        elif day is not None and intent.kind in ('weather','wave','day','help'):
-            from briefing_bot import pilot_briefing,briefing_date
-            text,_=pilot_briefing(question,forecasts,briefing_date(question,day,today or day))
-        else:text=answer_question(intent,catalog,assessment,classification,waves)
+        from flight_briefing import build_context,local_response
+        from briefing_bot import briefing_date
+        from place_resolver import resolve_place,local_forecasts,sector_radius,PlaceError
+        try:
+            place=resolve_place(question,catalog,st.session_state.get('briefing_point'),allow_network=not recorded)
+            if not recorded:
+                batch=local_forecasts(place.point,sector_radius(question),model_key,bucket)
+                forecasts=(*forecasts,*batch.forecasts)
+            from planning_ui import active_task
+            context,_=build_context(question,catalog,forecasts,briefing_date(question,day,today or day),today or day,
+                st.session_state.get('wing_loading','dry'),active=active_task(day),resolved=place)
+            text=local_response(question,context)
+        except PlaceError as exc:text=str(exc)
         st.session_state['easy_briefing']=easy_answer(text)
     with st.container(key='help_answer'):
         if st.session_state.get('easy_briefing'):st.markdown(st.session_state['easy_briefing'])

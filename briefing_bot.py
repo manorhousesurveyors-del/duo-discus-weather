@@ -196,16 +196,16 @@ def shortlist_tasks(catalog: Catalog, origin: Turnpoint, target_km: int, forecas
     return tuple(task for _,task in sorted(scored,key=lambda item:item[0],reverse=True)[:limit])
 
 
-def site_evidence(forecasts, day, *, origin=None):
+def site_evidence(forecasts, day, *, origin=None, maximum_km=20):
     """Hourly local observations of the selected forecast, never user wind claims."""
     from config import MONITORING_ZONES, WAVE_RIDGES, MPS_TO_KNOTS
     from soaring_physics import Profile, distance_bearing, evaluate_thermals, evaluate_wave
     origin = origin or MONITORING_ZONES['shropshire']
     nearest = min(forecasts, key=lambda f: distance_bearing(origin, f.location)[0], default=None)
-    if nearest is None or distance_bearing(origin, nearest.location)[0] > 75:
-        return {'day': day.isoformat(), 'site': origin.name, 'hours': [], 'coverage': 'No forecast within 75 km'}
+    if nearest is None or distance_bearing(origin, nearest.location)[0] > maximum_km:
+        return {'day': day.isoformat(), 'site': origin.name, 'hours': [], 'coverage': f'No forecast within {maximum_km:g} km'}
     ridge=min(WAVE_RIDGES.values(),key=lambda r:distance_bearing(origin,r.point)[0])
-    if distance_bearing(origin,ridge.point)[0]>45: ridge=None
+    if distance_bearing(origin,ridge.point)[0]>maximum_km: ridge=None
     hours = []
     for when in nearest.times:
         local = when.astimezone(LOCAL_TIMEZONE)
@@ -222,12 +222,15 @@ def site_evidence(forecasts, day, *, origin=None):
             'from_deg':direction, 'gust_kt':None if gust is None else gust*MPS_TO_KNOTS,
             'ridge_component_kt':on_face, 'cloud_base_ft':thermal.cloud_base_ft_amsl,
             'climb_kt':thermal.net_climb_knots, 'rain_mm':values.get('precipitation'),
+            'cloud_base_agl_ft':None if thermal.cloud_base_ft_amsl is None else thermal.cloud_base_ft_amsl-nearest.terrain_elevation_m*3.28084,
+            'usable_agl_ft':None if thermal.usable_top_ft_amsl is None else thermal.usable_top_ft_amsl-nearest.terrain_elevation_m*3.28084,
+            'overdevelopment':thermal.overdevelopment,'cloud_streets':thermal.cloud_streets,
             'wave_score':wave.score if wave else None, 'wave_complete':wave.complete if wave else False,
             'upper_winds':[{'hpa':l.pressure_hpa,'height_ft':round(l.height_m*3.28084),'u_mps':l.u_mps,'v_mps':l.v_mps,'ascent_kt':None if l.w_mps is None else l.w_mps*MPS_TO_KNOTS} for l in profile.levels if l.pressure_hpa in (950,850,800,700,500)],
             'wave_bands':bands, 'ridge':ridge.point.name if ridge else None, 'ridge_facing_deg':ridge.perpendicular_wind_azimuths_deg[0] if ridge else None})
     return {'day':day.isoformat(), 'site':origin.name, 'model':nearest.model,
             'forecast_point':nearest.location.name, 'distance_km':round(distance_bearing(origin,nearest.location)[0],1),
-            'retrieved':nearest.fetched_at.isoformat(), 'hours':hours}
+            'retrieved':nearest.fetched_at.isoformat(),'terrain_ft':nearest.terrain_elevation_m*3.28084, 'hours':hours}
 
 
 def pilot_briefing(question, forecasts, day, *, assessment=None, route=()):

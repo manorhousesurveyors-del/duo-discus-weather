@@ -161,7 +161,7 @@ mode), rather than the day after the sidebar selection. Site briefings need no
 task: they show hourly surface wind, gusts, site-specific ridge component, cloud
 base, thermals, precipitation, upper winds and wave evidence. Ridge support uses
 the nearby ridge’s facing direction (Mynd 280°, Denbigh 270°) and a 5 kt on-face
-screening threshold. Beyond 45 km of a known ridge, its orientation is unknown. Missing gusts/heights remain unknown. Short West takeoff considerations
+screening threshold. Beyond 20 km of a known ridge, its orientation is unknown. Missing gusts/heights remain unknown. Short West takeoff considerations
 require current site conditions and the duty instructor's decision.
 
 Set `GEMINI_API_KEY` in Streamlit Secrets or the server environment; a password
@@ -188,16 +188,44 @@ Lowercase ordinary words never match three-letter codes; explicit uppercase
 trigraphs and full waypoint names still work. Described route commands retain
 the direct-load behaviour above. AI route proposals require a load click.
 
-The assistant receives five days of hourly regional evidence, star ratings,
-selected-site upper winds and background wave-height bands, active task legs,
-and both requested geographic circuits. Local fallback includes hourly weather,
-sector thresholds, STF, five-day stars, circuit screening and leg tactics.
-Nearby stored forecasts are used only within 75 km, with source distances
-reported; missing coverage stays unknown. This screening does not replace the
-planner's fetched corridor analysis or its airspace checks.
+Local forecasts use a **20 km sector** by default. Place resolution checks BGA
+names/codes and all UK airfields, including club aliases, before using the UK
+Open-Meteo/GeoNames geocoder. A clicked coordinate is used for “here”. Duplicate
+place names need a county or a map point; lookup errors never silently substitute
+Long Mynd. Cotswold resolves to the published Cotswold Airport coordinate.
 
-A map click is retained locally and handed to the bot when leaving that map.
-Ask about “here” or “the clicked point” to use it. Point clicks and mouse movements
-do not themselves cause Python reruns. Route edits use 18 px snapping; a drop
-saves one edited task. Numbered route points are draggable, + handles insert
-points, and closed Start/Finish endpoints remain linked.
+A local answer contains a site summary, 09:00–18:00 Europe/London hourly table,
+cloud base AMSL and AGL, usable thermal window, spread-out flags, site-specific
+ridge and wave evidence, and launch/landing considerations. Live requests fetch
+the centre and four points on the sector boundary. Missing hours remain unknown;
+recorded forecasts outside 20 km cannot fill a local gap. Regional screening uses
+its separately labelled, coarser 75 km coverage only when explicitly requested.
+
+National region tables, five-day regional lists, national circuits and old task
+legs are excluded from local context and answers. Five-day local outlooks require
+an outlook request; task and circuit analysis require explicit task/circuit
+wording. Local Gemini requests also exclude unrelated conversation history and
+route proposals. Model discovery is cached for one hour per credential fingerprint
+and authentication mode; the refresh button checks immediately. Pasted keys stay
+in session memory when switching pages and can still be forgotten explicitly.
+
+The horizontal navigation mounts only the active page. Text pages build no maps.
+Static catalogs and terrain arrays are shared read-only server resources; forecast
+products and day summaries are cached for 30 minutes. Display coordinates use four
+decimal places; exported official points and obstacle geometry retain full source
+precision. Compressed map documents keep the initial payload small; subsequent
+point edits carry only canonical task state.
+
+`active_task_points`, `task_version` and a session/date envelope are the shared
+Python state. Both maps use browser key `duo_active_task_v1`. Adds, magnetic drops,
+midpoint insertions and Undo save immediately through a Streamlit fragment. Mouse
+movement and panning send no updates. Clear Task removes the route and browser
+key, invalidates old analysis/exports and refreshes the active page. Late versions
+are rejected, so stale browser messages cannot restore a cleared task. Daily task
+files remain the persistent archive. Finish/Analyse refreshes weather tables after
+edits; the live map geometry updates before those calculations.
+
+A map click supplies the bot's selected point. Wave/traffic selections send a small
+metadata update; route clicks include it with the task state. Route editing uses
+18 px snapping, numbered draggable points and + insertion handles. Closed
+Start/Finish endpoints remain linked.

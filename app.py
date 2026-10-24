@@ -38,29 +38,29 @@ MODEL_LABELS = {'ifs025':'ECMWF · medium range', 'ukmo':'Met Office · UK 2 km'
 CATEGORY_COLOURS = {'VFR':'#15835d','MVFR':'#2674c5','IFR':'#d84949','LIFR':'#a342ac','UNKNOWN':'#6c7780'}
 
 
-@st.cache_data(ttl=900,max_entries=2,show_spinner=False)
+@st.cache_resource(max_entries=2,show_spinner=False)
 def load_recorded(path,modified):
     return load_bundle(Path(path))
 
 
-@st.cache_data(ttl=900,show_spinner=False)
+@st.cache_data(ttl=1800,show_spinner=False)
 def load_sites(model_key: str, refresh_bucket: int):
     return OpenMeteoClient().fetch_batched(forecast_locations(),(FORECAST_MODELS[model_key],))
 
 
-@st.cache_data(ttl=900,show_spinner=False)
+@st.cache_data(ttl=1800,show_spinner=False)
 def load_grid(model_key: str, refresh_bucket: int):
     grid = convergence_grid()
     return OpenMeteoClient().fetch_batched([p for row in grid for p in row],(FORECAST_MODELS[model_key],),variables=GRID_VARIABLES)
 
 
-@st.cache_data(ttl=900,show_spinner=False)
+@st.cache_data(ttl=1800,show_spinner=False)
 def load_map_forecasts(model_key: str, refresh_bucket: int, kind="soaring"):
     from planning_ui import fetch_map_grid
     return fetch_map_grid(model_key,refresh_bucket,kind)
 
 
-@st.cache_data(ttl=900,show_spinner=False)
+@st.cache_data(ttl=1800,show_spinner=False)
 def load_coordinate(latitude: float, longitude: float, model_key: str, refresh_bucket: int):
     point = GeoPoint('inspector',f'{latitude:.3f}, {longitude:.3f}',latitude,longitude)
     return OpenMeteoClient().fetch(point,FORECAST_MODELS[model_key])
@@ -311,7 +311,7 @@ def build_map(forecasts, when, *, layers, aviation=None, radar=None, convergence
         layers=['BGA turnpoints'] if visual_mode=='route' else []
     map_view=folium.Map(location=centre,zoom_start=zoom,tiles=None,control_scale=True,prefer_canvas=True)
     from map_bridge import add_click_bridge
-    from client_map import install_canvas,add_waypoints,add_task_editor,finish_layer_control
+    from client_map import install_canvas,add_waypoints,add_task_editor,add_shared_task,finish_layer_control
     install_canvas(map_view)
     add_click_bridge(map_view,map_identity)
     map_view.default_js=[('leaflet','https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js'),
@@ -331,7 +331,7 @@ def build_map(forecasts, when, *, layers, aviation=None, radar=None, convergence
     thermal_group=folium.FeatureGroup(name='Thermal strength · kt',show='Thermals' in layers)
     cloud_group=folium.FeatureGroup(name='Potential cloud base · ft AMSL',show='Cloud base' in layers,control='Cloud base' in layers)
     wave_group=folium.FeatureGroup(name='UK wave potential',show='Wave sites' in layers,control='Wave sites' in layers)
-    for forecast in forecasts:
+    for forecast in (forecasts if visual_mode is None or set(layers)&{'Thermals','Cloud base','Wave sites'} else ()):
         try: profile=Profile.from_forecast(forecast,when)
         except KeyError: continue
         t=evaluate_thermals(profile); lat,lon=forecast.location.latitude,forecast.location.longitude
@@ -388,23 +388,9 @@ def build_map(forecasts, when, *, layers, aviation=None, radar=None, convergence
     cloud_group.add_to(map_view); wave_group.add_to(map_view)
     if turnpoints and ('BGA turnpoints' in layers or map_identity=='wave'):
         add_waypoints(map_view,turnpoints,show=map_identity!='wave')
+    if map_identity in ('weather','planner'):
+        add_shared_task(map_view,task,when,editable=visual_mode=='route')
     if visual_mode=='route':add_task_editor(map_view,task,when,forecasts,loading)
-    if task and visual_mode!='route':
-        active=folium.FeatureGroup(name=f'Active task · {task_distance(task):.0f} km')
-        if len(task)>1:
-            folium.PolyLine([(p.latitude,p.longitude) for p in task],color='#223c58',weight=4,
-                tooltip=folium.Tooltip('Your selected task legs, in sequence. The task verdict uses sampled corridor weather; this line is not an airspace-cleared route.')).add_to(active)
-        for a,b in zip(task,task[1:]):
-            length,bearing=distance_bearing(a.point,b.point)
-            folium.Marker([(a.latitude+b.latitude)/2,(a.longitude+b.longitude)/2],
-                icon=folium.DivIcon(html=f'<span class="duo-leg-label">{length:.0f} km · {bearing:.0f}°T</span>',icon_size=(115,24)),
-                tooltip=folium.Tooltip(f'{html.escape(a.code)} → {html.escape(b.code)}: {length:.1f} km, true track {bearing:.0f}°. Weather and airspace can require detours.')).add_to(active)
-        for i,point in enumerate(task):
-            role='Start' if i==0 else ('Finish' if i==len(task)-1 else 'Turnpoint')
-            folium.Marker([point.latitude,point.longitude],
-                icon=folium.DivIcon(html=f'<div style="background:#193d59;color:white;border:2px solid white;border-radius:50%;width:26px;height:26px;text-align:center;line-height:22px;font-weight:700">{i+1}</div>',icon_size=(28,28),icon_anchor=(14,14)),
-                tooltip=folium.Tooltip(html.escape(f'{role} {i+1}: {point.code} · {point.name}. Reorder or remove this point in the task builder.'))).add_to(active)
-        active.add_to(map_view)
     convergence_group=folium.FeatureGroup(name='Convergence ribbons',show='Convergence' in layers,control='Convergence' in layers)
     if convergence is not None:
         cells={(c.row,c.column):c for c in convergence.cells}
@@ -445,7 +431,18 @@ def build_map(forecasts, when, *, layers, aviation=None, radar=None, convergence
     return map_view,rank_wave_sites(waves)
 
 
-def main():
+@st.cache_data(ttl=1800,show_spinner=False,max_entries=12)
+def wave_document(run_id,when,source_version,recorded,*,_forecasts,_turnpoints):
+    """Cache a session-independent map, including serialization and compression."""
+    from wave_map import add_wave_map
+    from map_component import compressed_document
+    view,_=build_map(_forecasts,when,layers=[],visual_mode='clean',include_modes=False,
+        map_identity='wave',turnpoints=_turnpoints,show_airfields=False,live_airfields=not recorded)
+    add_wave_map(view,_forecasts,when)
+    return compressed_document(view)
+
+
+def _main():
     from planning_ui import (active_task, briefing_panel, catalog_panel, current_catalog,
                              process_map_event, task_builder, task_result, task_weather, weather_table)
     from task_planning import assess_task, classify_day, validate_task
@@ -465,6 +462,11 @@ def main():
     st.caption('G-CKML  /  YOUR TASK · THERMALS · WAVE · CONVERGENCE')
     if recorded:
         st.info(f'Recorded forecast snapshot · retrieved {anchor.astimezone(LOCAL_TIMEZONE):%d %b %Y %H:%M %Z}. Task weather uses stored samples within 15 km; gaps remain unavailable.')
+    pages=['Weather map','Task planner','Help Guide','Wave watch','Live OGN Glider Radar','Help & Briefing Bot','Data quality']
+    st.markdown('<style>.st-key-active_page [role="radiogroup"]{gap:0;border-bottom:1px solid #dce5e8;flex-wrap:wrap}.st-key-active_page [role="radiogroup"] label{padding:10px 12px;margin:0;border-bottom:2px solid transparent}.st-key-active_page [role="radiogroup"] label:has(input:checked){border-bottom-color:#267d84;color:#267d84}.st-key-active_page [data-testid="stRadioOption"]>div>div:first-child{display:none}.st-key-active_page [data-testid="stRadioOption"]:focus-within{outline:2px solid #267d84;outline-offset:-2px}</style>',unsafe_allow_html=True)
+    active_page=st.radio('Page',pages,horizontal=True,key='active_page',label_visibility='collapsed',help='Only this page loads its maps and calculations. Task edits are shared across Weather and Task pages.')
+    from ogn_traffic import set_worker_active
+    set_worker_active(active_page=='Live OGN Glider Radar' and not bool(recorded))
     catalog=current_catalog()
     default_thermal=st.query_params.get('thermals','off')=='on'
     if 'map_layers' not in st.session_state:
@@ -507,51 +509,70 @@ def main():
         st.caption('Thermals are radiation/parcel estimates. Hover over controls and column headings for guidance.')
     day=anchor.astimezone(LOCAL_TIMEZONE).date()+timedelta(days=day_index)
     when=utc_datetime(datetime.combine(day,time(hour),LOCAL_TIMEZONE))
-    bucket=int(now.timestamp()//900)
+    bucket=int(now.timestamp()//1800)
     with st.sidebar:
-        with st.expander('Build / edit this day’s task',expanded=False): task_builder(catalog,day,location='sidebar')
+        if active_page in ('Weather map','Task planner'):
+            with st.expander('Build / edit this day’s task',expanded=False): task_builder(catalog,day,location='sidebar')
         if st.session_state.get('task_message'): st.caption(st.session_state['task_message'])
         if st.session_state.get('task_error'): st.error(st.session_state.pop('task_error'))
     points=active_task(day)
     if recorded:
         forecasts=tuple(f for f in recorded.forecasts if f.model==FORECAST_MODELS[model_key].api_name); errors=recorded.errors
+    elif active_page in ('Help Guide','Help & Briefing Bot','Data quality'):
+        forecasts=st.session_state.get('forecast_bundle:'+model_key,())
+        errors=()
     else:
         with st.spinner('Loading regional and ridge forecasts…'):
             batch=load_sites(model_key,bucket)
             forecasts,errors=batch.forecasts,tuple(f.message for f in batch.failures)
+    st.session_state['forecast_bundle:'+model_key]=forecasts
+    if active_page=='Help Guide':
+        render_help(catalog,None,None,(),forecasts=forecasts,day=day,today=anchor.astimezone(LOCAL_TIMEZONE).date(),model_key=model_key,bucket=bucket,recorded=bool(recorded))
+        return
+    if active_page=='Help & Briefing Bot':
+        briefing_panel(catalog,day,loading,model_key,bucket,forecasts,None,None,(),recorded=bool(recorded),today=anchor.astimezone(LOCAL_TIMEZONE).date())
+        return
+    if active_page=='Data quality':
+        catalog_panel(catalog)
+        st.divider();st.subheader('Forecast quality')
+        weather_table([{'Location':f.location.name,'Retrieved UTC':f.fetched_at.isoformat(),'Available through':str(f.available_through),'Unavailable fields':', '.join(f.unavailable_variables)} for f in forecasts],
+            {'Location':'Requested forecast coordinate.','Retrieved UTC':'Time this response was downloaded.','Available through':'Last non-null surface-temperature hour.','Unavailable fields':'Fields absent from this model response.'})
+        if errors:st.warning('\n'.join(dict.fromkeys(errors)))
+        return
     if not forecasts: st.warning('No regional forecast is available for this model. The task builder and exports remain available.')
     assessment=None; task_forecasts=()
-    if len(points)>=2:
+    if len(points)>=2 and (active_page=='Task planner' or (active_page=='Weather map' and visual_mode=='route')):
         try:
             validate_task(points)
             with st.spinner('Evaluating your task corridor and launch windows…'):
                 task_forecasts,failures=task_weather(points,forecasts,model_key,bucket,recorded=bool(recorded))
                 errors+=failures
-                assessment=assess_task(points,task_forecasts,day,loading,preference=(FORECAST_MODELS[model_key].api_name,))
+                from app_cache import assessed_task,forecast_run_id
+                assessment=assessed_task(forecast_run_id(task_forecasts),points,day,loading,FORECAST_MODELS[model_key].api_name,_forecasts=task_forecasts)
         except (ValueError,IngestionError) as exc: errors+=(f'Task: {exc}',)
     combined=tuple({(f.location.key,f.model):f for f in (*forecasts,*task_forecasts)}.values())
     map_forecasts=combined
-    if visual_mode in ('wind','thermal','pfd','xc','stf') and not recorded:
-        with st.spinner('Loading the UK map grid; cached for 15 minutes…'):
+    if active_page=='Weather map' and visual_mode in ('wind','thermal','pfd','xc','stf') and not recorded:
+        with st.spinner('Loading the UK map grid; cached for 30 minutes…'):
             map_batch=load_map_forecasts(model_key,bucket,"wind" if visual_mode=="wind" else "soaring")
             map_forecasts=tuple({(f.location.key,f.model):f for f in (*combined,*map_batch.forecasts)}.values())
             errors+=tuple(f.message for f in map_batch.failures)
         st.caption('Wind: regular UK grid including coastal water; terrain fallbacks are labelled. Soaring contours use land samples. Model interpolation does not increase forecast resolution.')
     aviation=radar=convergence=rate_grid=radar_point=None
-    if show_airfields and not recorded:
+    if active_page=='Weather map' and show_airfields and not recorded:
         aviation=load_uk_aviation(int(now.timestamp()//60))
-    elif visual_mode=='extras' and 'METAR' in layers and not recorded: aviation=load_aviation(int(now.timestamp()//60))
-    if ((visual_mode=='extras' and 'Radar' in layers) or visual_mode=='radar') and not recorded:
+    elif active_page=='Weather map' and visual_mode=='extras' and 'METAR' in layers and not recorded: aviation=load_aviation(int(now.timestamp()//60))
+    if active_page=='Weather map' and ((visual_mode=='extras' and 'Radar' in layers) or visual_mode=='radar') and not recorded:
         try: radar=load_radar(int(now.timestamp()//300))
         except (IngestionError,ValueError,KeyError) as exc: st.warning(f'Radar unavailable: {exc}')
-    if visual_mode=='radar' and os.environ.get('DUO_RADAR_RATE_GRID_URL') and not recorded:
+    if active_page=='Weather map' and visual_mode=='radar' and os.environ.get('DUO_RADAR_RATE_GRID_URL') and not recorded:
         try: rate_grid=load_calibrated_radar(os.environ['DUO_RADAR_RATE_GRID_URL'],int(now.timestamp()//300))
         except (IngestionError,ValueError) as exc: st.warning(f'Calibrated radar unavailable: {exc}')
-    if visual_mode=='radar' and st.session_state.get('radar_coordinate'):
+    if active_page=='Weather map' and visual_mode=='radar' and st.session_state.get('radar_coordinate'):
         with st.spinner('Loading Open-Meteo rain estimate at your map point…'):
             radar_point=radar_point_result(st.session_state['radar_coordinate'],when,model_key,
                                           int(now.timestamp()//300),recorded=bool(recorded))
-    if visual_mode=='extras' and 'Convergence' in layers:
+    if active_page=='Weather map' and visual_mode=='extras' and 'Convergence' in layers:
         if recorded: grid_forecasts=tuple(f for f in recorded.grid_forecasts if f.model==FORECAST_MODELS[model_key].api_name)
         else:
             with st.spinner('Loading the England and Wales convergence grid…'):
@@ -580,18 +601,12 @@ def main():
     wave_signal=any(evaluate_wave(p,WAVE_RIDGES[key.split(':',1)[1]]).complete and
                     (evaluate_wave(p,WAVE_RIDGES[key.split(':',1)[1]]).score or 0)>=75
                     for key,p in profiles.items() if key.startswith('ridge:') and distance_bearing(origin,p.forecast.location)[0]<150)
-    classification=classify_day(combined,origin,day,loading,preference=(FORECAST_MODELS[model_key].api_name,),wave_available=wave_signal)
+    from app_cache import day_summary,forecast_run_id
+    day_ratings,classifications=day_summary(forecast_run_id(combined),origin,anchor.astimezone(LOCAL_TIMEZONE).date(),loading,FORECAST_MODELS[model_key].api_name,_forecasts=combined)
+    classification=classifications[day_index];rating=day_ratings[day_index]
     st.metric('Cross-country day estimate',classification.label,
-        help='Local weather capacity from conservative thermal climb, usable height and worst-direction wind with a 10% reserve. A 500 km label still requires a separately assessed 500 km corridor.')
+        help='Local weather capacity from conservative thermal climb, usable height and worst-direction wind with a 10% reserve. Check a complete route separately.')
     st.caption(f'{classification.scope} · '+classification.explanation)
-    from day_rating import rate_day
-    rating_key=(origin.key,loading,model_key,anchor.date().isoformat(),tuple((f.location.key,f.model,f.fetched_at.isoformat()) for f in combined))
-    rating_cache=st.session_state.setdefault('_day_ratings',{})
-    if rating_key not in rating_cache:
-        rating_cache.clear()
-        rating_cache[rating_key]=tuple(rate_day(combined,origin,anchor.astimezone(LOCAL_TIMEZONE).date()+timedelta(days=i),loading,
-            preference=(FORECAST_MODELS[model_key].api_name,)) for i in range(5))
-    day_ratings=rating_cache[rating_key];rating=day_ratings[day_index]
     st.subheader(f'{rating.symbols} · {rating.label}',help='Local PFD distance band capped by conservative thermal climb, usable height, sustained window and spread-out risk. Missing evidence stays unavailable; wave does not inflate the thermal rating.')
     st.caption('UK RASP-style local day rating · '+origin.name+' · Independent distance bands with weather quality caps. '+
         ' '.join(rating.reasons)+(' Wave potential is shown separately.' if wave_signal else ''))
@@ -604,8 +619,7 @@ def main():
             st.caption('Window '+('unavailable' if r.window_hours is None else f'{r.window_hours:g} h'))
     if not profiles: st.warning('The selected model does not cover this hour. Choose another day, time or model.')
     waves=rank_wave_sites([evaluate_wave(p,WAVE_RIDGES[key.split(':',1)[1]]) for key,p in profiles.items() if key.startswith('ridge:')])
-    map_tab,task_tab,help_tab,wave_tab,traffic_tab,bot_tab,quality_tab=st.tabs(['Weather map','Task planner','Help Guide','Wave watch','Live OGN Glider Radar','Help & Briefing Bot','Data quality'])
-    with map_tab:
+    if active_page=='Weather map':
         map_view,waves=build_map(map_forecasts,when,layers=layers,aviation=aviation,radar=radar,convergence=convergence,
             task=points,turnpoints=catalog.turnpoints,visual_mode=visual_mode,anchor=anchor,loading=loading,rate_grid=rate_grid,radar_point=radar_point,show_airfields=show_airfields,live_airfields=not bool(recorded),selected_airfield=st.session_state.get('airfield_popup:last_map_event'))
         def on_map_change():
@@ -626,22 +640,24 @@ def main():
         if radar:
             age=(now-radar['time']).total_seconds()/60
             st.caption(f'Observed radar {radar["time"].astimezone(LOCAL_TIMEZONE):%H:%M %Z} · {age:.0f} minutes old'+(' · STALE' if age>30 else '')+' · independent of the forecast slider.')
-    with task_tab:
+    if active_page=='Task planner':
         from route_analysis import planner_panel
         planner_panel(catalog,day,when,loading,model_key,bucket,combined,points,assessment,aviation,map_builder=build_map,recorded=bool(recorded))
         task_result(points,assessment,key='planner')
         with st.expander('Build, reorder or clear task',expanded=not points): task_builder(catalog,day,location='planner')
         if visual_mode!='route': optimizer_panel(catalog,day,loading,model_key,bucket,map_forecasts,recorded=bool(recorded))
         task_sheet_panel(points,assessment,day,loading,catalog,key='planner_sheet')
-    with help_tab:
-        render_help(catalog,assessment,classification,waves,forecasts=combined,day=day,today=anchor.astimezone(LOCAL_TIMEZONE).date())
-    with wave_tab:
+    if active_page=='Wave watch':
         st.subheader('Wave Watch Map')
-        from wave_map import add_wave_map
-        wave_map,_=build_map(combined,when,layers=[],visual_mode='clean',include_modes=False,map_identity='wave',turnpoints=catalog.turnpoints,aviation=aviation,show_airfields=False,live_airfields=not bool(recorded),selected_airfield=st.session_state.get('airfield_popup:last_wave_event'))
-        add_wave_map(wave_map,combined,when)
+        from app_cache import forecast_run_id,file_version
+        from airspace import DEFAULT_PATH,NEXT_PATH,LOCAL_PATH
+        from map_component import render_document
+        versions=file_version([DEFAULT_PATH,NEXT_PATH,LOCAL_PATH,*Path('data').glob('*turnpoint*'),*Path('assets').glob('*.js')])
+        # Uploaded catalogs participate in the key; no task/session state is cached.
+        document=wave_document(forecast_run_id(combined),when,(versions,catalog.turnpoints),bool(recorded),
+            _forecasts=combined,_turnpoints=catalog.turnpoints)
         def on_wave_click():process_map_event(st.session_state.get('wave_map',{}),catalog,day,'Inspect weather',event_key='last_wave_event',visual_override='wave')
-        st_folium(wave_map,height=720,use_container_width=True,pixelated=False,key='wave_map',on_change=on_wave_click,wrap_longitude=False,returned_objects=['last_object_clicked','last_clicked'])
+        render_document(document,key='wave_map',on_change=on_wave_click)
         st.subheader('Terrain-forced wave lift and sink')
         weather_table([{'Site':WAVE_RIDGES[w.site].point.name,'Score':w.score,'Evidence':'Complete' if w.complete else 'Provisional',
                         '850 hPa ascent kt':w.uplift_850_knots,'700 hPa ascent kt':w.uplift_700_knots,'N² s⁻²':w.brunt_vaisala_n2} for w in waves],
@@ -651,30 +667,17 @@ def main():
              '700 hPa ascent kt':'Model vertical air motion at 700 hPa; a coarse model cannot resolve individual wave crests.',
              'N² s⁻²':'Brunt–Väisälä stability between 850 and 700 hPa. Positive values indicate static stability.'})
         st.caption('Wave signals inform the briefing but do not add assumed lift to a thermal task calculation.')
-    with bot_tab:
-        briefing_panel(catalog,day,loading,model_key,bucket,combined,assessment,classification,waves,recorded=bool(recorded),today=anchor.astimezone(LOCAL_TIMEZONE).date())
-    with traffic_tab:
+    if active_page=='Live OGN Glider Radar':
+        if not recorded:
+            from ogn_traffic import traffic_heartbeat
+            traffic_heartbeat()
         st.subheader('Live OGN Glider Radar')
         st.caption('Current glider reports refresh independently of the forecast. Stale reports disappear after two minutes. Use the map’s Demo button for clearly labelled playback.')
         traffic_map,_=build_map(combined,when,layers=[],visual_mode='clean',include_modes=False,map_identity='traffic',
             turnpoints=catalog.turnpoints,aviation=aviation,show_airfields=True,live_airfields=not bool(recorded))
         st_folium(traffic_map,height=720,use_container_width=True,key='traffic_map',pixelated=False,wrap_longitude=False,
             returned_objects=['last_object_clicked','last_clicked'])
-    with quality_tab:
-        catalog_panel(catalog)
-        st.divider(); st.subheader('Forecast quality')
-        st.write(f'{len(profiles)}/{len(combined)} sites have surface temperature at the selected time.')
-        weather_table([{'Location':f.location.name,'Retrieved UTC':f.fetched_at.isoformat(),'Available through':str(f.available_through),
-                        'Unavailable fields':', '.join(f.unavailable_variables)} for f in combined],
-            {'Location':'Requested regional, ridge or custom-task sample location.','Retrieved UTC':'API retrieval time, not the model initialization time.',
-             'Available through':'Last non-null surface-temperature hour; other fields may have a shorter usable range.',
-             'Unavailable fields':'Variables missing throughout this model response; calculations retain or explicitly estimate gaps as documented.'})
-        if errors: st.warning('\n'.join(dict.fromkeys(errors)))
-        if aviation:
-            st.write('METAR unavailable:',', '.join(aviation.missing_metars) or 'None')
-            st.write('TAF unavailable:',', '.join(aviation.missing_tafs) or 'None')
-            if aviation.failures: st.warning('; '.join(f.message for f in aviation.failures))
-        st.caption('Use official aviation forecasts, current airspace and the aircraft flight manual for flight decisions.')
+    if active_page!='Weather map':return
     with st.sidebar:
         st.divider(); st.subheader('Sounding inspector')
         choices=[f for f in combined if not f.location.key.startswith('corridor:')]
@@ -712,6 +715,14 @@ def main():
         st.plotly_chart(meteogram_figure(chosen,day),width='stretch',key='meteogram')
         with st.expander('Profile assumptions'):
             for note in evaluate_thermals(selected_profile).notes: st.write(note)
+
+
+def main():
+    from time import perf_counter
+    started=perf_counter()
+    st.session_state['_full_render_count']=st.session_state.get('_full_render_count',0)+1
+    try:_main()
+    finally:st.session_state['_page_render_ms']=round((perf_counter()-started)*1000,2)
 
 
 if __name__=='__main__':

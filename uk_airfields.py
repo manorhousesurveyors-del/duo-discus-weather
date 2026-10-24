@@ -1,6 +1,6 @@
 """UK airfields, runway metadata and NOAA reporting capability, with provenance."""
 from dataclasses import dataclass
-from functools import lru_cache
+import streamlit as st
 from pathlib import Path
 from json_payload import browser_json
 import json
@@ -44,7 +44,7 @@ class Airfield:
             description=self.status+'; airfield waypoint, not an official BGA trigraph.')
 
 
-@lru_cache(maxsize=1)
+@st.cache_resource(show_spinner=False,max_entries=1)
 def load_airfields():
     body=json.loads(DATA_PATH.read_text())
     if body.get('schema_version')!=1:raise ValueError('Unsupported airfield schema')
@@ -96,7 +96,7 @@ def add_airfields(map_view,batch=None,*,live=True,route=False,selected=None):
     element.add_to(map_view)
 
 
-@lru_cache(maxsize=1)
+@st.cache_resource(show_spinner=False,max_entries=1)
 def airfield_records():
     payload=[]
     for a in load_airfields():
