@@ -3,7 +3,9 @@
 Airspace boundaries/activation are source data. No imported file can establish
 current NOTAM activity or grant clearance; absent geometry stays unassessed.
 """
-from datetime import UTC,datetime
+from datetime import UTC,date,datetime
+from functools import lru_cache
+import hashlib
 from pathlib import Path
 import json
 import math
@@ -11,6 +13,7 @@ import re
 from wave_map import destination
 
 DEFAULT_PATH=Path(__file__).with_name('data')/'uk_airspace.geojson'
+NEXT_PATH=Path(__file__).with_name('data')/'uk_airspace_next.geojson'
 LOCAL_PATH=Path(__file__).with_name('var')/'uk_airspace.geojson'
 
 
@@ -79,16 +82,19 @@ def validate_geojson(body):
         if not isinstance(g,dict) or g.get('type') not in ('Polygon','MultiPolygon') or not isinstance(properties,dict):raise ValueError('Airspace needs polygon geometries and properties')
         if not isinstance(g.get('coordinates'),list) or not g['coordinates']:raise ValueError('Missing airspace coordinates')
         polygons=[g['coordinates']] if g['type']=='Polygon' else g['coordinates']
+        bounds=[float('inf'),float('inf'),-float('inf'),-float('inf')]
         for polygon in polygons:
             if not isinstance(polygon,list) or not polygon:raise ValueError('Empty airspace polygon')
             for ring in polygon:
                 if not isinstance(ring,list) or not 4<=len(ring)<=20000 or ring[0]!=ring[-1]:raise ValueError('Airspace ring must be closed')
                 for point in ring:
                     if not isinstance(point,list) or len(point)<2 or not all(isinstance(v,(int,float)) and not isinstance(v,bool) and math.isfinite(v) for v in point[:2]) or not -180<=point[0]<=180 or not -90<=point[1]<=90:raise ValueError('Invalid airspace point')
+                    bounds=[min(bounds[0],point[0]),min(bounds[1],point[1]),max(bounds[2],point[0]),max(bounds[3],point[1])]
         for key in ('name','class','floor','ceiling'):
             if key in properties and not isinstance(properties[key],str):raise ValueError('Airspace labels must be text')
             properties.setdefault(key,'Unknown')
         f['properties']=properties
+        f['bbox']=bounds
     return body
 
 
@@ -98,9 +104,31 @@ def import_airspace(data,filename):
     return validate_geojson(json.loads(text)) if filename.lower().endswith(('.json','.geojson')) else parse_openair(text)
 
 
-def load_airspace():
-    path=LOCAL_PATH if LOCAL_PATH.exists() else DEFAULT_PATH
-    return validate_geojson(json.loads(path.read_text())) if path.exists() else None
+@lru_cache(maxsize=4)
+def _read_airspace(path,modified):
+    raw=Path(path).read_bytes()
+    if len(raw)>12_000_000:raise ValueError('Airspace file exceeds 12 MB')
+    body=validate_geojson(json.loads(raw))
+    body['content_hash']=hashlib.sha256(raw).hexdigest()
+    return body
+
+
+def load_airspace(on_date=None):
+    """Prefer explicit uploads; otherwise select the latest effective AIRAC set."""
+    on_date=on_date or datetime.now(UTC).date()
+    if LOCAL_PATH.exists():return _read_airspace(str(LOCAL_PATH),LOCAL_PATH.stat().st_mtime_ns)
+    bodies=[_read_airspace(str(p),p.stat().st_mtime_ns) for p in (DEFAULT_PATH,NEXT_PATH) if p.exists()]
+    if not bodies:return None
+    eligible=[b for b in bodies if b.get('effective_date','0001-01-01')<=on_date.isoformat()]
+    return max(eligible,key=lambda b:b.get('effective_date','')) if eligible else min(bodies,key=lambda b:b.get('effective_date',''))
+
+
+def airspace_date_warning(body,on_date):
+    if body is None:return 'Airspace boundary checks are UNASSESSED: no dataset loaded.'
+    try:start,end=date.fromisoformat(body['effective_date']),date.fromisoformat(body['valid_until'])
+    except (KeyError,TypeError,ValueError):return 'Airspace effective dates are unavailable. Verify this supplied file before use.'
+    if not start<=on_date<=end:return f'Airspace dataset is outside its AIRAC period ({start} to {end}) for {on_date}. Refresh boundaries; intersections are only a reference.'
+    return None
 
 
 def _inside(point,ring):
@@ -131,7 +159,12 @@ def corridor_intersections(a,b,body,buffer_km=5):
     scale=111.195*math.cos(math.radians((a.latitude+b.latitude)/2))
     project=lambda p:(p[0]*scale,p[1]*111.195)
     start,end=project((a.longitude,a.latitude)),project((b.longitude,b.latitude));found=[]
+    latitude_margin=buffer_km/111.195;longitude_margin=buffer_km/max(abs(scale),1e-6)
+    envelope=(min(a.longitude,b.longitude)-longitude_margin,min(a.latitude,b.latitude)-latitude_margin,
+              max(a.longitude,b.longitude)+longitude_margin,max(a.latitude,b.latitude)+latitude_margin)
     for f in body['features']:
+        bbox=f.get('bbox')
+        if bbox and (bbox[2]<envelope[0] or bbox[0]>envelope[2] or bbox[3]<envelope[1] or bbox[1]>envelope[3]):continue
         g=f['geometry'];polygons=[g['coordinates']] if g['type']=='Polygon' else g['coordinates'];distance=float('inf')
         for poly in polygons:
             rings=[[project(p) for p in ring] for ring in poly]

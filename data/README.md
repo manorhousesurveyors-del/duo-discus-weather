@@ -43,7 +43,56 @@ because it was requested, with its source status explicitly marked **closed**.
 Reporting capability is not a guarantee of a current report. No missing runway,
 elevation or ICAO code is fabricated. Club names are aliases, not BGA trigraphs.
 
-Current airspace geometry is not bundled. Users can supply a validated OpenAir
-or polygon GeoJSON file through Task planner; it is saved under ignored `var/`.
-Absent geometry is reported as unassessed. Do not treat airport proximity circles
-as controlled-airspace boundaries.
+## UK airspace boundaries
+
+Two attributed GeoJSON snapshots are bundled:
+
+| File | AIRAC period | Boundary volumes | Source |
+| --- | --- | ---: | --- |
+| `uk_airspace.geojson` | 1–28 October 2026 | 801 | [Publisher commit 98e023e](https://github.com/ahsparrow/airspace/tree/98e023e9b42dfaa9efcfd90d31109fa833d91e32) |
+| `uk_airspace_next.geojson` | 29 October–25 November 2026 | 799 | [ASSelect YAIXM release](https://asselect.uk/yaixm.json), commit `6b7f9d95535a894ce8bff4972da00fb00eec8ead` |
+
+Data is by **Alan Sparrow / ASSelect**, based on the UK AIP and work by George
+Knight, Geoff Brown, Peter Desmond and Rory O'Connor. The source author states:
+“To the extent possible under law, Alan Sparrow has waived all copyright and
+related or neighbouring rights to this file.” Each output retains attribution,
+source URL/commit, SHA-256 download hashes, retrieval time and AIRAC dates.
+
+The current set was taken from the publisher's preceding release because
+ASSelect already announces 29 October. Its release notes confirm 1 October.
+The next set uses ASSelect's machine-readable `airac_date`; its release-notes
+heading contains a 2027 typo, so that heading is not used as the effective date.
+The planner automatically chooses the latest set effective on the selected day.
+Outside the recorded AIRAC period it displays an explicit refresh warning.
+
+Controlled zones/areas, ATZ/MATZ, danger/prohibited/restricted areas, RMZ/TMZ,
+parachuting, HIRTA, gas-vent and laser hazard volumes are retained. Gliding-site
+symbols, unlicensed/microlight sites, ILS symbols and gliding access concessions
+are excluded. LOAs never remove restrictions automatically. This is a third-party
+transcription principally at/below FL195, not a complete official AIP or NOTAM feed.
+Temporary restrictions retain their published names/rules; current activation
+must be checked separately. Source coverage/vertical limits remain material.
+
+[scripts/update_airspace.py](../scripts/update_airspace.py) converts YAIXM
+lines/circles/arcs into GeoJSON. Arc steps are at most 3°. Five intersecting rings
+in each snapshot are split into valid multipolygons using Shapely's linework
+method, retaining every boundary edge and every small polygon; none are dropped.
+This normalization is recorded per feature. All output polygons pass topology
+validation. No independent survey of the underlying AIP transcription is claimed.
+
+Refresh the announced ASSelect release manually:
+
+```bash
+.venv/bin/python scripts/update_airspace.py
+```
+
+This saves a current or upcoming file according to its effective date; it does
+not publish or commit automatically. Reproduce the present current snapshot:
+
+```bash
+.venv/bin/python scripts/update_airspace.py --commit 98e023e9b42dfaa9efcfd90d31109fa833d91e32 --effective-date 2026-10-01
+```
+
+Explicit OpenAir/GeoJSON uploads override bundled data and remain under ignored
+`var/`. Uploads without AIRAC dates are labelled for verification. Nearby airport
+radii are advisory proximity checks, never substituted for airspace boundaries.

@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC,datetime,timedelta
 import io
 import json
 from pathlib import Path
@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from alerts import (Briefing, DeliveryError, DeliverySettings, ForecastBundle, build_briefing,
     dispatch, load_bundle, main, render_html, render_whatsapp, save_bundle, send_email,
-    send_whatsapp, strong_convergence_regions)
+    send_whatsapp, send_ntfy, strong_convergence_regions)
 from config import FORECAST_MODELS, forecast_locations
 from database import DatabaseManager
 from soaring_physics import ConvergenceCell, ConvergenceResult
@@ -27,7 +27,7 @@ class AlertTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.path=Path(self.tmp.name)
         self.db=DatabaseManager(self.path/'ledger.sqlite3')
-        self.settings=DeliverySettings(gmail_app_password='synthetic-secret',callmebot_api_key='synthetic-api-key')
+        self.settings=DeliverySettings(channels=('email','whatsapp'),gmail_app_password='synthetic-secret',callmebot_api_key='synthetic-api-key')
         self.briefing=Briefing(2,NOW+timedelta(days=2),NOW,(),(),(),None,('Synthetic trigger',),())
 
     def test_horizons_use_enclosing_hour_and_preserve_model_comparisons(self):
@@ -96,6 +96,60 @@ class AlertTests(unittest.TestCase):
         with self.assertRaises(ValueError): settings.validate()
         self.assertNotIn('synthetic-secret',repr(self.settings))
         self.assertNotIn('synthetic-api-key',repr(self.settings))
+
+    def test_blank_callmebot_is_skipped_without_a_claim_and_gmail_spaces_are_removed(self):
+        settings=DeliverySettings.from_env({'GMAIL_APP_PASSWORD':'  abcd efgh\tijkl\nmnop  ','CALLMEBOT_API_KEY':'  '})
+        settings.validate();self.assertEqual(settings.gmail_app_password,'abcdefghijklmnop')
+        email,push,whatsapp=Mock(return_value='gmail-ok'),Mock(return_value='ntfy-ok'),Mock()
+        result=dispatch(self.briefing,self.db,settings,senders={'email':email,'ntfy':push,'whatsapp':whatsapp})
+        self.assertEqual(result,{'email':'accepted','ntfy':'accepted','whatsapp':'skipped: CALLMEBOT_API_KEY is unset'})
+        whatsapp.assert_not_called();self.assertEqual(len(self.db.list_alerts()),2)
+        self.assertEqual({r['channel'] for r in self.db.list_alerts()},{'email','ntfy'})
+        dispatch(self.briefing,self.db,settings,senders={'email':email,'ntfy':push,'whatsapp':whatsapp})
+        self.assertEqual(email.call_count,1);self.assertEqual(push.call_count,1)
+
+    def test_ntfy_posts_utf8_without_key_and_validates_acceptance(self):
+        settings=DeliverySettings(channels=('ntfy',));settings.validate()
+        opener=Mock();opener.open.return_value=Response(json.dumps({'id':'abc123xyz78','event':'message','topic':settings.ntfy_topic}).encode())
+        with patch('alerts.build_opener',return_value=opener):
+            self.assertEqual(send_ntfy(settings,self.briefing,'ignored'),'ntfy:abc123xyz78')
+        request=opener.open.call_args.args[0]
+        self.assertEqual(request.full_url,'https://ntfy.sh/g-ckml-soaring-alerts')
+        self.assertEqual(request.method,'POST');self.assertIsNone(request.get_header('Authorization'))
+        self.assertIn('Synthetic trigger',request.data.decode('utf-8'))
+        self.assertTrue(opener.open.call_args.kwargs['timeout']>0)
+        opener.open.return_value=Response(b'{"id":"bad","event":"message","topic":"other-topic"}')
+        with patch('alerts.build_opener',return_value=opener),self.assertRaises(DeliveryError):send_ntfy(settings,self.briefing,'x')
+        for invalid_id in (None,123,[],{},''):
+            opener.open.return_value=Response(json.dumps({'id':invalid_id,'event':'message','topic':settings.ntfy_topic}).encode())
+            with patch('alerts.build_opener',return_value=opener),self.assertRaises(DeliveryError):send_ntfy(settings,self.briefing,'x')
+        for bad in ('../admin','topic?x=y','topic/name','', 'a'*65):
+            with self.assertRaises(ValueError):replace(settings,ntfy_topic=bad).validate()
+
+    def test_send_cli_returns_zero_with_gmail_and_no_whatsapp_key_even_if_push_fails(self):
+        now=datetime.now(UTC)
+        bundle=ForecastBundle((replace(forecast(),fetched_at=now),),(),.5,(),now)
+        briefing=replace(self.briefing,regions=(Mock(thermal=Mock()),))
+        # Real dispatch and SQLite, with only external transports mocked.
+        with patch.dict('os.environ',{'GMAIL_APP_PASSWORD':'abcd efgh ijkl mnop'},clear=True), \
+             patch('alerts.collect_forecasts',return_value=bundle),patch('alerts.build_briefing',return_value=briefing), \
+             patch('alerts.render_html',return_value='<p>briefing</p>'),patch('alerts._write_json'), \
+             patch('alerts.DatabaseManager',return_value=self.db),patch('alerts.send_email',return_value='gmail-ok') as email, \
+             patch('alerts.send_ntfy',side_effect=DeliveryError('ntfy unavailable')),patch('alerts.send_whatsapp') as whatsapp, \
+             patch('sys.stdout',new=io.StringIO()) as output:
+            self.assertEqual(main(['--send','--output-dir',str(self.path/'optional-push')]),0)
+        email.assert_called_once();whatsapp.assert_not_called()
+        self.assertEqual(email.call_args.args[0].email_to,'manorhousesurveyors@gmail.com')
+        self.assertIn('skipped: CALLMEBOT_API_KEY is unset',output.getvalue())
+
+    def test_ntfy_timeout_is_not_retried_and_no_trigger_sends_nothing(self):
+        settings=DeliverySettings(channels=('ntfy',));opener=Mock()
+        opener.open.side_effect=URLError('timeout')
+        with patch('alerts.build_opener',return_value=opener):
+            self.assertEqual(dispatch(self.briefing,self.db,settings),{'ntfy':'uncertain'})
+            dispatch(self.briefing,self.db,settings)
+            dispatch(replace(self.briefing,triggers=()),self.db,settings)
+        self.assertEqual(opener.open.call_count,1)
 
     def test_email_tls_multipart_and_safe_error(self):
         smtp=Mock()

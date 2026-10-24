@@ -122,3 +122,29 @@ class DatabaseTests(unittest.TestCase):
             connection.execute('PRAGMA user_version=999')
         with self.assertRaises(RuntimeError):
             DatabaseManager(self.path)
+
+    def test_schema_one_migration_preserves_sent_uncertain_history_and_profiles(self):
+        from scripts.watchdog_state import verify,main
+        claim=self.claim();self.db.start_delivery(claim,now=self.now)
+        self.db.mark_sent(claim,provider_message_id='original-id',now=self.now)
+        other=AlertKey(self.key.forecast_date,2,'thermal','route:A','whatsapp','+441234567890')
+        uncertain=self.db.claim_alert(other,now=self.now);self.db.start_delivery(uncertain,now=self.now)
+        self.db.mark_failed(uncertain,error='Uncertain original send',uncertain=True,now=self.now)
+        profile=self.db.save_gold_standard_profile(location=MONITORING_ZONES['shropshire'],valid_at=self.now,
+            source='test',label='Retained reference',profile={'temperature':20})
+        legacy=self.path.with_name('legacy.sqlite3')
+        with sqlite3.connect(self.path) as db,sqlite3.connect(legacy) as old:
+            sql='\n'.join(db.iterdump()).replace("'email','whatsapp','ntfy'","'email','whatsapp'")
+            old.executescript(sql);old.execute('PRAGMA user_version=1')
+        with self.assertRaises(ValueError):verify(legacy)
+        verify(legacy,allow_legacy=True)
+        with sqlite3.connect(legacy) as old:self.assertEqual(old.execute('PRAGMA user_version').fetchone()[0],1)
+        main(['migrate','--database',str(legacy)])
+        migrated=DatabaseManager(legacy)
+        self.assertEqual(migrated.list_alerts(),self.db.list_alerts())
+        self.assertEqual(migrated.alert_history(claim.alert_id),self.db.alert_history(claim.alert_id))
+        self.assertEqual(migrated.alert_history(uncertain.alert_id),self.db.alert_history(uncertain.alert_id))
+        self.assertEqual(migrated.get_gold_standard_profile(profile),self.db.get_gold_standard_profile(profile))
+        self.assertIsNone(migrated.claim_alert(self.key));self.assertIsNone(migrated.claim_alert(other))
+        self.assertIsNotNone(migrated.claim_alert(AlertKey(self.key.forecast_date,2,'thermal','route:A','ntfy','https://ntfy.sh/test')))
+        with sqlite3.connect(legacy) as db:self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(),[])

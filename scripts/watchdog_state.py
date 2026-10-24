@@ -13,13 +13,14 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from database import DatabaseManager,SCHEMA_VERSION
 
 
-def verify(path: Path) -> None:
+def verify(path: Path, *, allow_legacy: bool = False) -> None:
     if not path.is_file() or path.stat().st_size == 0:
         raise ValueError('Alert state is missing or empty; refusing to reset deduplication')
     with closing(sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)) as db:
         if db.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
             raise ValueError('Alert state failed integrity verification')
-        if db.execute('PRAGMA user_version').fetchone()[0] != SCHEMA_VERSION:
+        versions={1,SCHEMA_VERSION} if allow_legacy else {SCHEMA_VERSION}
+        if db.execute('PRAGMA user_version').fetchone()[0] not in versions:
             raise ValueError('Unsupported alert state schema; migration/review required')
         names = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if not {'alerts','alert_events','gold_standard_profiles'} <= names:
@@ -43,7 +44,8 @@ def backup(source: Path, directory: Path) -> None:
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation',choices=('initialize','verify','backup'))
+    parser.add_argument('operation',choices=('initialize','verify','migrate','backup'))
+    parser.add_argument('--allow-legacy',action='store_true',help='Accept a schema-1 artifact for verification before migration')
     parser.add_argument('--database',type=Path,default=Path('var/duo_discus.sqlite3'))
     parser.add_argument('--output',type=Path,default=Path('var/watchdog-state'))
     args=parser.parse_args(argv)
@@ -54,7 +56,10 @@ def main(argv=None):
             DatabaseManager(args.database)
     elif args.operation=='backup':
         backup(args.database,args.output)
-    verify(args.database)
+    elif args.operation=='migrate':
+        verify(args.database,allow_legacy=True)
+        DatabaseManager(args.database)
+    verify(args.database,allow_legacy=args.allow_legacy and args.operation=='verify')
     print(f'Alert state {args.operation}: verified')
 
 

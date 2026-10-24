@@ -75,11 +75,14 @@ line outside that corridor are not cleared. Missing DEM samples stay unassessed.
 Coastal flags indicate water or coastline proximity within 15 km; sea-breeze
 position and sink intensity are not resolved by this proximity check.
 
-OpenAir/GeoJSON upload enables horizontal route intersection checks within
-5 km, retaining class, lower and upper limits. OpenAir polygons, circles and
+Bundled ASSelect snapshots enable horizontal route intersection checks within
+5 km, retaining class, lower and upper limits. The latest AIRAC set effective
+on the selected forecast date is used, with a warning if it is expired. An
+explicit OpenAir/GeoJSON upload overrides the bundled data. OpenAir polygons, circles and
 common arc forms are supported. Supplied geometry is also an optional map layer.
 The candidate energy-line search conservatively excludes all intersected
-polygons without inferring vertical clearance. With no boundary file, airspace
+polygons without inferring vertical clearance. See [source hashes, dates and refresh commands](../data/README.md).
+With no boundary file, airspace
 is **UNASSESSED**. Nearby large/military aerodromes within an advisory 20 km
 radius are listed separately; those radii are not actual airspace boundaries.
 Current NOTAM activation and legal clearance need official sources.

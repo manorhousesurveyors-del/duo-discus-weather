@@ -380,3 +380,55 @@ intersection engine work with supplied geometry; without it the application
 reports airspace as **UNASSESSED**, with major-airfield proximity listed
 separately. Wave bars remain Scorer-scale guides, and terrain sampling cannot
 establish flight clearance. No live notification was sent.
+
+## Optional WhatsApp, ntfy and verified UK airspace — 24 October 2026
+
+The complete suite passes **179 tests**, none skipped, including all earlier
+map, route and export checks. New checks cover whitespace removal from Gmail
+app passwords, blank CallMeBot keys, Gmail-enabled exit 0 when optional push
+fails, keyless ntfy requests and response validation, and uncertain-send
+deduplication. Notification transports are mocked; no live email, WhatsApp or
+ntfy test message was sent. Provider acceptance and handset receipt were not
+tested with production credentials.
+
+Schema-1 delivery state migrates atomically to schema 2 while preserving existing
+claims, payloads, provider IDs, audit events and reference profiles. Previously
+sent or uncertain deliveries still suppress duplicates. The workflow retains
+the original restored artifact and migrates only its working copy.
+
+Both workflows pass **actionlint 1.7.7**. Every pinned action's exact remote
+`action.yml` was checked for the Node 24 runtime: checkout v5, setup-python v6,
+github-script v8, upload-artifact v6 and download-artifact v7. Python compilation,
+dependency consistency and `git diff --check` also pass. GitHub-hosted execution
+after this commit remains a separate deployment check.
+
+The previous network blocker for ASSelect is resolved. Verified HTTPS downloads
+produced **801 boundary volumes** for AIRAC 1–28 October and **799 volumes** for
+29 October–25 November. The current source SHA-256 hashes match files at publisher
+commit `98e023e9b42dfaa9efcfd90d31109fa833d91e32`. ASSelect's upcoming `airspace`
+and `rat` arrays match the source YAML at its reported commit
+`6b7f9d95535a894ce8bff4972da00fb00eec8ead`. Attribution and provenance are retained
+in both GeoJSON files.
+
+All output geometries pass Shapely validity checks. Five crossing rings per
+snapshot were split into valid polygons without dropping edges or pieces;
+boundary Hausdorff distance is checked at 1e-9 degrees. Tests also exercise
+line/circle/arc conversion, source endpoints, vertical limits, exclusion of
+gliding concessions, AIRAC selection/expiry warnings, a London CTR crossing and
+a distant track with no crossing. These checks verify conversion and source
+consistency, not independent accuracy of the AIP transcription or NOTAM activity.
+
+Headless Chromium displayed all **801 current boundary volumes**, enabled their
+Leaflet overlay, analysed the recorded MYN–BIE–MYN route, and opened the ntfy
+subscription cards in Help Guide. The successful run had zero JavaScript errors,
+Streamlit exceptions or failed external assets. This uses synthetic weather to
+check the UI; AIRAC selection for 29 October is covered by the automated date
+test. The browser check exposed and fixed a Folium layer-menu creation-order
+error when adding airspace after building the base map. TLS verification stayed
+enabled. Local evidence is `var/airspace-ui-results.json` and
+`var/current-airspace-planner.png`.
+
+The new `ntfy.sh` cloud allowlist entry is saved in a draft pending publication.
+GitHub-hosted Actions use their own network access. Subscription steps appear in
+the Help Guide; only `GMAIL_APP_PASSWORD` is required for the default Gmail plus
+ntfy configuration, with no CallMeBot key.

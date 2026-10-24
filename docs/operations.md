@@ -5,7 +5,10 @@
 Install `requirements.txt` in a Python 3.12 virtual environment and run
 `python alerts.py --dry-run`. Reports are written even when no threshold is met.
 Exit 0 means evaluation completed; exit 2 signals a request/configuration/output
-failure, an unavailable regional evaluation, or a failed/uncertain send. The
+failure, an unavailable regional evaluation, or a failed/uncertain primary send. A
+missing CallMeBot key is a skipped optional channel, not an error. ntfy failure
+is reported but does not fail a Gmail-enabled run; an ntfy-only delivery failure
+still exits 2. The
 reports retain missing fields, incomplete horizons and warnings.
 
 Only `--send` permits delivery. It validates selected-channel credentials before
@@ -19,11 +22,19 @@ not handset/inbox receipt.
 Put all files and `.github/workflows/soaring_watchdog.yml` on the default branch.
 In repository **Settings → Secrets and variables → Actions**:
 
-For Gmail plus CallMeBot, create exactly two repository secrets:
-**`GMAIL_APP_PASSWORD`** and **`CALLMEBOT_API_KEY`**. Use the sending Gmail
-account's app password (not its ordinary login password). Keep the sender,
-recipient and provider settings in the **Variables** tab, using the defaults
-below if appropriate. The Twilio secrets are needed only when selecting Twilio.
+For **Gmail plus free ntfy phone alerts**, the only required repository secret is
+**`GMAIL_APP_PASSWORD`**. Spaces and other whitespace are stripped from Google's
+grouped app password before SMTP login. Use the sending Gmail account's app
+password, not its ordinary login password. Leave **`CALLMEBOT_API_KEY` unset**
+while registration is unavailable: WhatsApp is skipped before validation or
+ledger claims, and Gmail/ntfy continue. A missing CallMeBot key cannot cause exit 2.
+
+Keep sender, recipient, channel and topic settings in the **Variables** tab.
+If `DUO_ALERT_CHANNELS` already exists, include `ntfy` to receive phone pushes;
+unset it to use the default `email,ntfy,whatsapp`. Use `email` for Gmail only or
+`ntfy` for keyless push only. Twilio credentials are required only when Twilio
+is explicitly selected as an active WhatsApp provider.
+
 GitHub supplies `github.token` automatically for workflow operations; neither
 workflow needs a manually created GitHub token secret. Weather map lookups,
 including Open-Meteo point precipitation, need no API key.
@@ -33,10 +44,11 @@ including Open-Meteo point precipitation, need no API key.
 | Secret | `GMAIL_APP_PASSWORD` | Gmail app password for the sending account |
 | Variable | `SMTP_USERNAME` | Sender, defaults to manorhousesurveyors@gmail.com |
 | Variable | `DUO_EMAIL_TO` | Recipient, defaults to manorhousesurveyors@gmail.com |
-| Variable | `DUO_ALERT_CHANNELS` | `email,whatsapp` default; `email` or `whatsapp` enables only one |
+| Variable | `DUO_ALERT_CHANNELS` | `email,ntfy,whatsapp` default; comma-separated channel selection |
+| Variable | `DUO_NTFY_TOPIC` | Defaults to `g-ckml-soaring-alerts`; no ntfy secret required |
 | Variable | `DUO_WHATSAPP_TO` | E.164 recipient, defaults to +447976125887 |
 | Variable | `WHATSAPP_PROVIDER` | `callmebot` default, or `twilio` |
-| Secret | `CALLMEBOT_API_KEY` | Recipient-authorized CallMeBot key, when selected |
+| Secret | `CALLMEBOT_API_KEY` | Optional recipient-authorized key; blank/unset skips CallMeBot |
 | Secret | `TWILIO_ACCOUNT_SID` | Twilio account SID, when selected |
 | Secret | `TWILIO_AUTH_TOKEN` | Twilio auth token, when selected |
 | Variable | `TWILIO_WHATSAPP_FROM` | Approved sender in `whatsapp:+number` format |
@@ -59,6 +71,28 @@ schedules; monitor Actions. The workflow is limited to the default branch,
 uses pinned actions and read-only permissions, and serializes jobs with
 `cancel-in-progress: false`.
 
+## Free ntfy phone alerts
+
+Install the free **ntfy** app, allow notifications, then subscribe to topic
+**`g-ckml-soaring-alerts`** on **`https://ntfy.sh`**. The direct topic is
+<https://ntfy.sh/g-ckml-soaring-alerts>. No API key is required. This unreserved
+topic is public; anyone who knows its name can read or publish messages.
+Messages contain a short soaring briefing, with details in Gmail.
+
+Pushes are sent only for qualifying triggers with `--send`, using the same
+per-date/horizon deduplication as email. Acceptance requires ntfy's JSON message
+ID and matching topic. TLS remains verified, redirects are refused, and uncertain
+POST outcomes are held for reconciliation rather than blindly retried.
+ntfy is best-effort alongside Gmail: its errors stay visible in delivery results
+and the ledger while successful email runs can exit 0. Provider acceptance does
+not establish phone receipt or override the phone's notification settings.
+
+Both workflows now use SHA-pinned **Node 24** actions: checkout v5, setup-python
+v6, github-script v8, upload-artifact v6 and download-artifact v7 (where used).
+Merely moving all actions to v4 would retain older runtimes. The pinned manifests
+were checked for `runs.using: node24`; GitHub-hosted `ubuntu-latest` supplies a
+compatible runner. Artifact restore inputs and durable-state behavior are retained.
+
 ## Durable state and recovery
 
 The WAL SQLite ledger is `var/duo_discus.sqlite3`. The workflow restores the most
@@ -66,6 +100,12 @@ recent preceding run's `soaring-watchdog-state` artifact (or a newer artifact
 from the current rerun), validates integrity/schema, then runs tests/watchdog.
 Only the first attempt of the first-ever run may initialize a fresh ledger. Missing, expired or
 corrupt preceding state stops delivery.
+
+Schema 2 adds the ntfy channel. The workflow first verifies schema-1 artifacts
+read-only, keeps the restored copy, then migrates the working ledger atomically.
+It retains every delivery ID, status, token, provider ID, audit event and reference
+profile. Previously sent or uncertain email/WhatsApp records still suppress
+duplicates. Local `DatabaseManager` performs the same migration when opened.
 
 After state validation, an `always()` step makes a consistent SQLite backup,
 including WAL transactions, and uploads it for 90 days even if installation,
@@ -133,7 +173,7 @@ provider plan support more points.
 Weather HTTPS hosts: `api.open-meteo.com`, `aviationweather.gov`.
 Map HTTPS hosts: `api.rainviewer.com`, `tilecache.rainviewer.com`,
 `tile.openstreetmap.org`, `a.tile.opentopomap.org`, `cdn.jsdelivr.net`.
-Notification HTTPS hosts: `api.callmebot.com` or `api.twilio.com`.
+Notification HTTPS hosts: `ntfy.sh`, plus optional `api.callmebot.com` or `api.twilio.com`.
 Email uses `smtp.gmail.com` **TCP 465**, not HTTPS. Keep certificate verification
 enabled; an HTTPS credential proxy cannot inject SMTP passwords. Credentials
 are ordinary secure runtime environment values on the delivery host. Preserve
@@ -158,7 +198,7 @@ schedule activation and secret provisioning are separate deployment steps.
 
 Airfield source snapshots additionally use `raw.githubusercontent.com` and the
 NOAA station cache. Runtime airfield reports use the existing Open-Meteo/NOAA
-hosts. Candidate UK airspace sources `asselect.uk` and `www.j3j4.org` were added
-to the saved cloud network draft during this upgrade; the draft requires user
-publication before they can be fetched. No current UK boundary file was verified
-or bundled. Manual current OpenAir/GeoJSON upload enables geometry checks.
+hosts. UK airspace snapshots were verified from `asselect.uk` and the publisher's
+`ahsparrow/airspace` GitHub repository. The new `ntfy.sh` entry was saved to the
+cloud network draft and requires publication for cloud connectivity. GitHub-hosted
+Actions have their own network access; that draft does not configure GitHub Secrets.

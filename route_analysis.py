@@ -12,7 +12,7 @@ from data_ingestion import JsonHttpClient,IngestionError
 from soaring_physics import Profile,evaluate_thermals,distance_bearing,cross_country_speed
 from task_planning import sampled_legs,task_distance
 from wave_map import destination
-from airspace import corridor_intersections,load_airspace
+from airspace import corridor_intersections,load_airspace,airspace_date_warning
 
 
 def energy_sample_rows(points):
@@ -173,13 +173,16 @@ def planner_panel(catalog,day,when,loading,model_key,bucket,forecasts,points,ass
             try:
                 body=import_airspace(boundaries.getvalue(),boundaries.name);LOCAL_PATH.parent.mkdir(exist_ok=True);LOCAL_PATH.write_text(json.dumps(body));st.rerun()
             except (ValueError,OSError) as exc:st.error(str(exc))
-    request_key=(signature(points),day.isoformat(),when.isoformat(),loading,model_key)
+    try:airspace=load_airspace(day)
+    except (ValueError,OSError) as exc:st.warning(f'Airspace file unavailable: {exc}');airspace=None
+    date_warning=airspace_date_warning(airspace,day)
+    if date_warning:st.warning(date_warning)
+    elif airspace:st.caption(f"Airspace: AIRAC {airspace['effective_date']} · valid through {airspace['valid_until']} · {len(airspace['features']):,} boundary volumes. Current activation still needs a NOTAM check.")
+    request_key=(signature(points),day.isoformat(),when.isoformat(),loading,model_key,airspace.get('content_hash') if airspace else None)
     report=st.session_state.get('route_analysis')
     if report and report['key']!=request_key:report=None
     view,_=map_builder(forecasts,when,layers=[],task=points,turnpoints=catalog.turnpoints,visual_mode='route',
         map_identity='planner',loading=loading,anchor=when,aviation=aviation,show_airfields=True,live_airfields=not recorded,selected_airfield=st.session_state.get('airfield_popup:last_planner_event'))
-    try:airspace=load_airspace()
-    except ValueError as exc:st.warning(f'Airspace file unavailable: {exc}');airspace=None
     if airspace:
         import folium
         display_airspace={**airspace,'features':[{**f,'properties':{k:html.escape(v) if isinstance(v,str) else v for k,v in f['properties'].items()}} for f in airspace['features']]}
@@ -191,12 +194,19 @@ def planner_panel(catalog,day,when,loading,model_key,bucket,forecasts,points,ass
         for line in report['energy']:
             if line['points']:
                 folium.PolyLine(line['points'],color='#12b596',weight=5,dash_array='8 5',tooltip=folium.Tooltip('Candidate energy line: '+html.escape(line['note']))).add_to(view)
+    # Folium's layer menu references every overlay at render time. It must be
+    # emitted after the planner's extra layers so their JS variables exist.
+    import folium
+    for key,child in list(view._children.items()):
+        if isinstance(child,folium.LayerControl):
+            view._children.pop(key)
+            child.add_to(view)
     def on_click():process_map_event(st.session_state.get('planner_map',{}),catalog,day,'Add to task',event_key='last_planner_event',visual_override='route')
     interaction=st_folium(view,height=620,use_container_width=True,pixelated=False,key='planner_map',on_change=on_click,wrap_longitude=False,returned_objects=['last_object_clicked','last_clicked'])
     if interaction and interaction!=st.session_state.get('last_planner_event'):
         old=active_task(day);process_map_event(interaction,catalog,day,'Add to task',event_key='last_planner_event',visual_override='route')
         if active_task(day)!=old:st.rerun()
-    if st.button('Analyse Task & Route Weather',type='primary',disabled=len(points)<2,width='stretch',key='analyse_route',help='Assess the route, fetch a sampled terrain corridor and compare centre/±10 km weather paths. Airspace checks require a current supplied boundary file. Data gaps remain unassessed.'):
+    if st.button('Analyse Task & Route Weather',type='primary',disabled=len(points)<2,width='stretch',key='analyse_route',help='Assess the route, fetch a sampled terrain corridor and compare centre/±10 km weather paths. Airspace checks use the dated bundled or uploaded boundaries; current activation needs a NOTAM check.'):
         try:
             from task_planning import assess_task,nearby_forecasts
             samples=tuple({p.key:p for leg in energy_sample_rows(points) for row in leg for p in row}.values())

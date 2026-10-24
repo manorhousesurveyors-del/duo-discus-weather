@@ -21,7 +21,7 @@ import uuid
 
 from config import ALERT_HORIZONS_DAYS, GeoPoint, LOCAL_TIMEZONE, Settings
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _utc(value: datetime | None = None) -> datetime:
@@ -58,8 +58,8 @@ class AlertKey:
             raise ValueError("Alert horizon must be 2 or 5 days")
         if self.kind not in {"thermal", "wave", "convergence", "briefing"}:
             raise ValueError("Unknown alert kind")
-        if self.channel not in {"email", "whatsapp"}:
-            raise ValueError("Channel must be email or whatsapp")
+        if self.channel not in {"email", "whatsapp", "ntfy"}:
+            raise ValueError("Channel must be email, whatsapp or ntfy")
         if not self.scope.strip() or not self.recipient.strip():
             raise ValueError("Scope and recipient must be nonempty")
 
@@ -128,7 +128,7 @@ class DatabaseManager:
                     horizon_days INTEGER NOT NULL CHECK(horizon_days IN (2,5)),
                     kind TEXT NOT NULL CHECK(kind IN ('thermal','wave','convergence','briefing')),
                     scope TEXT NOT NULL,
-                    channel TEXT NOT NULL CHECK(channel IN ('email','whatsapp')),
+                    channel TEXT NOT NULL CHECK(channel IN ('email','whatsapp','ntfy')),
                     recipient TEXT NOT NULL,
                     status TEXT NOT NULL CHECK(status IN ('reserved','sending','sent','failed','uncertain')),
                     claim_token TEXT NOT NULL,
@@ -169,8 +169,25 @@ class DatabaseManager:
                 )""",
                 "CREATE INDEX profiles_location_date ON gold_standard_profiles(location_key,local_date)",
             )
-            for statement in statements:
-                connection.execute(statement)
+            if version == 1:
+                # SQLite CHECK constraints need a table rebuild. Keep every
+                # claim ID, status/token, payload and audit event atomically;
+                # an exception rolls the whole migration back.
+                connection.execute('CREATE TEMP TABLE saved_alerts AS SELECT * FROM alerts')
+                connection.execute('CREATE TEMP TABLE saved_events AS SELECT * FROM alert_events')
+                connection.execute('DROP TABLE alert_events')
+                connection.execute('DROP TABLE alerts')
+                for statement in statements[:4]:connection.execute(statement)
+                connection.execute('INSERT INTO alerts SELECT * FROM saved_alerts')
+                connection.execute('INSERT INTO alert_events SELECT * FROM saved_events')
+                connection.execute('DROP TABLE saved_alerts')
+                connection.execute('DROP TABLE saved_events')
+                if connection.execute('PRAGMA foreign_key_check').fetchone():
+                    raise RuntimeError('Alert state migration failed foreign-key verification')
+            elif version == 0:
+                for statement in statements:connection.execute(statement)
+            else:
+                raise RuntimeError(f'Unsupported database schema {version}')
             connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     @staticmethod

@@ -261,7 +261,7 @@ def render_whatsapp(briefing: Briefing) -> str:
 
 @dataclass(frozen=True)
 class DeliverySettings:
-    channels: tuple[str, ...] = ('email','whatsapp')
+    channels: tuple[str, ...] = ('email','ntfy','whatsapp')
     email_to: str = DEFAULT_EMAIL_RECIPIENT
     smtp_username: str = DEFAULT_EMAIL_RECIPIENT
     gmail_app_password: str = field(default='', repr=False)
@@ -272,27 +272,46 @@ class DeliverySettings:
     twilio_auth_token: str = field(default='', repr=False)
     twilio_whatsapp_from: str = ''
     twilio_content_sid: str = ''
+    ntfy_topic: str = 'g-ckml-soaring-alerts'
+
+    def __post_init__(self):
+        # Google's app-password display groups characters with spaces.
+        object.__setattr__(self,'gmail_app_password',''.join(self.gmail_app_password.split()))
+        object.__setattr__(self,'callmebot_api_key',self.callmebot_api_key.strip())
+
+    @property
+    def skipped_channels(self):
+        if 'whatsapp' in self.channels and self.whatsapp_provider=='callmebot' and not self.callmebot_api_key:
+            return {'whatsapp':'skipped: CALLMEBOT_API_KEY is unset'}
+        return {}
+
+    @property
+    def ntfy_url(self):
+        return 'https://ntfy.sh/'+self.ntfy_topic
 
     @classmethod
     def from_env(cls, env: Mapping[str,str] | None = None):
         e = os.environ if env is None else env
-        return cls(tuple(dict.fromkeys(c.strip() for c in e.get('DUO_ALERT_CHANNELS','email,whatsapp').split(',') if c.strip())),
+        return cls(tuple(dict.fromkeys(c.strip() for c in e.get('DUO_ALERT_CHANNELS','email,ntfy,whatsapp').split(',') if c.strip())),
                    e.get('DUO_EMAIL_TO',DEFAULT_EMAIL_RECIPIENT), e.get('SMTP_USERNAME',DEFAULT_EMAIL_RECIPIENT),
                    e.get('GMAIL_APP_PASSWORD',''), e.get('DUO_WHATSAPP_TO',DEFAULT_WHATSAPP_RECIPIENT),
                    e.get('WHATSAPP_PROVIDER','callmebot').lower(), e.get('CALLMEBOT_API_KEY',''),
                    e.get('TWILIO_ACCOUNT_SID',''), e.get('TWILIO_AUTH_TOKEN',''),
-                   e.get('TWILIO_WHATSAPP_FROM',''), e.get('TWILIO_CONTENT_SID',''))
+                   e.get('TWILIO_WHATSAPP_FROM',''), e.get('TWILIO_CONTENT_SID',''),
+                   e.get('DUO_NTFY_TOPIC','g-ckml-soaring-alerts').strip())
 
     def validate(self):
-        if not self.channels or not set(self.channels) <= {'email','whatsapp'}:
-            raise ValueError('DUO_ALERT_CHANNELS must select email and/or whatsapp')
+        if not self.channels or not set(self.channels) <= {'email','whatsapp','ntfy'}:
+            raise ValueError('DUO_ALERT_CHANNELS must select email, ntfy and/or whatsapp')
+        if 'ntfy' in self.channels and not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',self.ntfy_topic):
+            raise ValueError('DUO_NTFY_TOPIC must contain 1–64 letters, digits, underscores or hyphens')
         if 'email' in self.channels:
             if not self.gmail_app_password:
                 raise ValueError('Set GMAIL_APP_PASSWORD securely before using --send')
             for address in (self.email_to,self.smtp_username):
                 if not re.fullmatch(r'[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+',address):
                     raise ValueError('Email sender/recipient must be a single valid address')
-        if 'whatsapp' in self.channels:
+        if 'whatsapp' in self.channels and 'whatsapp' not in self.skipped_channels:
             if not re.fullmatch(r'\+[1-9]\d{7,14}',self.whatsapp_to):
                 raise ValueError('WhatsApp recipient must use E.164 format')
             if self.whatsapp_provider == 'callmebot':
@@ -377,15 +396,42 @@ def send_whatsapp(settings: DeliverySettings, briefing: Briefing, delivery_id: s
         raise DeliveryError(f'WhatsApp outcome uncertain ({type(exc).__name__})') from None
 
 
+def send_ntfy(settings: DeliverySettings, briefing: Briefing, delivery_id: str) -> str:
+    """Keyless public-topic push; submit once and require explicit acceptance."""
+    message=render_whatsapp(briefing).encode('utf-8')[:4000].decode('utf-8',errors='ignore').encode('utf-8')
+    request=Request(settings.ntfy_url,data=message,method='POST',
+        headers={'Content-Type':'text/plain; charset=utf-8','User-Agent':'duo-discus-weather/1.0',
+                 'Title':f'G-CKML: {briefing.horizon_days}-day soaring watch','Tags':'airplane',
+                 'Priority':'default'})
+    try:
+        opener=build_opener(HTTPSHandler(context=ssl.create_default_context()),_NoRedirect())
+        with opener.open(request,timeout=30) as response:
+            status,raw=response.status,response.read(65537)
+        if len(raw)>65536:raise DeliveryError('ntfy response too large; outcome uncertain')
+        result=json.loads(raw)
+        if (status!=200 or not isinstance(result,dict) or result.get('event')!='message'
+            or result.get('topic')!=settings.ntfy_topic
+            or not isinstance(result.get('id'),str)
+            or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',result['id'])):
+            raise DeliveryError('ntfy acceptance not confirmed')
+        return 'ntfy:'+result['id']
+    except HTTPError as exc:
+        code=exc.code;exc.close()
+        raise DeliveryError(f'ntfy returned HTTP {code}',uncertain=code>=500 or code in (408,429)) from None
+    except (URLError,OSError,ValueError) as exc:
+        raise DeliveryError(f'ntfy outcome uncertain ({type(exc).__name__})') from None
+
+
 def dispatch(briefing: Briefing, database: DatabaseManager, settings: DeliverySettings, *,
              senders: Mapping[str,Callable] | None = None) -> dict[str,str]:
     settings.validate()
     if not briefing.triggers:
         return {}
-    senders = senders or {'email':send_email,'whatsapp':send_whatsapp}
-    outcomes = {}
+    senders = senders or {'email':send_email,'whatsapp':send_whatsapp,'ntfy':send_ntfy}
+    outcomes = settings.skipped_channels.copy()
     for channel in settings.channels:
-        recipient = settings.email_to.lower() if channel == 'email' else settings.whatsapp_to
+        if channel in settings.skipped_channels:continue
+        recipient = {'email':settings.email_to.lower(),'whatsapp':settings.whatsapp_to,'ntfy':settings.ntfy_url}[channel]
         key = AlertKey(briefing.target_time.astimezone(LOCAL_TIMEZONE).date(),briefing.horizon_days,
                        'briefing','national',channel,recipient)
         claim = database.claim_alert(key,payload={'triggers':list(briefing.triggers),'target_time':briefing.target_time.isoformat()})
@@ -439,7 +485,10 @@ def main(argv=None) -> int:
         (args.output_dir/f'briefing-{horizon}day.html').write_text(render_html(briefing),encoding='utf-8')
         _write_json(args.output_dir/f'briefing-{horizon}day.json',asdict(briefing))
         outcomes = dispatch(briefing,database,settings) if args.send else {}
-        failed |= any(value in {'failed','uncertain'} for value in outcomes.values())
+        # Push supplements Gmail. Report its failure without failing a working
+        # email run; a push-only run still fails when delivery is unconfirmed.
+        failed |= any(value in {'failed','uncertain'} for channel,value in outcomes.items()
+                      if channel!='ntfy' or 'email' not in settings.channels)
         # No data is an evaluation failure, never an all-clear briefing.
         failed |= all(r.thermal is None for r in briefing.regions)
         summary.append({'horizon_days':horizon,'target_time':briefing.target_time,

@@ -5,6 +5,10 @@ import streamlit as st
 from briefing_bot import answer_question, parse_intent
 
 TOPICS = (
+    ('📱 Get Free Phone Alerts', (
+        ('Step 1 · Get the app', 'Install the free ntfy app on your phone. Allow notifications.'),
+        ('Step 2 · Subscribe', 'Choose Subscribe. Use server https://ntfy.sh and topic g-ckml-soaring-alerts. No API key is needed.'),
+        ('Step 3 · Read your alerts', 'You get a short message when the weather triggers an alert. Read Gmail for details. This topic is public.'))),
     ('☀ Quick Start: Check Today’s Flying Weather in 30 Seconds', (
         ('Step 1 · Pick your day', 'Choose the forecast day and time. Select Dry if you carry no water ballast.'),
         ('Step 2 · Open Map modes', 'Choose Thermal Lift or Potential Flight Distance. Hover over coloured areas for numbers.'),

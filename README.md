@@ -85,8 +85,8 @@ permission require an operator check.
 **Task planner** has its own BGA/airfield map, CUP/TSK task import and an
 **Analyse Task & Route Weather** button. Analysis adds hourly leg conditions,
 STF/XC speeds, sampled terrain margins, coastal/rain warnings and candidate
-energy lines. Upload current OpenAir/GeoJSON boundaries to enable airspace
-intersection checks; without them, that check remains **UNASSESSED**.
+energy lines. Bundled ASSelect airspace boundaries are selected by the forecast date, with
+AIRAC validity shown. Current OpenAir/GeoJSON uploads can override them.
 
 **Wave watch** includes Denbigh/Lleweni Parc and the Cambrian Mountains, with
 six altitude buttons from 3,000 to 25,000 ft. Model ascent colours and three
@@ -123,8 +123,11 @@ be present on the repository's default branch and Actions must be enabled.
 Configure repository secrets and variables using [the operations guide](docs/operations.md).
 Manual workflow runs default to dry-run mode.
 
-Email uses Gmail SSL on port 465. WhatsApp supports CallMeBot or an approved
-Twilio template. The SQLite ledger is backed up and restored between GitHub
+Email uses Gmail SSL on port 465 and strips spaces from the app password.
+Free ntfy pushes go to `https://ntfy.sh/g-ckml-soaring-alerts`; subscribe to
+`g-ckml-soaring-alerts` in the mobile app. WhatsApp is optional: a blank
+CallMeBot key is skipped without blocking Gmail or causing exit 2. Twilio
+remains an alternative with an approved template. The SQLite ledger is backed up and restored between GitHub
 runners. Missing/corrupt previous state stops delivery; uncertain provider
 outcomes require reconciliation. A channel's accepted briefing is suppressed
 for the same target local date and 2/5-day horizon. No live notifications were
@@ -170,7 +173,8 @@ instructions are in the operations guide. Never place credentials in payloads.
 The saved custom allowlist includes `api.rainviewer.com`,
 `tilecache.rainviewer.com`, `tile.openstreetmap.org`,
 `a.tile.opentopomap.org`, the weather APIs and notification destinations.
-BGA synchronization uses `soaringweb.org` and `www.newportpeace.co.uk`;
+Airspace refresh uses `asselect.uk` and the publisher’s GitHub data; ntfy uses
+`ntfy.sh`. BGA synchronization uses `soaringweb.org` and `www.newportpeace.co.uk`;
 `members.gliding.co.uk` is retained for source documentation. Leaflet/marker assets use `cdn.jsdelivr.net` from the existing package preset.
 The browser also needs tile/script access. Gmail additionally requires outbound
 **TCP 465**; an HTTPS proxy domain allowlist alone does not enable SMTP. The

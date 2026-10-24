@@ -28,14 +28,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5 · Node 24
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6 · Node 24
         with:
           python-version: '3.12'
           cache: pip
       - name: Find durable alert state
         id: previous
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8 · Node 24
         env:
           RECOVERY_RUN_ID: ${{ inputs.restore_run_id }}
         with:
@@ -83,7 +83,7 @@ jobs:
             core.setOutput('run_id', String(state.run_id));
       - name: Restore previous ledger
         if: steps.previous.outputs.run_id != ''
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7 · Node 24
         with:
           name: soaring-watchdog-state
           path: var/restored-state
@@ -96,8 +96,9 @@ jobs:
         run: |
           mkdir -p var
           if [ -n "$PREVIOUS_RUN_ID" ]; then
-            python scripts/watchdog_state.py verify --database var/restored-state/alerts.sqlite3
+            python scripts/watchdog_state.py verify --allow-legacy --database var/restored-state/alerts.sqlite3
             cp var/restored-state/alerts.sqlite3 var/duo_discus.sqlite3
+            python scripts/watchdog_state.py migrate
           else
             python scripts/watchdog_state.py initialize
           fi
@@ -109,7 +110,8 @@ jobs:
       - name: Evaluate and dispatch
         env:
           SEND_NOTIFICATIONS: ${{ github.event_name == 'schedule' || inputs.send }}
-          DUO_ALERT_CHANNELS: ${{ vars.DUO_ALERT_CHANNELS || 'email,whatsapp' }}
+          DUO_ALERT_CHANNELS: ${{ vars.DUO_ALERT_CHANNELS || 'email,ntfy,whatsapp' }}
+          DUO_NTFY_TOPIC: ${{ vars.DUO_NTFY_TOPIC || 'g-ckml-soaring-alerts' }}
           DUO_EMAIL_TO: ${{ vars.DUO_EMAIL_TO || 'manorhousesurveyors@gmail.com' }}
           SMTP_USERNAME: ${{ vars.SMTP_USERNAME || 'manorhousesurveyors@gmail.com' }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
@@ -132,7 +134,7 @@ jobs:
         run: python scripts/watchdog_state.py backup
       - name: Persist delivery ledger even after send errors
         if: always() && steps.backup.outcome == 'success'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6 · Node 24
         with:
           name: soaring-watchdog-state
           path: var/watchdog-state/
@@ -141,7 +143,7 @@ jobs:
           overwrite: true
       - name: Save evaluation reports
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6 · Node 24
         with:
           name: soaring-briefings-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
