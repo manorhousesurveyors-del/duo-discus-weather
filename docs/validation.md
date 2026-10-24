@@ -507,3 +507,35 @@ All JavaScript assets parse with Node, Python compilation and dependency checks
 pass, both unchanged workflows pass actionlint 1.7.7, and `git diff --check` is
 clean. Required HTTPS hosts were saved in the environment draft; actual OGN,
 registry, elevation and Esri access succeeded with certificate verification.
+
+## Watchdog state recovery and on-demand Gmail test · 24 October 2026
+
+The full offline suite passes **202 tests**, including ten new recovery/manual
+email tests. The GitHub script regression reproduces Run #1 uploading before
+failure, Run #2 having no artifact, and Run #3 successfully discovering Run #1.
+It also checks current-run attempts, expired artifacts, foreign workflow/branch
+artifacts, API failure and explicit recovery selection. The real workflow shell
+routes manual `send=true` to `--test-email`, scheduled sends to `--send`, and
+manual `send=false` to `--dry-run`.
+
+Recovery tests exercise absent, empty, JSON `{}`, corrupt, future-schema and
+wrong-column SQLite artifacts. These cases initialize an empty verified ledger;
+valid artifacts retain accepted delivery claims, schema-1 files migrate, and
+invalid local working copies are retained separately. Normal scheduled
+idempotency and uncertain-send tests continue to pass with valid state. The new
+recovery policy deliberately permits repeat alerts after state loss; it
+supersedes the earlier first-run-only initialization behavior described above.
+
+Two consecutive explicit manual tests each submit one Gmail message despite
+having no weather trigger and without consulting the scheduled ledger. Actual
+MIME composition is checked with mocked SMTP: fixed requested recipient,
+whitespace-stripped app password, unique test Message-IDs, and five dated
+one-star rows in a poor-weather fixture. Forecast outage/stale data still sends
+the delivery test with unavailable ratings. A genuine SMTP rejection remains a
+reported failed delivery. No email, ntfy or WhatsApp test was sent live.
+
+Both workflows pass actionlint 1.7.7; the GitHub discovery JavaScript parses with
+Node, Python compilation passes and `git diff --check` is clean. The GitHub API
+was inaccessible from this execution environment (HTTP 403), so the reported
+Actions failure was reproduced from the supplied error and checked-in workflow,
+not by reading private run logs or dispatching a production job.

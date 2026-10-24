@@ -6,11 +6,11 @@ on:
   workflow_dispatch:
     inputs:
       send:
-        description: Send qualifying notifications (otherwise render a dry-run briefing)
+        description: Send an immediate test email with the five-day star outlook (otherwise dry run)
         type: boolean
         default: false
       restore_run_id:
-        description: Optional verified recovery run ID; reconcile later sends before using older state
+        description: Optional recovery run ID; unavailable or invalid state starts an empty ledger
         type: string
         required: false
 
@@ -35,74 +35,27 @@ jobs:
           cache: pip
       - name: Find durable alert state
         id: previous
+        continue-on-error: true
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8 · Node 24
         env:
           RECOVERY_RUN_ID: ${{ inputs.restore_run_id }}
         with:
           script: |
-            const repo = context.repo;
-            const current = context.runId;
-            const workflow = 'soaring_watchdog.yml';
-            const branch = context.payload.repository.default_branch;
-            const runs = (await github.rest.actions.listWorkflowRuns({ ...repo,
-              workflow_id: workflow, branch, per_page: 100 })).data.workflow_runs;
-            const recovery = process.env.RECOVERY_RUN_ID;
-            let candidates;
-            if (recovery) {
-              if (!/^\d+$/.test(recovery)) throw new Error('Recovery run ID must be numeric');
-              const run = (await github.rest.actions.getWorkflowRun({ ...repo, run_id: Number(recovery) })).data;
-              const currentRun = (await github.rest.actions.getWorkflowRun({ ...repo, run_id: current })).data;
-              if (run.workflow_id !== currentRun.workflow_id || run.head_branch !== branch)
-                throw new Error('Recovery state must belong to this workflow and default branch');
-              candidates = [run];
-            } else {
-              // Include this run's previous attempt artifacts when rerunning a job.
-              candidates = runs.filter(r => r.id !== current).sort((a,b) =>
-                Date.parse(b.updated_at) - Date.parse(a.updated_at)).slice(0,1);
-              candidates.push({id: current});
-            }
-            const found = [];
-            for (const run of candidates) {
-              const artifacts = (await github.rest.actions.listWorkflowRunArtifacts({ ...repo,
-                run_id: run.id, per_page: 100 })).data.artifacts;
-              found.push(...artifacts.filter(a => a.name === 'soaring-watchdog-state' && !a.expired)
-                .map(a => ({ ...a, run_id: run.id })));
-            }
-            found.sort((a,b) => Date.parse(b.created_at)-Date.parse(a.created_at));
-            const state = found[0];
-            const previous = candidates.find(r => r.id !== current);
-            if (!state) {
-              if (previous || recovery || Number(process.env.GITHUB_RUN_ATTEMPT || 1) > 1)
-                throw new Error('Previous state unavailable; refusing a fresh alert ledger. Restore a verified state artifact.');
-              core.setOutput('run_id', '');
-              return;
-            }
-            if (!recovery && previous && state.run_id !== previous.id &&
-                Date.parse(state.created_at) < Date.parse(previous.updated_at))
-              throw new Error('A later run has no recoverable ledger; manual reconciliation required');
-            core.setOutput('run_id', String(state.run_id));
+            await require('./scripts/find_watchdog_state.js')({github, context, core});
       - name: Restore previous ledger
-        if: steps.previous.outputs.run_id != ''
+        if: steps.previous.outputs.artifact_id != ''
+        continue-on-error: true
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7 · Node 24
         with:
-          name: soaring-watchdog-state
+          artifact-ids: ${{ steps.previous.outputs.artifact_id }}
+          merge-multiple: true
           path: var/restored-state
           github-token: ${{ github.token }}
           run-id: ${{ steps.previous.outputs.run_id }}
       - name: Validate or initialize ledger
         id: state
-        env:
-          PREVIOUS_RUN_ID: ${{ steps.previous.outputs.run_id }}
         run: |
-          mkdir -p var
-          if [ -n "$PREVIOUS_RUN_ID" ]; then
-            python scripts/watchdog_state.py verify --allow-legacy --database var/restored-state/alerts.sqlite3
-            cp var/restored-state/alerts.sqlite3 var/duo_discus.sqlite3
-            python scripts/watchdog_state.py migrate
-          else
-            python scripts/watchdog_state.py initialize
-          fi
-          python scripts/watchdog_state.py verify
+          python scripts/watchdog_state.py prepare --restored var/restored-state/alerts.sqlite3
       - name: Install dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
       - name: Run offline tests
@@ -110,6 +63,7 @@ jobs:
       - name: Evaluate and dispatch
         env:
           SEND_NOTIFICATIONS: ${{ github.event_name == 'schedule' || inputs.send }}
+          MANUAL_TEST_EMAIL: ${{ github.event_name == 'workflow_dispatch' && inputs.send }}
           DUO_ALERT_CHANNELS: ${{ vars.DUO_ALERT_CHANNELS || 'email,ntfy,whatsapp' }}
           DUO_NTFY_TOPIC: ${{ vars.DUO_NTFY_TOPIC || 'g-ckml-soaring-alerts' }}
           DUO_EMAIL_TO: ${{ vars.DUO_EMAIL_TO || 'manorhousesurveyors@gmail.com' }}
@@ -123,7 +77,9 @@ jobs:
           TWILIO_WHATSAPP_FROM: ${{ vars.TWILIO_WHATSAPP_FROM }}
           TWILIO_CONTENT_SID: ${{ vars.TWILIO_CONTENT_SID }}
         run: |
-          if [ "$SEND_NOTIFICATIONS" = "true" ]; then
+          if [ "$MANUAL_TEST_EMAIL" = "true" ]; then
+            python alerts.py --test-email
+          elif [ "$SEND_NOTIFICATIONS" = "true" ]; then
             python alerts.py --send
           else
             python alerts.py --dry-run

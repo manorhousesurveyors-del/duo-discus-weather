@@ -132,15 +132,20 @@ because `.env` files are not automatically loaded.
 **00:17, 06:17, 12:17 and 18:17 UTC**, subject to GitHub scheduling delays. It must
 be present on the repository's default branch and Actions must be enabled.
 Configure repository secrets and variables using [the operations guide](docs/operations.md).
-Manual workflow runs default to dry-run mode.
+Manual workflow runs default to dry-run mode. Set **send=true** for one Gmail
+test email to **manorhousesurveyors@gmail.com**, including five days of Long Mynd
+star ratings, regardless of thresholds or prior sends. The CLI equivalent is
+`python alerts.py --test-email`; missing weather is labelled unavailable.
 
 Email uses Gmail SSL on port 465 and strips spaces from the app password.
 Free ntfy pushes go to `https://ntfy.sh/g-ckml-soaring-alerts`; subscribe to
 `g-ckml-soaring-alerts` in the mobile app. WhatsApp is optional: a blank
 CallMeBot key is skipped without blocking Gmail or causing exit 2. Twilio
 remains an alternative with an approved template. The SQLite ledger is backed up and restored between GitHub
-runners. Missing/corrupt previous state stops delivery; uncertain provider
-outcomes require reconciliation. A channel's accepted briefing is suppressed
+runners. Older failed-run artifacts are considered when a later run has none.
+Unavailable/corrupt state is logged and automatically replaced with a valid
+empty ledger, allowing execution to continue; earlier alerts may then repeat.
+With valid state, uncertain scheduled provider outcomes retain their audit trail. A channel's accepted briefing is suppressed
 for the same target local date and 2/5-day horizon. No live notifications were
 sent during implementation; provider paths were verified with mocks.
 

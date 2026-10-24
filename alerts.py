@@ -1,15 +1,16 @@
-"""Six-hour soaring watchdog. Default is a dry run; --send enables delivery.
+"""Six-hour soaring watchdog. Default is a dry run; explicit modes enable delivery.
 
 Creates auditable HTML/JSON briefings even when no threshold is reached. Public
 forecast reads are retryable; notification submissions deliberately are not.
-SQLite delivery claims protect concurrent/repeated runs and preserve uncertain
-outcomes. See docs/operations.md for credentials and durable scheduler state.
+SQLite delivery claims protect scheduled runs and preserve uncertain outcomes.
+--test-email requests one email independently of thresholds and alert history.
+See docs/operations.md for credentials and durable scheduler state.
 """
 from __future__ import annotations
 
 import argparse
 import base64
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 import hashlib
@@ -19,7 +20,9 @@ import os
 from pathlib import Path
 import re
 import smtplib
+import sqlite3
 import ssl
+import uuid
 from typing import Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -151,6 +154,7 @@ class Briefing:
     triggers: tuple[str, ...]
     warnings: tuple[str, ...]
     ratings: tuple[DayRating,...] = ()
+    manual_test: bool = False
 
 
 def build_briefing(bundle: ForecastBundle, horizon_days: int, *, now: datetime | None = None) -> Briefing:
@@ -215,7 +219,41 @@ def _display(value, suffix='', digits=1):
     return 'Unavailable' if value is None else f'{value:.{digits}f}{suffix}'
 
 
+def collect_test_forecasts() -> ForecastBundle:
+    """One Long Mynd/ECMWF request; an email test needs no national grid."""
+    batch=OpenMeteoClient().fetch_batched((MONITORING_ZONES['shropshire'],),(FORECAST_MODELS['ifs025'],))
+    return ForecastBundle(batch.forecasts,(),.5,
+        tuple(f'{f.target} / {f.provider}: {f.message}' for f in batch.failures),datetime.now(UTC))
+
+
+def build_test_briefing(bundle: ForecastBundle, now: datetime) -> Briefing:
+    origin=MONITORING_ZONES['shropshire'];day=now.astimezone(LOCAL_TIMEZONE).date()
+    ratings=tuple(rate_day(bundle.forecasts,origin,day+timedelta(days=i)) for i in range(5))
+    return Briefing(5,now,now,(),(),(),None,(),bundle.errors+(
+        'Manual delivery test: sent on request, regardless of weather thresholds or earlier notifications.',
+        'Five-day outlook is local Long Mynd thermal XC potential for dry 34 kg/m²; wave is separate.',
+        'Independent RASP-style estimates. Missing weather stays unavailable; check the full task corridor.'),ratings,True)
+
+
+def render_test_email(briefing: Briefing) -> str:
+    esc=lambda value:html.escape(str(value),quote=True)
+    rows=''.join('<tr>'+''.join(f'<td>{esc(v)}</td>' for v in (
+        datetime.fromisoformat(r.day).strftime('%a %d %b'),r.symbols+' · '+r.label,
+        _display(r.distance_km,' km',0),_display(r.climb_knots,' kt'),
+        _display(r.base_agl_ft,' ft'),_display(r.window_hours,' h'),'; '.join(r.reasons)))+'</tr>' for r in briefing.ratings)
+    return ('<!doctype html><html lang="en"><head><meta charset="utf-8"><title>G-CKML email test</title>'
+        '<style>body{font:17px/1.65 Arial,sans-serif;color:#1E242B;background:#FDFBF7;padding:20px}'
+        'table{border-collapse:collapse;width:100%}th,td{padding:10px;text-align:left;border-bottom:1px solid #dce4e9}'
+        'th{background:#F4F6F9}</style></head><body><h1>G-CKML · Manual test briefing</h1>'
+        '<p>You requested this email to check Gmail delivery. No alert threshold is required.</p>'
+        '<h2>Long Mynd · Five-day Star Rating</h2><p>Generated '+esc(briefing.generated_at.astimezone(LOCAL_TIMEZONE).strftime('%d %b %Y %H:%M %Z'))+'</p>'
+        '<table><thead><tr>'+''.join('<th>'+v+'</th>' for v in ('Day','Rating','Local PFD','Net climb','Usable height AGL','Window','Notes'))+
+        '</tr></thead><tbody>'+rows+'</tbody></table><h2>Forecast notes</h2><ul>'+
+        ''.join('<li>'+esc(w)+'</li>' for w in briefing.warnings)+'</ul></body></html>')
+
+
 def render_html(briefing: Briefing) -> str:
+    if briefing.manual_test:return render_test_email(briefing)
     escape = lambda value: html.escape(str(value), quote=True)
     def table(headers, rows):
         return '<table><thead><tr>'+''.join(f'<th>{escape(h)}</th>' for h in headers)+'</tr></thead><tbody>'+''.join(
@@ -261,6 +299,10 @@ def render_html(briefing: Briefing) -> str:
 
 
 def render_whatsapp(briefing: Briefing) -> str:
+    if briefing.manual_test:
+        return ('G-CKML MANUAL EMAIL TEST · Long Mynd five-day Star Rating\n'+
+            '\n'.join(f'{r.day}: {r.symbols} {r.label} · {_display(r.distance_km," km",0)}' for r in briefing.ratings)+
+            '\n\n'+'\n'.join(briefing.warnings))
     best=best_rating(briefing.ratings)
     text = (f'G-CKML {briefing.horizon_days}-day watch: '
             f'{briefing.target_time.astimezone(LOCAL_TIMEZONE):%a %d %b %H:%M %Z}\n'+
@@ -356,7 +398,9 @@ def send_email(settings: DeliverySettings, briefing: Briefing, delivery_id: str)
     rating=best_rating(briefing.ratings)
     message['From'], message['To'] = settings.smtp_username, settings.email_to
     message['Subject'] = f'G-CKML: {briefing.horizon_days}-day soaring watch · {briefing.target_time:%d %b}'
-    if rating:
+    if briefing.manual_test:
+        message.replace_header('Subject','G-CKML TEST briefing · Five-day Star Rating')
+    elif rating:
         message.replace_header('Subject',f'G-CKML: {rating.stars}-Star day · {briefing.horizon_days}-day watch · {briefing.target_time:%d %b}')
         if rating.stars>=3:message['X-Priority']='1';message['Importance']='high'
     message['Message-ID'] = f'<{delivery_id}@duo-discus-weather.local>'
@@ -471,17 +515,61 @@ def dispatch(briefing: Briefing, database: DatabaseManager, settings: DeliverySe
     return outcomes
 
 
+def open_delivery_database() -> DatabaseManager:
+    from scripts.watchdog_state import prepare,verify
+    try:
+        database=DatabaseManager();verify(database.path)
+        return database
+    except (sqlite3.DatabaseError,ValueError,RuntimeError):
+        path=Settings.from_env().database_path
+        prepare(path)
+        return DatabaseManager(path)
+
+
+def manual_test_email(args, settings: DeliverySettings) -> int:
+    """One explicit email per invocation, independent of the scheduled ledger."""
+    settings=replace(settings,channels=('email',),email_to=DEFAULT_EMAIL_RECIPIENT)
+    settings.validate()
+    now=datetime.now(UTC)
+    try:
+        bundle=load_bundle(args.snapshot) if args.snapshot else collect_test_forecasts()
+    except (IngestionError,ValueError,OSError) as exc:
+        bundle=ForecastBundle((),(),.5,(f'Forecast unavailable ({type(exc).__name__}); this is still a Gmail delivery test.',),now)
+    fresh=tuple(f for f in bundle.forecasts if timedelta(minutes=-5)<=now-f.fetched_at<=timedelta(hours=2))
+    if len(fresh)!=len(bundle.forecasts):
+        bundle=replace(bundle,forecasts=fresh,errors=bundle.errors+('Stale or future-dated weather excluded from the outlook.',))
+    briefing=build_test_briefing(bundle,now)
+    args.output_dir.mkdir(parents=True,exist_ok=True)
+    (args.output_dir/'briefing-test-email.html').write_text(render_html(briefing),encoding='utf-8')
+    report={'briefing':asdict(briefing),'recipient':settings.email_to,'delivery':'pending'}
+    _write_json(args.output_dir/'briefing-test-email.json',report)
+    try:
+        provider_id=send_email(settings,briefing,'manual-test-'+uuid.uuid4().hex)
+    except DeliveryError as exc:
+        report.update(delivery='uncertain' if exc.uncertain else 'failed',error=str(exc))
+    else:
+        report.update(delivery='accepted',provider_id=provider_id)
+    _write_json(args.output_dir/'briefing-test-email.json',report)
+    print(json.dumps({'mode':'manual-test-email','recipient':settings.email_to,
+        'delivery':report['delivery'],'error':report.get('error'),'warnings':briefing.warnings},indent=2))
+    return 0 if report['delivery']=='accepted' else 2
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--send',action='store_true',help='Submit notifications using configured credentials')
     mode.add_argument('--dry-run',action='store_true',help='Evaluate and render only (the default)')
+    mode.add_argument('--test-email',action='store_true',help='Send one immediate Gmail test with a five-day Long Mynd star outlook, regardless of thresholds or prior sends')
     parser.add_argument('--snapshot',type=Path,help='Use an existing forecast bundle')
     parser.add_argument('--output-dir',type=Path,default=Path('var/briefings'))
     parser.add_argument('--grid-step',type=float,default=.5)
     parser.add_argument('--at',help='Timezone-aware evaluation time, for dry-run replay only')
     args = parser.parse_args(argv)
     settings = DeliverySettings.from_env()
+    if args.test_email:
+        if args.at:parser.error('--at is only allowed with dry runs')
+        return manual_test_email(args,settings)
     if args.send:
         settings.validate()
         if args.at:
@@ -494,7 +582,7 @@ def main(argv=None) -> int:
     args.output_dir.mkdir(parents=True,exist_ok=True)
     if not args.snapshot:
         save_bundle(bundle,args.output_dir/'forecast-bundle.json')
-    database = DatabaseManager() if args.send else None
+    database = open_delivery_database() if args.send else None
     summary, failed = [], bool(bundle.errors)
     for horizon in (5,2):
         briefing = build_briefing(bundle,horizon,now=now)

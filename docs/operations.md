@@ -11,9 +11,9 @@ is reported but does not fail a Gmail-enabled run; an ntfy-only delivery failure
 still exits 2. The
 reports retain missing fields, incomplete horizons and warnings.
 
-Only `--send` permits delivery. It validates selected-channel credentials before
-fetching. Recorded data older than two hours or future-dated by more than five
-minutes is refused for sending; `--at` is dry-run only. Notification submissions
+`--send` permits qualifying scheduled notifications; `--test-email` permits
+one explicit Gmail delivery test. Both validate their credentials before fetching. For scheduled sends, recorded data older than two hours or future-dated by more
+than five minutes is refused; `--at` is dry-run only. Notification submissions
 are not automatically retried within a run. Accepted means provider acceptance,
 not handset/inbox receipt.
 
@@ -64,8 +64,24 @@ support. Keep credentials in the secret store, never in files, logs or chat.
 Twilio's variable is flattened to one line and limited to 900 characters to
 leave room for the approved template's fixed text within its body limit.
 
-Run the workflow manually first with **send = false**, inspect HTML briefings
-and data quality, then provision credentials. Scheduled runs at `17 */6 * * *`
+Run manually with **send = false** to inspect dry-run HTML briefings. Choose
+**send = true** to send one immediate test email to **manorhousesurveyors@gmail.com**
+with five dated Long Mynd star-rating rows (today and the following four days).
+This explicitly requested test bypasses weather thresholds and earlier sends,
+uses Gmail only, and does not change the scheduled-alert ledger. Each manual
+invocation, including a rerun, requests a new test email. It overrides a different
+`DUO_EMAIL_TO` for this test and still uses `SMTP_USERNAME` as the sender.
+
+The test fetches one ECMWF Long Mynd forecast instead of the national grid.
+Unavailable or stale weather produces labelled unavailable star rows and still
+allows the delivery test; it never invents ratings. Today can be unavailable
+if the provider no longer includes the complete morning soaring window.
+Reports are `briefing-test-email.html` and `.json`, with provider acceptance or
+failure recorded separately. Gmail acceptance returns 0; SMTP rejection or an
+uncertain send remains a delivery error. The command-line equivalent is
+`python alerts.py --test-email`. These tests do not send WhatsApp/ntfy messages.
+
+Scheduled runs at `17 */6 * * *`
 UTC send automatically. GitHub may delay jobs and disable inactive public-repo
 schedules; monitor Actions. The workflow is limited to the default branch,
 uses pinned actions and read-only permissions, and serializes jobs with
@@ -95,11 +111,20 @@ compatible runner. Artifact restore inputs and durable-state behavior are retain
 
 ## Durable state and recovery
 
-The WAL SQLite ledger is `var/duo_discus.sqlite3`. The workflow restores the most
-recent preceding run's `soaring-watchdog-state` artifact (or a newer artifact
-from the current rerun), validates integrity/schema, then runs tests/watchdog.
-Only the first attempt of the first-ever run may initialize a fresh ledger. Missing, expired or
-corrupt preceding state stops delivery.
+The WAL SQLite ledger is `var/duo_discus.sqlite3`. Discovery searches retained
+artifacts belonging to this workflow/default branch, including older failed
+runs and the current run's earlier attempts. A later failed run without an
+artifact does not hide an earlier backup. The newest available candidate is
+downloaded and verified for integrity, schema, columns and audit references.
+
+If discovery or download fails, or the candidate is missing, expired, corrupt or
+incompatible, `scripts/watchdog_state.py prepare` logs the reason and initializes
+a valid empty SQLite ledger—the application's equivalent of `{}`. These
+recovery cases exit 0 and permit the job to continue. Invalid downloaded files
+remain untouched; invalid local working state is moved to `rejected-state/`.
+The alert CLI also recovers an invalid local ledger. Recreating the ledger
+forgets earlier sends and can repeat alerts. Installation, forecast, filesystem
+and real delivery errors retain their normal failure reporting.
 
 Schema 2 adds the ntfy channel. The workflow first verifies schema-1 artifacts
 read-only, keeps the restored copy, then migrates the working ledger atomically.
@@ -137,10 +162,11 @@ for row in db.list_alerts():
 # delivered=False permits retry; use only when confirmed not delivered.
 ```
 
-If persistence fails after a send, do not initialize a fresh ledger. Recover the
-last state and reconcile later deliveries from provider records. Manual input
-`restore_run_id` selects a verified artifact from this workflow/default branch.
-Older state without reconciliation can duplicate alerts. Keep an independent
+Manual input `restore_run_id` prefers a retained artifact from that run in this
+workflow/default branch. An invalid run ID falls back to automatic discovery;
+an unavailable or invalid artifact falls back to an empty ledger. Recover a
+known backup and reconcile later deliveries when continuity matters. Older or
+empty state can duplicate alerts. Keep an independent
 backup for long shutdowns. SMTP/WhatsApp, SQLite and artifact upload cannot share
 one atomic transaction, so exactly-once delivery is not guaranteed. Cancellation
 before backup also requires review.
