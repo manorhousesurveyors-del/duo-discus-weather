@@ -78,6 +78,8 @@ class PlanningUiTests(unittest.TestCase):
             with patch.dict('os.environ',{'DUO_TASK_STORE':directory+'/tasks','DUO_DASHBOARD_SNAPSHOT':str(snapshot)}):
                 at=AppTest.from_file(str(Path(app.__file__)),default_timeout=30).run()
                 at.radio(key='active_page').set_value('Task planner').run()
+                at.session_state['sidebar_task_builder_open']=True
+                at.run()
                 self.assertFalse(at.exception)
                 seq=next(w for w in at.text_input if w.key.startswith('sidebar_') and w.key.endswith('_sequence'))
                 prefix=seq.key.removesuffix('_sequence')

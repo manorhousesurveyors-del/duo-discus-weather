@@ -202,14 +202,18 @@ SURFACE_VARIABLES = (
     "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m", "soil_moisture_0_to_7cm",
     "wind_speed_80m", "wind_direction_80m", "wind_speed_100m", "wind_direction_100m", "visibility",
 )
-PRESSURE_LEVELS_HPA = (1000, 950, 925, 850, 800, 700, 600, 500, 400, 300)
+PRESSURE_LEVELS_HPA = (1000, 950, 925, 850, 800, 700, 600, 500, 400, 300, 250, 200)
 PRESSURE_VARIABLES = (
     "temperature", "relative_humidity", "wind_speed", "wind_direction",
     "geopotential_height", "vertical_velocity",
 )
-HOURLY_VARIABLES = SURFACE_VARIABLES + tuple(
-    f"{variable}_{level}hPa" for level in PRESSURE_LEVELS_HPA for variable in PRESSURE_VARIABLES
-)
+def forecast_variables():
+    """Surface and pressure fields, including high cloud through 200 hPa."""
+    return SURFACE_VARIABLES + tuple(
+        f"{variable}_{level}hPa" for level in PRESSURE_LEVELS_HPA for variable in PRESSURE_VARIABLES)
+
+
+HOURLY_VARIABLES = forecast_variables()
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 AWC_BASE_URL = "https://aviationweather.gov/api/data"
 

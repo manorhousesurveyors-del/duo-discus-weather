@@ -772,3 +772,57 @@ and transport, not national throughput. The full UK grid's completion time still
 depends on provider transfer/rate limits and worker processing; no unconditional
 under-two-second cold-network guarantee is claimed. Its wait no longer blocks the
 Streamlit page. Tests use deterministic transport, never a live quota dependency.
+
+## Opt-in point forecast and warm navigation · 24 October 2026
+
+**257 unit tests passed in 50.870 seconds.** Compilation, dependency and JavaScript
+syntax checks passed. The probe is optional and confined to Weather. Tests cover
+two local dates across both daylight-saving changes, 07:30–18:30 sampling, cached
+preparation, consistent thermal physics, upper pressure levels, missing data,
+old cached profile/grid compatibility and local recovery from an import failure.
+The deliberately failed optional import logs a traceback without crashing any page.
+Transport-notice tests validate hashes and keep cache messages out of task state.
+
+Warm full-suite AppTest execution measured 65.9–99.7 ms across all seven pages.
+The existing grid tests still assert <300 ms, <5 ms in-memory hour views, no
+national-grid spinner and no grid restarts on day/hour/page changes. No forecast
+transport or map constructor is mocked in the page-render timing portion.
+
+The headless Chromium probe script uses actual mouse clicks and a varying,
+explicitly synthetic recorded weather bundle. It checks normal airfield popups
+when off; coordinate, airfield and BGA inspection when on; 24 plotted columns;
+LCL arithmetic, wind pennants and the nonlinear altitude scale; missing coverage;
+both close mechanisms; and automatic reset on navigation. Each point click must
+draw and reach the next paint frame in <150 ms and produce **zero Streamlit
+events and zero external requests**. The final coordinate/airfield draws took
+58.2–77.8 ms and reached the next paint frame in 65.9–93.3 ms. Overlapping BGA
+and airfield markers select the closest pixel hit, preserving the correct
+feature coordinates and elevation.
+It checks all seven pages, with one map only where appropriate and no probe
+elements elsewhere. Browser cache eviction must recover the map through the
+component protocol. Full chart and panel screenshots are retained under the
+ignored `var/point-probe-browser/` directory for visual review.
+
+The warm browser timing assertion measures the actual navigation click to map
+construction completion (or text heading insertion), excluding Playwright's
+actionability wait/polling. It retains three samples per page and asserts a
+median below 500 ms; individual samples can exceed this during scheduling
+jitter (latest samples reached 568 ms for Task and 505 ms for Wave). Latest
+per-page medians were 210–477 ms. This is distinct from cold construction:
+the final cold Wave check took 6.68 seconds, including its settling wait. Network/tile completion and performance on Streamlit Cloud
+are not guaranteed by these local timings. Browser caches contain only decoded
+documents, never inactive map instances or listeners.
+
+`verify_lazy_pages.py` also passed task additions/clearing across Weather and
+Task, fragment-only saves, single-page headings, local briefing and Wave controls.
+`verify_route_drag.py` passed physical snap/replace/insert/linked-endpoint edits;
+drag updates measured 1.0–1.5 ms, with no events during drag and one on release.
+Both reported zero JavaScript errors. No notifications were sent.
+
+A verified live Open-Meteo point request with the expanded 96-field schema
+returned 144 timestamps in 2.109 seconds, with usable 250/200 hPa heights near
+34,246/39,004 ft. Its 985.7 hPa surface pressure prompted explicit off-scale
+markers on the fixed 990–1030 hPa plot; numeric values remain unclipped. This
+checks schema compatibility, not national-grid throughput. API model-init time
+is unavailable, so the chart labels retrieval time honestly. Point values are
+cached model-grid estimates, not coordinate measurements or measured clouds.

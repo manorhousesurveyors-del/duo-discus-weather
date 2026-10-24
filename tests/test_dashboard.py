@@ -61,6 +61,9 @@ class DashboardTests(unittest.TestCase):
                 self.assertFalse(at.tabs)
                 self.assertEqual(at.radio(key='active_page').options,['Weather map','Task planner','Help Guide','Wave watch','Live OGN Glider Radar','Help & Briefing Bot','Data quality'])
                 self.assertEqual(len(at.metric),10)
+                self.assertEqual(len(at.get('plotly_chart')),0)
+                at.session_state['sounding_inspector_open']=True
+                at.run()
                 self.assertEqual(len(at.get('plotly_chart')),2)
                 at.slider(key="forecast_hour").set_value(16).run()
                 self.assertFalse(at.exception)

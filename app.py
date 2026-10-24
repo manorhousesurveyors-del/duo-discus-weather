@@ -26,7 +26,7 @@ import importlib
 import runtime_imports
 
 # The compatibility registry itself may also predate this deployment.
-if getattr(runtime_imports,'API_REVISION',0)<2:
+if getattr(runtime_imports,'API_REVISION',0)<4:
     importlib.reload(runtime_imports)
 optional_module=runtime_imports.optional_module
 
@@ -191,6 +191,16 @@ def meteogram_figure(forecast: Forecast, day) -> go.Figure:
     fig.update_layout(height=430,margin={'l':30,'r':25,'t':25,'b':20},showlegend=False,paper_bgcolor='rgba(0,0,0,0)',font={'size':10})
     fig.update_xaxes(tickformat='%H:%M',row=3,col=1,title_text='Europe/London')
     return fig
+
+
+@st.cache_data(ttl=1800,max_entries=96,show_spinner=False)
+def cached_sounding(run_id,when,*,_forecast):
+    return sounding_figure(Profile.from_forecast(_forecast,when)).to_plotly_json()
+
+
+@st.cache_data(ttl=1800,max_entries=32,show_spinner=False)
+def cached_meteogram(run_id,day,*,_forecast):
+    return meteogram_figure(_forecast,day).to_plotly_json()
 
 
 def _destination(latitude,longitude,bearing,distance_km):
@@ -471,6 +481,8 @@ def _main():
     pages=['Weather map','Task planner','Help Guide','Wave watch','Live OGN Glider Radar','Help & Briefing Bot','Data quality']
     st.markdown('<style>.st-key-active_page [role="radiogroup"]{gap:0;border-bottom:1px solid #dce5e8;flex-wrap:wrap}.st-key-active_page [role="radiogroup"] label{padding:10px 12px;margin:0;border-bottom:2px solid transparent}.st-key-active_page [role="radiogroup"] label:has(input:checked){border-bottom-color:#267d84;color:#267d84}.st-key-active_page [data-testid="stRadioOption"]>div>div:first-child{display:none}.st-key-active_page [data-testid="stRadioOption"]:focus-within{outline:2px solid #267d84;outline-offset:-2px}</style>',unsafe_allow_html=True)
     active_page=st.radio('Page',pages,horizontal=True,key='active_page',label_visibility='collapsed',help='Only this page loads its maps and calculations. Task edits are shared across Weather and Task pages.')
+    close_probe=st.session_state.pop('_close_point_probe',False)
+    if active_page!='Weather map' or close_probe:st.session_state['point_probe_enabled']=False
     ogn_traffic=optional_module('ogn_traffic')
     getattr(ogn_traffic,'set_worker_active',lambda *_args,**_kwargs:None)(
         active_page=='Live OGN Glider Radar' and not bool(recorded))
@@ -523,7 +535,8 @@ def _main():
     bucket=int(now.timestamp()//1800)
     with st.sidebar:
         if active_page in ('Weather map','Task planner'):
-            with st.expander('Build / edit this day’s task',expanded=False): task_builder(catalog,day,location='sidebar')
+            with st.expander('Build / edit this day’s task',expanded=False,key='sidebar_task_builder_open',on_change='rerun') as task_panel:
+                if task_panel.open:task_builder(catalog,day,location='sidebar')
         if st.session_state.get('task_message'): st.caption(st.session_state['task_message'])
         if st.session_state.get('task_error'): st.error(st.session_state.pop('task_error'))
     points=active_task(day)
@@ -722,15 +735,43 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
             st.caption('Window '+('unavailable' if r.window_hours is None else f'{r.window_hours:g} h'))
     if not profiles: st.warning('The selected model does not cover this hour. Choose another day, time or model.')
     if active_page=='Weather map':
+        probe_enabled=st.toggle('Enable Point Forecast Probe',key='point_probe_enabled',
+            help='Weather map only. Enable to inspect a two-day vertical meteogram using cached model samples. Disable to restore normal map clicks; no point forecasts are prepared while off.')
+        if probe_enabled:
+            st.caption('Point Forecast Probe active — click any location, airfield, or turnpoint on the Weather map to inspect its vertical meteogram.')
+        probe_forecasts=map_forecasts
+        if probe_enabled and not recorded:
+            # Read an existing grid only. Enabling the probe cannot start one.
+            bundle=st.session_state.get('uk_map_grid_bundle')
+            completed=bundle.completed(model_key) if bundle is not None and bundle.cycle==bucket else None
+            if completed is not None:
+                probe_forecasts=tuple({(f.location.key,f.model):f for f in (*combined,*completed.batch.forecasts)}.values())
         from map_component import document_version
         document_key=document_version(map_forecasts,when,visual_mode,tuple(layers),loading,
             catalog.content_sha256,points,show_airfields,bool(recorded),
             repr((radar,rate_grid,radar_point,convergence,aviation)),
-            st.session_state.get('airfield_popup:last_map_event'))
+            st.session_state.get('airfield_popup:last_map_event'),probe_enabled,
+            forecast_run_id(probe_forecasts) if probe_enabled else None)
         def weather_document():
-            return build_map(map_forecasts,when,layers=layers,aviation=aviation,radar=radar,convergence=convergence,
-                task=points,turnpoints=catalog.turnpoints,visual_mode=visual_mode,anchor=anchor,loading=loading,rate_grid=rate_grid,radar_point=radar_point,show_airfields=show_airfields,live_airfields=not bool(recorded),selected_airfield=st.session_state.get('airfield_popup:last_map_event'),wind_product=wind_product)[0]
+            view=build_map(map_forecasts,when,layers=layers,aviation=aviation,radar=radar,convergence=convergence,
+                task=points,turnpoints=catalog.turnpoints,visual_mode=visual_mode,anchor=anchor,loading=loading,rate_grid=rate_grid,radar_point=radar_point,show_airfields=show_airfields,live_airfields=not bool(recorded),selected_airfield=None if probe_enabled else st.session_state.get('airfield_popup:last_map_event'),wind_product=wind_product)[0]
+            if probe_enabled:
+                try:
+                    probe=importlib.import_module('point_forecast_meteogram')
+                    probe.add_probe(view,probe_forecasts,day)
+                except Exception:
+                    # An optional chart or stale module must never prevent maps
+                    # or other pages loading. Keep the ordinary map operational.
+                    import logging
+                    logging.getLogger(__name__).exception('Optional point probe unavailable')
+                    st.warning('Point Forecast Probe is temporarily unavailable. Normal map controls remain active.')
+            return view
         def on_map_change():
+            event=st.session_state.get('soaring_map',{}) or {}
+            if ((event.get('last_object_clicked') or {}).get('duo') or {}).get('kind')=='probe_close':
+                st.session_state['_close_point_probe']=True
+                st.session_state['last_map_event']=event
+                return
             process_map_event(st.session_state.get('soaring_map',{}),catalog,day,st.session_state.get('map_click_mode','Inspect weather'))
         interaction=st_folium(weather_document,document_key=document_key,height=720,use_container_width=True,pixelated=False,key='soaring_map',on_change=on_map_change,
             wrap_longitude=False,returned_objects=['last_object_clicked','last_clicked'])
@@ -745,42 +786,48 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
             age=(now-radar['time']).total_seconds()/60
             st.caption(f'Observed radar {radar["time"].astimezone(LOCAL_TIMEZONE):%H:%M %Z} · {age:.0f} minutes old'+(' · STALE' if age>30 else '')+' · independent of the forecast slider.')
     with st.sidebar:
-        st.divider(); st.subheader('Sounding inspector')
-        choices=[f for f in combined if not f.location.key.startswith('corridor:')]
-        if not choices:
-            st.info('No sounding data for the selected model.'); return
-        options=['Map coordinate']+[f.location.key for f in choices]
-        labels={f.location.key:f.location.name for f in choices}
-        if st.session_state.get('inspector_selection') not in options: st.session_state.pop('inspector_selection',None)
-        initial=options.index('region:shropshire') if 'region:shropshire' in options else 1
-        selection=st.selectbox('Waypoint or clicked coordinate',options,index=None if 'inspector_selection' in st.session_state else initial,
-            format_func=lambda key:labels.get(key,'Map coordinate'),key='inspector_selection',
-            help='Inspect a selected waypoint or the last map click. The plot shows pressure-level temperature/dewpoint and the local-day thermal, cloud, wind and rain evolution.')
-        coordinate=st.session_state.get('inspector_coordinate',(52.518,-2.880))
-        if selection=='Map coordinate':
-            st.caption(f'{coordinate[0]:.3f}° N, {abs(coordinate[1]):.3f}° '+('W' if coordinate[1]<0 else 'E'))
-            if not 49<=coordinate[0]<=61.5 or not -9<=coordinate[1]<=2.5:
-                st.info('Select a coordinate in the UK map area.'); return
-            if recorded:
-                chosen=min(choices,key=lambda f:distance_bearing(GeoPoint('click','Click',*coordinate),f.location)[0])
-                st.caption('Recorded inspector: nearest stored waypoint, not a fresh coordinate forecast.')
+        st.divider()
+        coordinate=st.session_state.get('inspector_coordinate')
+        if coordinate is not None and coordinate!=st.session_state.get('_last_sounding_coordinate'):
+            st.session_state['sounding_inspector_open']=True
+            st.session_state['_last_sounding_coordinate']=coordinate
+        with st.expander('Sounding inspector',expanded=False,key='sounding_inspector_open',on_change='rerun') as inspector:
+            if not inspector.open:return
+            choices=[f for f in combined if not f.location.key.startswith('corridor:')]
+            if not choices:
+                st.info('No sounding data for the selected model.'); return
+            options=['Map coordinate']+[f.location.key for f in choices]
+            labels={f.location.key:f.location.name for f in choices}
+            if st.session_state.get('inspector_selection') not in options: st.session_state.pop('inspector_selection',None)
+            initial=options.index('region:shropshire') if 'region:shropshire' in options else 1
+            selection=st.selectbox('Waypoint or clicked coordinate',options,index=None if 'inspector_selection' in st.session_state else initial,
+                format_func=lambda key:labels.get(key,'Map coordinate'),key='inspector_selection',
+                help='Inspect a selected waypoint or the last map click. The plot shows pressure-level temperature/dewpoint and the local-day thermal, cloud, wind and rain evolution.')
+            coordinate=st.session_state.get('inspector_coordinate',(52.518,-2.880))
+            if selection=='Map coordinate':
+                st.caption(f'{coordinate[0]:.3f}° N, {abs(coordinate[1]):.3f}° '+('W' if coordinate[1]<0 else 'E'))
+                if not 49<=coordinate[0]<=61.5 or not -9<=coordinate[1]<=2.5:
+                    st.info('Select a coordinate in the UK map area.'); return
+                if recorded:
+                    chosen=min(choices,key=lambda f:distance_bearing(GeoPoint('click','Click',*coordinate),f.location)[0])
+                    st.caption('Recorded inspector: nearest stored waypoint, not a fresh coordinate forecast.')
+                else:
+                    try: chosen=load_coordinate(*coordinate,model_key,bucket)
+                    except IngestionError as exc:
+                        st.error(f'Coordinate forecast unavailable: {exc}'); return
+            elif selection is not None: chosen=next(f for f in choices if f.location.key==selection)
             else:
-                try: chosen=load_coordinate(*coordinate,model_key,bucket)
-                except IngestionError as exc:
-                    st.error(f'Coordinate forecast unavailable: {exc}'); return
-        elif selection is not None: chosen=next(f for f in choices if f.location.key==selection)
-        else:
-            st.info('Choose a sounding location.'); return
-        try: selected_profile=Profile.from_forecast(chosen,when)
-        except KeyError:
-            st.info('No sounding at this hour.'); return
-        if not selected_profile.levels: st.info('Pressure-level sounding unavailable.')
-        else:
-            st.plotly_chart(sounding_figure(selected_profile),width='stretch',key='sounding')
-            st.caption('Skew-T: temperature orange, dewpoint green. Hover for actual °C; dry/saturated adiabats are guides.')
-        st.plotly_chart(meteogram_figure(chosen,day),width='stretch',key='meteogram')
-        with st.expander('Profile assumptions'):
-            for note in evaluate_thermals(selected_profile).notes: st.write(note)
+                st.info('Choose a sounding location.'); return
+            try: selected_profile=Profile.from_forecast(chosen,when)
+            except KeyError:
+                st.info('No sounding at this hour.'); return
+            if not selected_profile.levels: st.info('Pressure-level sounding unavailable.')
+            else:
+                st.plotly_chart(cached_sounding(forecast_run_id((chosen,)),when,_forecast=chosen),width='stretch',key='sounding')
+                st.caption('Skew-T: temperature orange, dewpoint green. Hover for actual °C; dry/saturated adiabats are guides.')
+            st.plotly_chart(cached_meteogram(forecast_run_id((chosen,)),day,_forecast=chosen),width='stretch',key='meteogram')
+            with st.expander('Profile assumptions'):
+                for note in evaluate_thermals(selected_profile).notes: st.write(note)
 
 
 def main():

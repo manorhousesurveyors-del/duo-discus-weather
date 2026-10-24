@@ -291,7 +291,7 @@ def _expected_units(variable: str) -> set[str]:
     }.get(variable, {"m"} if variable.startswith("geopotential_height_") else set())
 
 
-def parse_forecast(response: JsonResponse, location: GeoPoint, model: ForecastModel) -> Forecast:
+def parse_forecast(response: JsonResponse, location: GeoPoint, model: ForecastModel, *, variables=HOURLY_VARIABLES) -> Forecast:
     body = response.body
     if not isinstance(body, dict) or not isinstance(body.get("hourly"), dict) or not isinstance(body.get("hourly_units"), dict):
         raise SchemaError("Forecast must contain hourly and hourly_units objects")
@@ -309,7 +309,7 @@ def parse_forecast(response: JsonResponse, location: GeoPoint, model: ForecastMo
     units: dict[str, str | None] = {}
     counts: dict[str, int] = {}
     warnings: list[str] = []
-    for variable in HOURLY_VARIABLES:
+    for variable in variables:
         raw = body["hourly"].get(variable)
         if raw is None:
             raw = [None] * len(times)

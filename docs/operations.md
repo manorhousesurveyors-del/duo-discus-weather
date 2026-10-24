@@ -193,8 +193,8 @@ limiter. Lower `DUO_OPEN_METEO_CALLS_PER_MINUTE` when necessary.
 
 The expanded watchdog costs roughly 1,200 weighted calls/run, around 4,800/day,
 before retries/dashboard usage. Consult [Open-Meteo pricing](https://open-meteo.com/en/pricing)
-for the free tier's usage/license terms. The unified 195-node, 84-variable UK map
-bundle costs about 1,638 weighted calls per cold model/cycle. Its cache is shared
+for the free tier's usage/license terms. The unified 195-node, 96-variable UK map
+bundle costs about 1,872 weighted calls per cold model/cycle. Its cache is shared
 across sessions for 30 minutes. The dashboard grid makes one concurrent attempt
 per chunk; a 429 stays missing until the next cycle, with no retry sleep. This
 can exceed a free provider's minute quota; the app remains usable while missing
@@ -338,3 +338,54 @@ Timing regressions in `tests/test_grid_navigation.py` measure real warm AppTest
 page switches (<300 ms), cube hour selection (<5 ms), and no repeated fetch on
 day/hour changes. Cold map construction and browser iframe/tile loading are
 measured separately; neither shares the warm-server timing guarantee.
+
+## Weather-only point probe
+
+`point_forecast_meteogram.py` has no transport, background worker or import-time
+UI. Weather imports it defensively only after `point_probe_enabled` is selected.
+Disabled map documents contain no probe script, chart, capture listener or probe
+payload. Other page branches never import or prepare the feature. The enabled
+payload is derived once per forecast identity and two-day selection, using a
+resource cache; it never calls the national loader or a coordinate API.
+
+`assets/point_forecast_meteogram.js` performs interpolation and drawing locally.
+It intercepts map clicks only while enabled, excludes controls and popups, and
+preserves dragging. Airfield/BGA hover handlers are temporarily suspended so
+probe clicks cannot start airfield requests. Close removes probe listeners,
+restores hover behaviour, and sends one deliberate state change to turn off the
+Streamlit switch. Panel buttons stop propagation so they cannot become map
+clicks. Navigation resets the flag before the next page renders.
+
+The 250/200 hPa additions bring the shared request schema to 96 variables
+(about 1,872 weighted calls per 195-node cold model/cycle under the existing cost
+estimate). They are part of the ordinary cached profile request, not an extra
+probe request. Runtime API revision 4 refreshes old configuration, parser and
+grid bindings during Streamlit hot reload. Older cached samples missing the new
+fields remain valid, with missing values instead of exceptions.
+
+Map documents also use a bounded browser-tab memory cache: at most four decoded
+documents or 48 MiB, with no DOM objects, map instances or inactive listeners.
+The component acknowledges available document hashes; warm navigation sends only
+the hash and current task state. A cache miss requests the full document again.
+These transport notices never become map clicks or task edits. Base64 decoding
+uses a typed-array loop instead of per-character callback allocation.
+
+The sidebar task builder and legacy Sounding inspector now render their contents
+only while expanded. An ordinary Inspect weather map click opens the inspector
+automatically; its Plotly figures are cached by forecast identity and time. The
+point probe does not open this legacy inspector or fetch coordinate data.
+
+Reproduce probe verification with:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/point_probe_fixture.py
+DUO_DASHBOARD_SNAPSHOT="$PWD/var/point-probe-snapshot.json" \
+DUO_TASK_STORE="$PWD/var/point-probe-test-tasks" \
+.venv/bin/python -m streamlit run app.py --server.port 8504 --server.headless true
+# In another shell with Playwright and Chromium available:
+python scripts/verify_point_probe.py
+```
+
+The fixture is synthetic and explicitly presented as a recorded snapshot. Browser
+checks abort external traffic and retain screenshots/timings under
+`var/point-probe-browser/`. No new dependency, secret or network hostname is needed.

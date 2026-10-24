@@ -10,7 +10,7 @@ import sys
 from threading import RLock
 
 # Bump when new compatibility contracts must reach an already-running app.
-API_REVISION = 2
+API_REVISION = 4
 
 _lock = RLock()
 _log = logging.getLogger(__name__)
@@ -18,6 +18,9 @@ _log = logging.getLogger(__name__)
 # Dependency order matters: a reloaded consumer must bind the current providers.
 # Empty tuples check function presence; other tuples check newly added keywords.
 LAZY_APIS = {
+    'config': {'forecast_variables': ()},
+    'data_ingestion': {'parse_forecast': ('variables',)},
+    'uk_map_grid': {'grid_variables': ()},
     'json_payload': {'display_coordinates': ()},
     'app_cache': {'file_version': (), 'catalog_resource': (), 'forecast_run_id': (),
                   'day_summary': (), 'assessed_task': (), 'gemini_discovery': ()},
@@ -29,7 +32,7 @@ LAZY_APIS = {
     'client_map': {'add_shared_task': (), 'task_soaring_layers': ()},
     'wave_map': {'cached_wave_payload': ()},
     'map_modes': {'add_map_modes': ('wind_product',)},
-    'map_component': {'compressed_document': (), 'render_document': (), 'document_version': (), 'cached_document': ()},
+    'map_component': {'compressed_document': (), 'render_document': ('browser_cache',), 'document_version': (), 'cached_document': ()},
     'route_tools': {'screening_forecasts': ()},
     'route_analysis': {'planner_panel': ('document_cache',)},
 }

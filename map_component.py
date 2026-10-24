@@ -29,25 +29,45 @@ def map_document(view):
     return {'html': body, 'script': script + '\nwindow.map_div=map_div;', 'header': header}
 
 
+def document_notice(event,document_id):
+    """Consume transport acknowledgements without treating them as map clicks."""
+    if not isinstance(event,dict):return False
+    if 'document_cache' in event:
+        ids=event['document_cache']
+        if isinstance(ids,list) and len(ids)<=4 and all(isinstance(v,str) and re.fullmatch(r'[0-9a-f]{64}',v) for v in ids):
+            st.session_state['_browser_map_documents']=set(ids)
+        return True
+    if 'document_request' in event:
+        if event['document_request']==document_id:
+            st.session_state['_map_document_requested:'+document_id]=True
+        return True
+    return False
+
+
 @st.fragment
-def render_document(document,*,key,on_change=None):
+def render_document(document,*,key,on_change=None,browser_cache=True):
     from planning_ui import task_payload
     def changed():
-        st.session_state[key]=st.session_state.get(key+'_component',{})
+        event=st.session_state.get(key+'_component',{}) or {}
+        if document_notice(event,document['document_id']):return
+        st.session_state[key]=event
         if on_change:on_change()
-        event=st.session_state[key] or {}
         kind=(event.get('last_object_clicked') or {}).get('duo',{}).get('kind')
         if kind not in ('task_sync','briefing_point'):st.session_state['_map_full_refresh']=True
     from streamlit.runtime.scriptrunner import get_script_run_ctx
     ctx=get_script_run_ctx(suppress_warning=True)
     fragment_only=bool(ctx and ctx.fragment_ids_this_run)
-    # A fragment save sends only route state. The iframe already owns its map.
-    content={'document_id':document['document_id']} if fragment_only else document
+    requested=st.session_state.pop('_map_document_requested:'+document['document_id'],False)
+    cached=browser_cache and document['document_id'] in st.session_state.get('_browser_map_documents',set())
+    # A full page switch can also reuse the tab's decoded data. If its memory
+    # cache was evicted/reloaded, a fragment request restores the full document.
+    content={'document_id':document['document_id']} if (fragment_only or cached) and not requested else document
     result=_component(**content,canonical_task=task_payload(),height=720,scrolling=False,
         key=key+'_component',default=None,on_change=changed)
     task_refresh=st.session_state.pop('_task_full_refresh',False)
     map_refresh=st.session_state.pop('_map_full_refresh',False)
     if task_refresh or map_refresh:st.rerun(scope='app')
+    if isinstance(result,dict) and ('document_cache' in result or 'document_request' in result):return None
     return result
 
 

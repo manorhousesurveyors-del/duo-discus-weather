@@ -146,3 +146,39 @@ even with refresh paused. No reports or a provider failure never substitutes
 fake live aircraft. **Demo** explicitly shows seven fictional gliders and can
 be switched back to Live. Recorded weather disables live traffic requests.
 OGN reception is incomplete and unsuitable for collision avoidance.
+
+## Optional Point Forecast Probe
+
+On **Weather map**, turn on **Enable Point Forecast Probe** above the map.
+Click a coordinate, a visible BGA marker, or an airfield. **Pick another point**
+hides the chart while keeping the crosshair active. **× Close / Turn Off Probe**
+turns the switch off too. Leaving Weather always resets the switch.
+
+The chart shows 07:30–18:30 on the selected date and the next local date, including
+BST/GMT transitions. Scroll sideways for the second day and down for the hourly
+strips. The numerical table beneath the canvas provides accessible values.
+
+- The lower 7,000 ft receives extra vertical space; the scale reaches 38,000 ft.
+- Clouds are a relative-humidity/model-cover proxy. Hatching means missing data.
+- Coloured plumes show conservative net climb below the working ceiling.
+- Rose is the LCL: terrain feet + `400 × max(0, T₂m − Td₂m)`.
+- Solid black is working ceiling; dotted charcoal is the dry mixing top. Cumulus
+  icons show positive mixing-top minus LCL depth, which is excluded from usable
+  gliding height. Known unsoarable samples have zero working ceiling; unknown
+  samples have dashes.
+- Wind barbs use 5/10/50 kt conventions. Surface wind is **10 m AGL**; the source
+  does not supply 2 m wind. Temperatures/dewpoints are at 2 m.
+- The pressure curve spans 990–1030 hPa. Arrows flag values outside that range;
+  numerical readouts retain the actual pressure.
+
+Clicks use only cached data. The clicked position is retained, and up to four
+nearby samples (within 120 km) are interpolated with distance weights. Wind is
+interpolated as east/north vectors. Half-hour values require both adjacent hourly
+samples. Marker elevation is used when known; otherwise model terrain is
+interpolated and labelled. These are model-grid estimates, not point observations.
+
+The summary shows retrieval time because Open-Meteo does not supply the model's
+initialisation time in this response. Missing forecast days or pressure levels
+are not extrapolated. The standard cached profiles now include 250 and 200 hPa,
+so new responses can bracket the upper part of the plot. Existing older snapshots
+continue to show unavailable upper bands until refreshed.

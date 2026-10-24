@@ -7,12 +7,18 @@ import math
 import numpy as np
 import streamlit as st
 
-from config import FORECAST_MODELS, HOURLY_VARIABLES, OPEN_METEO_URL, Settings, forecast_locations
+from config import FORECAST_MODELS, OPEN_METEO_URL, Settings, forecast_locations
 from data_ingestion import (FetchFailure, ForecastBatch, IngestionError, JsonHttpClient,
                             JsonResponse, SchemaError, OpenMeteoClient, parse_forecast, utc_datetime)
 from map_weather import national_grid, wind_payload
 
 _pool = ThreadPoolExecutor(max_workers=12, thread_name_prefix='uk-map-grid')
+
+
+def grid_variables():
+    """Current schema, including high-cloud levels, also after a hot deployment."""
+    from config import forecast_variables
+    return forecast_variables()
 
 
 class GridHttpClient(JsonHttpClient):
@@ -33,7 +39,7 @@ def fetch_chunk(points, model, http):
     response = http.get_json(OPEN_METEO_URL, {
         'latitude': ','.join(str(p.latitude) for p in points),
         'longitude': ','.join(str(p.longitude) for p in points),
-        'models': model.api_name, 'hourly': ','.join(HOURLY_VARIABLES),
+        'models': model.api_name, 'hourly': ','.join(grid_variables()),
         'forecast_hours': 120, 'past_hours': 24, 'timezone': 'GMT', 'timeformat': 'unixtime',
         'wind_speed_unit': 'ms', 'temperature_unit': 'celsius', 'precipitation_unit': 'mm',
         'cell_selection': 'nearest',
@@ -74,10 +80,10 @@ def assemble(futures, chunks, model, anchor):
     forecasts = tuple(sorted(forecasts, key=lambda f: f.location.key))
     times = tuple(sorted({t for f in forecasts for t in f.times}))
     index = {t: i for i, t in enumerate(times)}
-    values = np.full((len(times), len(forecasts), len(HOURLY_VARIABLES)), np.nan, dtype=np.float32)
+    values = np.full((len(times), len(forecasts), len(grid_variables())), np.nan, dtype=np.float32)
     for column, forecast in enumerate(forecasts):
         positions = [index[t] for t in forecast.times]
-        values[positions, column, :] = np.array([forecast.hourly[v] for v in HOURLY_VARIABLES], dtype=np.float32).T
+        values[positions, column, :] = np.array([forecast.hourly.get(v,(None,)*len(forecast.times)) for v in grid_variables()], dtype=np.float32).T
     values.flags.writeable = False
     return GridSnapshot(ForecastBatch(forecasts, tuple(failures)), index, values,
                         wind_payload(forecasts, anchor))
