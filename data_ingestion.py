@@ -297,7 +297,7 @@ def _expected_units(variable: str) -> set[str]:
     if variable.startswith(("relative_humidity_", "cloud_cover")) or variable == "precipitation_probability":
         return {"%"}
     return {
-        "surface_pressure": {"hPa"}, "pressure_msl": {"hPa"}, "precipitation": {"mm"},
+        "surface_pressure": {"hPa"}, "pressure_msl": {"hPa"}, "precipitation": {"mm"}, "showers": {"mm"},
         "shortwave_radiation": {"W/m²"}, "direct_radiation": {"W/m²"}, "cape": {"J/kg"},
         "lifted_index": {"K", "°C"}, "boundary_layer_height": {"m"},
         "soil_moisture_0_to_7cm": {"m³/m³"},
@@ -348,6 +348,10 @@ def parse_forecast(response: JsonResponse, location: GeoPoint, model: ForecastMo
         values[variable], units[variable], counts[variable] = series, unit, count
     if counts["temperature_2m"] == len(times):
         raise SchemaError("Forecast contains no usable surface temperature samples")
+    from atmospheric_moisture import complete_moisture
+    sources = {}
+    complete_moisture(values, units, sources)
+    counts = {name:sum(v is None for v in series) for name,series in values.items()}
     unavailable = [name for name, count in counts.items() if count == len(times)]
     partial = [name for name, count in counts.items() if 0 < count < len(times)]
     if unavailable:
@@ -362,7 +366,8 @@ def parse_forecast(response: JsonResponse, location: GeoPoint, model: ForecastMo
     if not -90 <= lat <= 90 or not -180 <= lon <= 180:
         raise SchemaError("Invalid forecast grid coordinates")
     return Forecast(location, model.api_name, response.fetched_at, lat, lon, elevation, times,
-                    values, units, counts, tuple(warnings), response.from_cache, model.horizon_hours)
+                    values, units, counts, tuple(warnings), response.from_cache, model.horizon_hours,
+                    field_sources=sources)
 
 
 @dataclass(frozen=True, slots=True)
@@ -888,7 +893,7 @@ def forecast_from_snapshot(record: Mapping[str, Any]) -> Forecast:
     if not isinstance(runs, (list,tuple)) or any(not isinstance(r, (list,tuple)) or len(r)!=2
         or not all(isinstance(v,str) for v in r) for r in runs):
         raise SchemaError('Invalid source-run provenance in snapshot')
-    return replace(forecast, field_sources={k: tuple(v) for k, v in sources.items()},
+    return replace(forecast, field_sources={**forecast.field_sources,**{k: tuple(v) for k, v in sources.items()}},
                    source_runs=tuple(tuple(r) for r in runs))
 
 

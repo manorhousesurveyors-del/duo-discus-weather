@@ -13,7 +13,7 @@ def catalog_resource(version):
     return bga_turnpoints.active_catalog()
 
 
-def forecast_run_id(forecasts, physics_revision=3):
+def forecast_run_id(forecasts, physics_revision=4):
     # Retrieval identity changes on refresh; location/model prevent cross-grid reuse.
     return (physics_revision,)+tuple((f.location.key,f.location.latitude,f.location.longitude,f.model,
                   f.fetched_at.isoformat(),len(f.times),f.supplemental_sources,f.source_runs) for f in forecasts)

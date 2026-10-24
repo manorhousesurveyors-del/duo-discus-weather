@@ -41,6 +41,59 @@ The five-day cards show covered hours separately from the soarable window.
 
 ## Thermals, cloud and streets
 
+### Point-probe cloud graphics
+
+Full point, regional and national-grid requests include total/low/mid/high cloud
+cover, CAPE, lifted index, precipitation and showers. The 129-field schema adds
+900 hPa and dewpoint at every requested pressure level. The probe exposes
+950/925/900/850/800/700/600/500/400/300/250/200 hPa with temperature, dewpoint,
+water-relative humidity and ice-relative humidity, alongside heights and winds.
+Pressure levels below model terrain are excluded, and missing intermediate
+levels use bracketed log-pressure interpolation where possible.
+
+Missing RH uses the Magnus relation `100 × es(Td) / es(T)` with
+`es(T) = 6.112 exp(17.625 T / (243.04 + T))` hPa. The inverse supplies missing
+dewpoint when temperature/RH are available. Supplied values and true zeroes are
+preserved; unsupported inputs stay unknown. The existing labelled ECMWF/ICON/
+UKMO field support supplies remaining gaps. Ice saturation uses
+`esi(T) = 6.112 exp(22.587 T / (273.86 + T))`; ice RH is
+`RHwater × es(T) / esi(T)` and can exceed 100%. It follows supplied water RH
+even if a borrowed dewpoint differs slightly. No CAPE or lifted-index value is
+invented when all available providers omit it.
+
+The browser classifies each interpolated hourly column using these requested
+screening rules, rather than depicting one continuous grey moisture raster:
+
+- **Cu humilis / mediocris / TCu congestus:** mixing top reaches LCL − 150 ft,
+  or positive net lift and RH above 78% at 925–850 hPa. Cloud depth is at least
+  100 ft, with humilis through 800 ft, mediocris through 2,200 ft, and congestus
+  above that. Flat bases sit on the pink LCL. A minimum 14-pixel puff makes
+  shallow cloud visible on the compressed altitude scale; use the profile and
+  numerical heights for depth, rather than measuring the illustration.
+- **Sc / Cu-stratus:** an inversion of at least 1°C across adjacent levels no
+  more than 3,500 ft apart, intersecting the mixing-top ±2,200 ft band, together
+  with RH above 82% at 850–750 hPa or low cover above 55%. Linked rounded rolls
+  occupy a schematic 700-ft layer beneath the mixing top.
+- **Cb potential:** CAPE above 300 J/kg, or lifted index below −1 K together
+  with RH above 80% at 850/700/600/500 hPa and rain/showers above 0.2 mm/h.
+  An available upper profile bounds the column/anvil. Measured/model rain and
+  showers are not summed: precipitation already includes showers. A substantial
+  rate draws rain streaks; otherwise shorter dashed streaks suggest possible
+  virga. This heuristic does not confirm thunderstorms or diagnose an EL.
+- **St / As / Ns:** detached layers from 2,000–16,000 ft use RH above 80%,
+  pressure cloud cover above 30%, or the broad mid-cloud cover above 30%
+  (low-cloud fallback above 55%). Rain above 0.2 mm/h marks Ns. Undulating bands
+  and internal striations show moisture structure without an opaque grey wall.
+- **Ci / Cs:** 16,000–38,000 ft, temperature below −20°C, and ice RH at least
+  100%, high-cloud cover above 20%, or pressure cloud cover above 20%. Translucent
+  filaments and feathered bands represent ice-cloud potential.
+
+All cloud drawing, hour-profile inspection and map probing remain client-side.
+Cloud appearance never changes the polar, core/net-climb calculation, working
+height or task/rating engines. `dry` remains the internal unballasted loading
+key; the UI spells out the wing loading so it cannot be read as missing clouds.
+Uncovered moisture bands are hatched, with missing values shown as dashes.
+
 Potential condensation height follows the requested Hennig spread approximation:
 
 `LCL_ft_AMSL = 400 × max(T_2m − Td_2m, 0) + terrain_m / 0.3048`.

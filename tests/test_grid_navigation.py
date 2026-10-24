@@ -120,7 +120,7 @@ class PageNavigationTests(unittest.TestCase):
         data=Future();data.set_result(forecasts)
         snapshot=grid.assemble((data,),(tuple(f.location for f in forecasts),),FORECAST_MODELS['ifs025'],start)
         # National transport remains pending while we navigate away, then finishes.
-        pending=Future();bundle=Mock(cycle=int(datetime.now(UTC).timestamp()//1800),coverage_revision=1);bundle.request.return_value=pending
+        pending=Future();bundle=Mock(cycle=int(datetime.now(UTC).timestamp()//1800),coverage_revision=2);bundle.request.return_value=pending
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict('os.environ',{'DUO_DASHBOARD_SNAPSHOT':'','DUO_TASK_STORE':tmp,'GEMINI_API_KEY':''}), \
              patch.object(grid,'regional_future',return_value=regional), \

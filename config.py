@@ -210,20 +210,26 @@ def duo_circling_sink_knots(loading='dry', bank_degrees=25.0):
 SURFACE_VARIABLES = (
     "temperature_2m", "dew_point_2m", "surface_pressure", "pressure_msl",
     "cloud_cover", "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high",
-    "precipitation", "precipitation_probability", "shortwave_radiation",
+    "precipitation", "showers", "precipitation_probability", "shortwave_radiation",
     "direct_radiation", "cape", "lifted_index", "boundary_layer_height",
     "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m", "soil_moisture_0_to_7cm",
     "wind_speed_80m", "wind_direction_80m", "wind_speed_100m", "wind_direction_100m", "visibility",
 )
-PRESSURE_LEVELS_HPA = (1000, 950, 925, 850, 800, 700, 600, 500, 400, 300, 250, 200)
+PRESSURE_LEVELS_HPA = (1000, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200)
 PRESSURE_VARIABLES = (
-    "temperature", "relative_humidity", "wind_speed", "wind_direction",
+    "temperature", "dew_point", "relative_humidity", "wind_speed", "wind_direction",
     "geopotential_height", "vertical_velocity", "cloud_cover",
 )
 def forecast_variables():
     """Surface and pressure fields, including high cloud through 200 hPa."""
     return SURFACE_VARIABLES + tuple(
         f"{variable}_{level}hPa" for level in PRESSURE_LEVELS_HPA for variable in PRESSURE_VARIABLES)
+
+
+def moisture_variables():
+    """Cloud schema contract also used to refresh cached pre-deployment config."""
+    return ('showers',) + tuple(f'{name}_{p}hPa' for p in PRESSURE_LEVELS_HPA
+                                for name in ('temperature','dew_point','relative_humidity','cloud_cover'))
 
 
 HOURLY_VARIABLES = forecast_variables()

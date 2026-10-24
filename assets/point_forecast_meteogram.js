@@ -65,7 +65,7 @@ function installDuoPointProbe(map, data) {
     });return weighted(values,columnWeights);
    };
    const row=Object.fromEntries(data.fields.map((name,i)=>[name,avg('s',i)]));
-   row.levels=data.levels.map((_,i)=>Array.from({length:5},(_,j)=>avg('p',i,j))).filter(p=>finite(p[0])&&p[0]>terrain);
+   row.levels=data.levels.map((pressure,i)=>[...Array.from({length:8},(_,j)=>j<(data.pressure_fields?.length||5)?avg('p',i,j):null),pressure]).filter(p=>finite(p[0])&&p[0]>terrain);
    row.lcl=finite(terrain)&&finite(row.temperature)&&finite(row.dewpoint)?terrain+400*Math.max(0,row.temperature-row.dewpoint):null;
    row.top=finite(terrain)&&finite(row.depth)?terrain+Math.max(0,row.depth):null;
    row.cu=finite(row.top)&&finite(row.lcl)?Math.max(0,row.top-row.lcl):null;
@@ -77,7 +77,7 @@ function installDuoPointProbe(map, data) {
    row.sources=[...new Set(providers.flatMap(s=>column.indices.flatMap(i=>s.hours[i]?.sources||[s.model])))];
    row.retrieved=[...new Set(providers.map(s=>s.retrieved).filter(Boolean))];
    const rh=finite(row.temperature)&&finite(row.dewpoint)?clamp(100*Math.exp(17.625*row.dewpoint/(243.04+row.dewpoint)-17.625*row.temperature/(243.04+row.temperature)),0,100):null;
-   row.profile=[[terrain+32.8084,rh,row.u,row.v,row.cloud_low],...row.levels].filter(p=>finite(p[0])).sort((a,b)=>a[0]-b[0]);
+   row.profile=[[terrain+32.8084,rh,row.u,row.v,row.cloud_low,row.temperature,row.dewpoint,null,null],...row.levels].filter(p=>finite(p[0])).sort((a,b)=>a[0]-b[0]);
    row.topU=finite(row.top)?vertical(row.profile,row.top,2):null;row.topV=finite(row.top)?vertical(row.profile,row.top,3):null;
    row.boundaryRh=finite(row.top)?vertical(row.profile,row.top,1):null;
    return {...row,...column};
@@ -124,11 +124,114 @@ function installDuoPointProbe(map, data) {
   if(!usable.length)return null;
   const station=usable[0],samples=usable.filter(o=>o.station===station.station).sort((a,b)=>Date.parse(a.time)-Date.parse(b.time));return {...samples.at(-1),samples};
  }
+ function pressureValue(row,pressure,field){
+  const nodes=(row.levels||[]).filter(p=>finite(p[8])&&finite(p[field])).sort((a,b)=>b[8]-a[8]);
+  const exact=nodes.find(p=>p[8]===pressure);if(exact)return exact[field];
+  for(let i=0;i<nodes.length-1;i++){const a=nodes[i],b=nodes[i+1];if(a[8]>pressure&&b[8]<pressure)return mix(a[field],b[field],Math.log(pressure/a[8])/Math.log(b[8]/a[8]));}
+  return null;
+ }
  function cloudColumn(row){
   if(!finite(row.top)||!finite(row.lcl))return null;
-  const moist=(finite(row.boundaryRh)&&row.boundaryRh>80)||(finite(row.cloud_low)&&row.cloud_low>20);
-  if(row.top<row.lcl&&!(row.lcl-row.top<=250&&moist))return null;
-  return {base:row.lcl,top:Math.max(row.lcl,row.top),overcast:row.cloud_low>=85,depth:Math.max(0,row.top-row.lcl),nearBase:row.top<=row.lcl};
+  const moist=[925,900,850].some(p=>pressureValue(row,p,1)>78);
+  const reaches=row.top>=row.lcl-150,moistThermal=finite(row.climb)&&row.climb>0&&moist;
+  if(!reaches&&!moistThermal)return null;
+  const depth=Math.max(100,row.top-row.lcl);
+  return {base:row.lcl,top:row.lcl+depth,overcast:row.cloud_low>=85,depth,nearBase:row.top<=row.lcl,
+          type:depth<=800?'Cu humilis':depth<=2200?'Cu mediocris':'TCu congestus',moistThermal};
+ }
+ function classifyClouds(row){
+  const profile=row.profile||[],cu=cloudColumn(row),layers=[],ice=[];
+  const rain=Math.max(finite(row.rain)?row.rain:0,finite(row.showers)?row.showers:0);
+  const deep=[850,700,600,500].every(p=>pressureValue(row,p,1)>80);
+  const unstable=(finite(row.cape)&&row.cape>300)||(finite(row.lifted_index)&&row.lifted_index< -1&&deep&&rain>.2);
+  const upper=profile.filter(p=>p[0]>row.lcl&&p[0]<=38000&&finite(p[8])&&p[8]<=500&&(p[1]>80||p[4]>30));
+  const stormTop=upper.length?Math.max(...upper.map(p=>p[0])):pressureValue(row,500,0);
+  const cb=unstable&&finite(row.lcl)&&finite(stormTop)&&stormTop>row.lcl?
+    {base:row.lcl,top:Math.max(finite(row.top)?row.top:0,stormTop),rain,type:'Cb potential'}:null;
+  let inversion=false;
+  for(let i=0;i<profile.length-1;i++){const a=profile[i],b=profile[i+1];
+   if(finite(row.top)&&finite(a[5])&&finite(b[5])&&a[0]<=row.top+2200&&b[0]>=row.top-2200&&b[0]-a[0]<=3500&&b[5]-a[5]>=1)inversion=true;
+  }
+  const spread=inversion&&([850,800,750].some(p=>pressureValue(row,p,1)>82)||(finite(row.cloud_low)&&row.cloud_low>55));
+  const sc=spread&&finite(row.top)&&row.top>0?{base:Math.max(0,row.top-700),top:row.top,type:'Sc / Cu-stratus'}:null;
+  // Sample the actual vertical profile, using broad cloud bands only where
+  // pressure moisture is absent. Detached layers remain separate from Cu/Cb.
+  const segments=(low,high,step,condition)=>{let first=null,last=null,peak=0;
+   const out=[],flush=()=>{if(first!==null)out.push({base:first,top:last+step,intensity:peak});first=last=null;peak=0;};
+   for(let h=low;h<high;h+=step){const intensity=condition(h+step/2);if(intensity!==null){if(first===null)first=h;last=h;peak=Math.max(peak,intensity);}else flush();}flush();return out;
+  };
+  layers.push(...segments(2000,16000,500,h=>{
+   if((cb&&h<cb.top+1000)||(cu&&h<cu.top+1000)||(sc&&h<sc.top+700))return null;
+   const rh=vertical(profile,h,1),cover=vertical(profile,h,4),coarse=h<7000?row.cloud_low:row.cloud_mid;
+   const cloudy=(finite(rh)&&rh>80)||(finite(cover)&&cover>30)||(finite(coarse)&&coarse>(h<7000?55:30));
+   return cloudy?Math.max(finite(rh)?rh/100:.65,finite(cover)?cover/100:0,finite(coarse)?coarse/100:0):null;
+  }).map(l=>({...l,type:rain>.2?'Ns':l.top<=7000?'St':'As'})));
+  ice.push(...segments(16000,38000,1000,h=>{
+   const temperature=vertical(profile,h,5),rhIce=vertical(profile,h,7),cover=vertical(profile,h,4);
+   if(!finite(temperature)||temperature>=-20)return null;
+   if((finite(rhIce)&&rhIce>=100)||(finite(row.cloud_high)&&row.cloud_high>20)||(finite(cover)&&cover>20))
+    return Math.max(.25,finite(row.cloud_high)?row.cloud_high/100:0,finite(cover)?cover/100:0,finite(rhIce)?clamp((rhIce-85)/35,0,1):0);
+   return null;
+  }).map(l=>({...l,type:l.intensity>.65?'Cs':'Ci'})));
+  return {cu:cb?null:cu,sc:cb?null:sc,cb,layers,ice,inversion,deepMoisture:deep,
+          missingMoisture:![row.cloud_low,row.cloud_mid,row.cloud_high].some(finite)&&!profile.some(p=>finite(p[1])||finite(p[4]))};
+ }
+
+ // Adapted from the requested Canvas routines: scalloped white tiers, shaded
+ // flat bases, undulating stratiform bands and feathered ice filaments.
+ function drawCumulusCloud(ctx,centerX,baseY,topY,width,darkness=.15){
+  const depth=Math.max(14,baseY-topY),tiers=Math.max(1,Math.min(6,Math.ceil(depth/18)));
+  const cap=Math.min(depth,Math.max(14,width*.36)),step=tiers>1?(depth-cap)/(tiers-1):0;
+  ctx.save();ctx.beginPath();ctx.rect(centerX-width*.65,baseY-depth-1,width*1.3,depth+1);ctx.clip();
+  // The shaded core joins overlapping tiers into one cloud, including a deep
+  // Cb column whose chart height is much greater than a single hourly cell.
+  if(tiers>1){const core=ctx.createLinearGradient(0,topY,0,baseY);core.addColorStop(0,'#F8FAFE');core.addColorStop(1,`rgb(${235-darkness*130},${235-darkness*130},${241-darkness*130})`);
+   ctx.fillStyle=core;ctx.beginPath();ctx.moveTo(centerX-width*.28,baseY);ctx.lineTo(centerX-width*.14,topY+5);ctx.lineTo(centerX+width*.14,topY+5);ctx.lineTo(centerX+width*.28,baseY);ctx.closePath();ctx.fill();}
+  for(let t=tiers-1;t>=0;t--){
+   const frac=tiers===1?0:t/(tiers-1),tierY=baseY-t*step,tierW=width*(1-frac*.22);
+   const h=t===tiers-1?cap:Math.max(cap,step*1.45);
+   ctx.beginPath();ctx.moveTo(centerX-tierW*.48,tierY);
+   ctx.bezierCurveTo(centerX-tierW*.65,tierY-h*.25,centerX-tierW*.46,tierY-h*.85,centerX-tierW*.25,tierY-h*.53);
+   ctx.bezierCurveTo(centerX-tierW*.23,tierY-h*1.15,centerX+tierW*.22,tierY-h*1.15,centerX+tierW*.26,tierY-h*.53);
+   ctx.bezierCurveTo(centerX+tierW*.47,tierY-h*.85,centerX+tierW*.65,tierY-h*.2,centerX+tierW*.48,tierY);
+   ctx.lineTo(centerX+tierW*.48,tierY);ctx.closePath();
+   const grad=ctx.createLinearGradient(centerX,tierY-h,centerX,tierY+2),shade=darkness*(1-frac*.75);
+   const topL=Math.round(255-shade*35),botL=Math.round(235-shade*130),mid=Math.round((topL+botL)/2);
+   grad.addColorStop(0,`rgb(${topL},${topL},${Math.min(255,topL+4)})`);
+   grad.addColorStop(.65,`rgb(${mid},${mid},${mid+5})`);grad.addColorStop(1,`rgb(${botL},${botL},${botL+6})`);
+   ctx.fillStyle=grad;ctx.fill();ctx.lineWidth=1.15;ctx.strokeStyle=`rgba(45,55,72,${.5+darkness*.2})`;ctx.stroke();
+  }ctx.restore();return tiers;
+ }
+ function drawStratusLayer(ctx,xLeft,xRight,yTop,yBot,rhIntensity){
+  const h=Math.max(8,yBot-yTop),alpha=Math.min(.82,Math.max(.18,(rhIntensity-.65)*2.2)),grey=Math.round(215-alpha*95);
+  ctx.save();const grad=ctx.createLinearGradient(0,yTop,0,yTop+h);
+  grad.addColorStop(0,`rgba(${grey+20},${grey+22},${grey+26},${alpha*.45})`);
+  grad.addColorStop(.5,`rgba(${grey},${grey+3},${grey+8},${alpha})`);
+  grad.addColorStop(1,`rgba(${grey-18},${grey-15},${grey-10},${alpha*.7})`);
+  ctx.fillStyle=grad;ctx.beginPath();ctx.moveTo(xLeft-2,yTop+3);
+  ctx.bezierCurveTo(xLeft+12,yTop-3,xRight-18,yTop+6,xRight+2,yTop+1);
+  ctx.lineTo(xRight+2,yTop+h-2);ctx.bezierCurveTo(xRight-12,yTop+h+3,xLeft+18,yTop+h-5,xLeft-2,yTop+h);ctx.closePath();ctx.fill();
+  ctx.strokeStyle=`rgba(255,255,255,${alpha*.55})`;ctx.lineWidth=1;
+  for(let y=yTop+5;y<yTop+h-3;y+=7){ctx.beginPath();ctx.moveTo(xLeft+2,y);ctx.quadraticCurveTo((xLeft+xRight)/2,y-3,xRight-2,y+1);ctx.stroke();}
+  ctx.restore();
+ }
+ function drawCirrusIceCloud(ctx,centerX,yCenter,colWidth,highCloudFrac){
+  if(highCloudFrac<.15)return;ctx.save();const alpha=Math.min(.75,highCloudFrac*.8);
+  for(let i=-1;i<=1;i++){
+   const y=yCenter+i*5;ctx.strokeStyle=`rgba(250,252,255,${alpha})`;ctx.lineWidth=1.8;ctx.beginPath();
+   ctx.moveTo(centerX-colWidth*.45,y+2);ctx.quadraticCurveTo(centerX,y-3,centerX+colWidth*.45,y-1);ctx.stroke();
+   ctx.strokeStyle=`rgba(216,226,241,${alpha*.75})`;ctx.lineWidth=.8;
+   for(let j=-2;j<=2;j++){const xx=centerX+j*colWidth*.14;ctx.beginPath();ctx.moveTo(xx,y);ctx.quadraticCurveTo(xx+5,y-5,xx+colWidth*.17,y-6);ctx.stroke();}
+  }ctx.restore();
+ }
+ function drawStormCloud(ctx,cx,base,top,width,ground,rain){
+  drawCumulusCloud(ctx,cx,base,top,width*.8,.92);
+  ctx.save();const grad=ctx.createLinearGradient(0,top-7,0,top+15);grad.addColorStop(0,'#E9EBF2');grad.addColorStop(1,'#657185');ctx.fillStyle=grad;
+  ctx.beginPath();ctx.moveTo(cx-width*.58,top-3);ctx.bezierCurveTo(cx-width*.2,top-10,cx+width*.4,top-8,cx+width*.64,top-2);
+  ctx.quadraticCurveTo(cx+width*.38,top+7,cx+width*.14,top+17);ctx.lineTo(cx-width*.17,top+17);ctx.quadraticCurveTo(cx-width*.25,top+5,cx-width*.58,top-3);ctx.fill();
+  const end=rain>.2?ground:Math.min(ground,base+28),streak=ctx.createLinearGradient(0,base,0,Math.max(base+1,end));
+  streak.addColorStop(0,'#48576E88');streak.addColorStop(1,'#48576E00');ctx.strokeStyle=streak;ctx.lineWidth=1;ctx.setLineDash(rain>.2?[]:[3,3]);
+  for(let j=-2;j<=2;j++){ctx.beginPath();ctx.moveTo(cx+j*width*.13,base+2);ctx.lineTo(cx+j*width*.13-5,end);ctx.stroke();}ctx.restore();
  }
  function cloudOpacity(row,height){
   if(height<1500)return 0;
@@ -142,11 +245,11 @@ function installDuoPointProbe(map, data) {
  const GRAPH={width:1605,height:1046,left:165,cell:60,sky:66,skyHeight:310};
  const plain=(v,n=0)=>finite(v)?v.toFixed(n):'—';
  function tint(a,b,t){return 'rgb('+a.map((v,i)=>Math.round(v+(b[i]-v)*clamp(t,0,1))).join(',')+')';}
- function draw(canvas,result){
+ function draw(canvas,result,classified=null){
   const {width:W,height:H,left,cell:cw,sky:top,skyHeight:gh}=GRAPH,ratio=Math.min(2,window.devicePixelRatio||1);
   const width=W-left,rows=result.rows,x=i=>left+cw*(i+.5),y=ft=>top+12+(gh-24)*fraction(ft);
   canvas.width=W*ratio;canvas.height=H*ratio;const c=canvas.getContext('2d');c.scale(ratio,ratio);
-  const stats={clouds:[],contours:0,barbs:0,observations:0,cloudPixels:{low:0,mid:0,high:0},legendWidth:left,borderedCells:0};
+  const stats={clouds:[],formations:[],contours:0,barbs:0,observations:0,cloudPixels:{low:0,mid:0,high:0},legendWidth:left,borderedCells:0};
   const ink='#111111',grey='#C8D0D8',red='#E05246',blue='#399DCA';
   c.fillStyle='#FFFFFF';c.fillRect(0,0,W,H);c.textBaseline='middle';c.lineJoin='round';
   const text=(value,xx,yy,colour=ink,align='left',bold=false,size=12)=>{c.font=(bold?'bold ':'')+size+'px Arial';c.fillStyle=colour;c.textAlign=align;c.fillText(value,xx,yy);};
@@ -177,21 +280,17 @@ function installDuoPointProbe(map, data) {
    for(let i=day*12;i<(day+1)*12;i++){box(left+i*cw,36,cw,30);text(rows[i].label,x(i),51,ink,'center',true);}
   }
   box(0,top,left,gh);box(left,top,width,gh,'#B3DDF2');
-  // A bounded, smoothly scaled RH raster keeps every click comfortably local.
-  const raster=document.createElement('canvas'),rw=144,rh=112;raster.width=rw;raster.height=rh;
-  const rc=raster.getContext('2d'),pixels=rc.createImageData(rw,rh),heights=Array.from({length:rh},(_,j)=>altitude(clamp((j/(rh-1)*gh-12)/(gh-24),0,1)));
-  const cloudiness=rows.map(r=>heights.map(h=>cloudOpacity(r,h)));
-  for(let ix=0;ix<rw;ix++){
-   const day=ix<rw/2?0:1,offset=day*12,pos=clamp((ix-day*rw/2)/(rw/2)*12-.5,0,11),lo=Math.floor(pos)+offset,hi=Math.min(offset+11,lo+1),t=pos%1;
-   for(let j=0;j<rh;j++){
-    const h=heights[j],opacity=mix(cloudiness[lo][j],cloudiness[hi][j],t),idx=(j*rw+ix)*4;let colour=[179,221,242];
-    if(opacity===null)colour=(ix+j)%6<2?[219,226,231]:[237,241,244];
-    else if(opacity>0){colour=colour.map((v,k)=>mix(v,[124,134,149][k],opacity));stats.cloudPixels[h<7000?'low':h<16000?'mid':'high']++;}
-    for(let k=0;k<3;k++)pixels.data[idx+k]=colour[k];pixels.data[idx+3]=255;
-   }
-  }
-  rc.putImageData(pixels,0,0);c.imageSmoothingEnabled=true;c.drawImage(raster,left,top,width,gh);
   c.save();c.beginPath();c.rect(left,top,width,gh);c.clip();
+  const sky=c.createLinearGradient(0,top,0,top+gh);sky.addColorStop(0,'#80B6DB');sky.addColorStop(.6,'#B9DFF1');sky.addColorStop(1,'#E4F1F7');c.fillStyle=sky;c.fillRect(left,top,width,gh);
+  const formations=classified||rows.map(classifyClouds);
+  // Missing moisture is explicit, rather than a uniform grey cloud wall or
+  // false clear sky. Mask only the unsupported vertical band in each hour.
+  rows.forEach((r,i)=>{for(const [lo,hi,cover] of [[1500,7000,r.cloud_low],[7000,16000,r.cloud_mid],[16000,38000,r.cloud_high]]){
+   const evidence=finite(cover)||(r.profile||[]).some(p=>p[0]>=lo&&p[0]<=hi&&(finite(p[1])||finite(p[4])));
+   if(evidence)continue;const a=left+i*cw,yt=y(hi),yb=y(lo);
+   c.save();c.beginPath();c.rect(a,yt,cw,yb-yt);c.clip();c.strokeStyle='#65768B55';c.lineWidth=.7;
+   for(let yy=yt-cw;yy<yb;yy+=10){c.beginPath();c.moveTo(a,yy);c.lineTo(a+cw,yy+cw);c.stroke();}c.restore();
+  }});
   if(finite(result.terrain)){c.fillStyle='#D4D5C9';c.fillRect(left,y(result.terrain),width,top+gh-y(result.terrain));}
   // Nested time/height bell contours, capped at the estimated thermal top.
   for(const [threshold,colour] of [[.05,'#4B4FA8'],[.6,'#3B82F6'],[1.2,'#38BDF8'],[2,'#34D399']]){
@@ -202,24 +301,27 @@ function installDuoPointProbe(map, data) {
     }flush();
    }
   }
-  // Shallow cumulus uses one or two scalloped rows; deep clouds stack all the
-  // way to the thermal top. Overcast cover darkens/joins these estimated decks.
-  rows.forEach((r,i)=>{
-   const cloud=cloudColumn(r);if(!cloud)return;
-   const base=y(cloud.base)+(cloud.nearBase?3:0),ceiling=cloud.nearBase?base-10:y(cloud.top),depth=base-ceiling;if(depth<=0)return;
-   const layers=Math.min(24,Math.max(1,Math.ceil(depth/14))),span=cloud.overcast?cw+2:cw*.86;
-   stats.clouds.push({...cloud,index:i,layers,baseY:base,topY:ceiling});
-   c.save();c.beginPath();c.rect(x(i)-span/2,ceiling,span,depth);c.clip();
-   const grad=c.createLinearGradient(0,ceiling,0,base);grad.addColorStop(0,cloud.overcast?'#C5CDD5':'#FFFFFF');grad.addColorStop(1,cloud.overcast?'#7E8C9C':'#C0CCD7');
-   for(let j=0;j<layers;j++){
-    const yy=base-(j+.5)*depth/layers,hh=Math.max(8,depth/layers+10),xx=x(i)+[0,-3,3,-1,2][j%5],puff=span*(cloud.overcast?1:[.7,.88,.74,.96,.8][j%5]);
-    c.fillStyle=grad;c.strokeStyle=cloud.overcast?'#84909E':'#BCC6CF';c.lineWidth=.6;
-    c.beginPath();c.moveTo(xx-puff*.46,yy+hh*.3);
-    c.bezierCurveTo(xx-puff*.64,yy-hh*.05,xx-puff*.42,yy-hh*.65,xx-puff*.22,yy-hh*.25);
-    c.bezierCurveTo(xx-puff*.19,yy-hh*.9,xx+puff*.19,yy-hh*.9,xx+puff*.23,yy-hh*.25);
-    c.bezierCurveTo(xx+puff*.47,yy-hh*.6,xx+puff*.64,yy+hh*.2,xx+puff*.42,yy+hh*.35);
-    c.bezierCurveTo(xx+puff*.15,yy+hh*.58,xx-puff*.2,yy+hh*.58,xx-puff*.46,yy+hh*.3);c.closePath();c.fill();c.stroke();
-   }c.restore();
+  const mark=(cloud,i)=>{stats.formations.push({...cloud,index:i});
+   for(const [name,lo,hi] of [['low',0,7000],['mid',7000,16000],['high',16000,38000]])
+    stats.cloudPixels[name]+=Math.max(0,y(Math.max(lo,cloud.base))-y(Math.min(hi,cloud.top)))*cw;
+  };
+  formations.forEach((types,i)=>{
+   // Separate structured strata within a deep moist deck. Undulating edges
+   // and silver striations convey depth without an opaque vertical rectangle.
+   for(const cloud of types.layers){mark(cloud,i);const yt=y(cloud.top),yb=y(cloud.base),n=Math.max(1,Math.ceil((yb-yt)/21));
+    for(let j=0;j<n;j++){const a=yt+(yb-yt)*j/n,b=yt+(yb-yt)*(j+1)/n;drawStratusLayer(c,left+i*cw,left+(i+1)*cw,a+1,b-1,cloud.intensity);}
+   }
+   for(const cloud of types.ice){mark(cloud,i);const yt=y(cloud.top),yb=y(cloud.base),n=Math.max(1,Math.ceil((yb-yt)/20));
+    for(let j=0;j<n;j++)drawCirrusIceCloud(c,x(i),yt+(j+.5)*(yb-yt)/n,cw,cloud.intensity);
+   }
+   if(types.cu){const cloud=types.cu,base=y(cloud.base),ceiling=Math.min(base-14,y(cloud.top));
+    const layers=drawCumulusCloud(c,x(i),base,ceiling,cw*.83,cloud.depth>2200?.65:cloud.depth>800?.27:.1);
+    stats.clouds.push({...cloud,index:i,layers,baseY:base,topY:ceiling});mark(cloud,i);
+   }
+   if(types.sc){const cloud=types.sc,base=y(cloud.base),ceiling=Math.min(base-14,y(cloud.top));mark(cloud,i);
+    for(let j=-1;j<=1;j++)drawCumulusCloud(c,x(i)+j*cw*.34,base,ceiling,cw*.58,.4);
+   }
+   if(types.cb){const cloud=types.cb;mark(cloud,i);drawStormCloud(c,x(i),y(cloud.base),y(cloud.top),cw*.94,y(result.terrain),cloud.rain);}
   });
   for(const ft of ticks){c.strokeStyle='#FFFFFF77';c.lineWidth=1;c.beginPath();c.moveTo(left,y(ft));c.lineTo(W,y(ft));c.stroke();}
   curve('top',y,'#111111',2.5);curve('lcl',y,'#F4A2B8',2);
@@ -292,17 +394,24 @@ function installDuoPointProbe(map, data) {
   panel?.remove();panel=document.createElement('section');panel.className='duo-point-panel';panel.setAttribute('role','region');panel.setAttribute('aria-label','Point Forecast Meteogram');
   const near=nearestFeature(point),name=point.name||(near?'Near '+near.name+' · '+fmt(near.d,1)+' km':'Map coordinate');
   const climbs=result.rows.map(r=>r.climb).filter(finite),ceilings=result.rows.map(r=>r.ceiling).filter(finite);
-  const soar=result.rows.filter(r=>r.soar),status=!soar.length?(result.rows.some(r=>r.soar===null)?'Unavailable / incomplete':'No usable thermals'):soar.some(r=>r.cu>0)?soar.some(r=>r.cu===0)?'Cumulus & blue':'Cumulus':'Blue thermals';
+  const cloudTypes=result.rows.map(classifyClouds),cloudNames=cloudTypes.map(t=>[t.cb,t.cu,t.sc,...t.layers,...t.ice].filter(Boolean).map(c=>c.type));
+  const soar=result.rows.filter(r=>r.soar),status=!soar.length?(result.rows.some(r=>r.soar===null)?'Unavailable / incomplete':'No usable thermals'):cloudTypes.some(t=>t.cb)?'Convection · Cb potential':cloudTypes.some(t=>t.cu)?'Cumulus possible':'Blue thermals';
+  const loadingLabel=data.loading_label||('Wing loading: '+(data.loading==='ballasted'?'43 kg/m² · water ballast':'34 kg/m² · no water ballast'));
   const retrieval=[...new Set(result.rows.flatMap(r=>r.retrieved))].sort();
   const modelNote=result.rows.map(r=>r.day+' '+r.label+': '+r.sources.join(' + ')).join('; ');
-  panel.innerHTML='<header class="duo-point-header"><div><h2>Duo · G-CKML · '+esc(name)+'</h2><small>'+fmt(point.lat,4)+'°, '+fmt(point.lon,4)+'° · '+fmt(result.terrain)+' ft AMSL '+(finite(point.terrain)?'(feature elevation)':'(interpolated model terrain)')+'</small><small>'+esc(data.model)+' · '+esc(data.loading||'dry')+' · retrieved '+esc(retrieval.length?retrieval.join(' to '):'unavailable')+'</small></div><div><button type="button" data-probe-another title="Hide this chart and choose another map point without disabling the probe.">Pick another point</button> <button type="button" data-probe-close title="Hide the meteogram and restore normal map clicks.">× Close / Turn Off Probe</button></div></header>'+
+  panel.innerHTML='<header class="duo-point-header"><div><h2>Duo · G-CKML · '+esc(name)+'</h2><small>'+fmt(point.lat,4)+'°, '+fmt(point.lon,4)+'° · '+fmt(result.terrain)+' ft AMSL '+(finite(point.terrain)?'(feature elevation)':'(interpolated model terrain)')+'</small><small>'+esc(data.model)+' · '+esc(loadingLabel)+' · retrieved '+esc(retrieval.length?retrieval.join(' to '):'unavailable')+'</small></div><div><button type="button" data-probe-another title="Hide this chart and choose another map point without disabling the probe.">Pick another point</button> <button type="button" data-probe-close title="Hide the meteogram and restore normal map clicks.">× Close / Turn Off Probe</button></div></header>'+
    '<div class="duo-point-summary"><span><b title="Estimated core updraught minus the selected Duo Discus polar circling sink once; floored at zero.">Peak net climb</b>'+fmt(climbs.length?Math.max(...climbs):null,1)+' kt</span><span><b title="Estimated upper zero-net-climb height in the thermal column, capped below cloud base.">Peak working ceiling</b>'+fmt(ceilings.length?Math.max(...ceilings):null)+' ft AMSL</span><span><b title="Cumulus is possible when mixing reaches the LCL. Blue means the mixing top stays below it.">Thermal type</b>'+status+'</span><span><b>Usable samples · local time</b>'+result.windows.map(esc).join('<br>')+'</span></div>'+
-   '<div class="duo-point-notes">'+esc(data.cycle_note)+' '+esc(data.notes)+'<br>Net climb = max(0, 1.35 w* − polar circling sink), rounded once. Selected loading: '+esc(data.loading||'dry')+'. Black thermal top = estimated mixing top. Pink = condensation level. The table excludes cloud depth from usable height; an unsoarable MSL cell shows terrain, with 0 ft AGL. Cloud stacks are estimates, not a thunderstorm forecast.</div>'+
+   '<div class="duo-point-notes">'+esc(data.cycle_note)+' '+esc(data.notes)+'<br>Net climb = max(0, 1.35 w* − polar circling sink), rounded once. '+esc(loadingLabel)+'. Black thermal top = estimated mixing top. Pink = condensation level. The table excludes cloud depth from usable height; an unsoarable MSL cell shows terrain, with 0 ft AGL.</div>'+
+   '<div class="duo-point-notes" aria-label="Cloud legend"><b>Cloud forms:</b> <span title="Small, medium or tall puffs start at the pink condensation line. A minimum visible puff represents 100 ft cloud depth.">Cu / TCu · white puffs and towers</span> · <span title="Moist thermals spread under an inversion.">Sc · linked rolls</span> · <span title="Stable moist layers; rain darkens nimbostratus.">St / As / Ns · layered bands</span> · <span title="Cold upper-level moisture, including saturation over ice.">Ci / Cs · ice wisps</span> · <span title="CAPE or lifted-index/deep-moisture evidence suggests potential deep convection. This is not a confirmed thunderstorm.">Cb potential · dark tower and anvil</span></div>'+
    '<div class="duo-point-notes">Scroll right for day two; scroll down for the aligned hourly weather strips.</div><div class="duo-point-graphic"><div class="duo-point-grid"><canvas class="duo-point-canvas" role="img" aria-label="Two-day vertical point forecast with bordered hourly values. The following table provides accessible numbers."></canvas><canvas class="duo-point-labels" aria-hidden="true"></canvas></div></div>'+
-   '<details><summary>Accessible hourly values and data coverage</summary><div style="overflow:auto"><table><thead><tr><th>Local time</th><th>Ceiling AMSL / AGL ft</th><th>Net climb kt</th><th>Raw core kt</th><th>Circling sink kt</th><th>T / Td °C</th><th>Wind / gust kt</th><th>Wind from °T</th><th>MSLP hPa</th><th>Model</th></tr></thead><tbody>'+result.rows.map(r=>'<tr><td>'+esc(r.day+' '+r.label+' '+r.zone)+'</td><td>'+fmt(r.displayMsl)+' / '+fmt(r.agl)+'</td><td>'+fmt(r.climb,1)+'</td><td>'+fmt(r.core,2)+'</td><td>'+fmt(r.sink,2)+'</td><td>'+fmt(r.temperature,1)+' / '+fmt(r.dewpoint,1)+'</td><td>'+fmt(speed(r.u,r.v),1)+' / '+fmt(r.gust,1)+'</td><td>'+fmt(heading(r.u,r.v))+'</td><td>'+fmt(r.mslp,1)+'</td><td>'+esc(r.sources.join(' + '))+'</td></tr>').join('')+'</tbody></table></div><p>Hourly model sources: '+esc(modelNote)+'</p><p>Samples: '+esc(result.nearest.map(s=>s.name+' ('+fmt(s.d,1)+' km)').join(', ')||'No cached forecast within 120 km')+'. Dashes and hatching mean unavailable.</p>'+ (result.observation?'<p>Nearest cached observations: '+esc(result.observation.name)+' · '+fmt(result.observation.d,1)+' km. '+result.observation.samples.map(o=>esc(o.time)+' · '+fmt(o.temperature,1)+'°C'+(o.stale?' (stale)':'')).join('; ')+'. Dashed segments join reports no more than three hours apart; no forecast bias or future observations are invented.</p>':'<p>No cached observations are available. The temperature lines show model forecasts only.</p>')+'</details>';
+   '<details><summary>Accessible hourly values and data coverage</summary><div style="overflow:auto"><table><thead><tr><th>Local time</th><th>Ceiling AMSL / AGL ft</th><th>Net climb kt</th><th>Raw core kt</th><th>Circling sink kt</th><th>T / Td °C</th><th>Wind / gust kt</th><th>Wind from °T</th><th>MSLP hPa</th><th title="CAPE measures potential buoyancy; it does not confirm a storm.">CAPE J/kg</th><th title="Negative lifted index indicates potential instability.">LI K</th><th title="Precipitation includes showers; these values are not added together.">Rain / showers mm/h</th><th title="Heuristic cloud genera from the vertical moisture and stability profile.">Cloud forms</th><th>Model</th></tr></thead><tbody>'+result.rows.map((r,i)=>'<tr><td>'+esc(r.day+' '+r.label+' '+r.zone)+'</td><td>'+fmt(r.displayMsl)+' / '+fmt(r.agl)+'</td><td>'+fmt(r.climb,1)+'</td><td>'+fmt(r.core,2)+'</td><td>'+fmt(r.sink,2)+'</td><td>'+fmt(r.temperature,1)+' / '+fmt(r.dewpoint,1)+'</td><td>'+fmt(speed(r.u,r.v),1)+' / '+fmt(r.gust,1)+'</td><td>'+fmt(heading(r.u,r.v))+'</td><td>'+fmt(r.mslp,1)+'</td><td>'+fmt(r.cape)+'</td><td>'+fmt(r.lifted_index,1)+'</td><td>'+fmt(r.rain,1)+' / '+fmt(r.showers,1)+'</td><td>'+esc([...new Set(cloudNames[i])].join(', ')||(cloudTypes[i].missingMoisture?'Moisture unavailable':'No classified clouds'))+'</td><td>'+esc(r.sources.join(' + '))+'</td></tr>').join('')+'</tbody></table></div><p>Hourly model sources: '+esc(modelNote)+'</p><p>Samples: '+esc(result.nearest.map(s=>s.name+' ('+fmt(s.d,1)+' km)').join(', ')||'No cached forecast within 120 km')+'. Dashes and hatching mean unavailable.</p>'+ (result.observation?'<p>Nearest cached observations: '+esc(result.observation.name)+' · '+fmt(result.observation.d,1)+' km. '+result.observation.samples.map(o=>esc(o.time)+' · '+fmt(o.temperature,1)+'°C'+(o.stale?' (stale)':'')).join('; ')+'. Dashed segments join reports no more than three hours apart; no forecast bias or future observations are invented.</p>':'<p>No cached observations are available. The temperature lines show model forecasts only.</p>')+'</details>'+
+   '<details data-moisture-profile><summary>Vertical moisture, dewpoint and instability</summary><label>Forecast hour <select data-profile-hour aria-label="Vertical moisture forecast hour" title="Read the cached pressure sounding for this hour. No new weather request is made.">'+result.rows.map((r,i)=>'<option value="'+i+'">'+esc(r.day+' '+r.label+' '+r.zone)+'</option>').join('')+'</select></label><div data-profile-table style="overflow:auto"></div></details>';
   container.appendChild(panel);L.DomEvent.disableClickPropagation(panel);L.DomEvent.disableScrollPropagation(panel);
+  const moisture=panel.querySelector('[data-moisture-profile]'),hour=panel.querySelector('[data-profile-hour]');
+  const drawProfile=()=>{const r=result.rows[Number(hour.value)];panel.querySelector('[data-profile-table]').innerHTML='<p>CAPE '+fmt(r.cape)+' J/kg · Lifted index '+fmt(r.lifted_index,1)+' K. Missing entries remain unknown.</p><table><thead><tr>'+['Pressure hPa','Height ft AMSL','T °C','Td °C','Spread °C','RH water %','RH ice %','Cloud %'].map(s=>'<th title="Interpolated model sounding; RH ice may exceed 100%.">'+s+'</th>').join('')+'</tr></thead><tbody>'+r.levels.map(p=>'<tr>'+[p[8],p[0],p[5],p[6],finite(p[5])&&finite(p[6])?p[5]-p[6]:null,p[1],p[7],p[4]].map(v=>'<td>'+fmt(v,1)+'</td>').join('')+'</tr>').join('')+'</tbody></table>';};
+  moisture.ontoggle=()=>{if(moisture.open)drawProfile();};hour.onchange=drawProfile;
   panel.querySelector('[data-probe-close]').onclick=event=>{event.preventDefault();event.stopPropagation();disable(true);};panel.querySelector('[data-probe-another]').onclick=event=>{event.preventDefault();event.stopPropagation();panel.remove();panel=null;};
-  const canvas=panel.querySelector('.duo-point-canvas');map._duoProbe.lastRenderDetails=draw(canvas,result);
+  const canvas=panel.querySelector('.duo-point-canvas');map._duoProbe.lastRenderDetails=draw(canvas,result,cloudTypes);
   const labels=panel.querySelector('.duo-point-labels'),ratio=canvas.width/GRAPH.width;
   labels.width=GRAPH.left*ratio;labels.height=canvas.height;labels.getContext('2d').drawImage(canvas,0,0,labels.width,labels.height,0,0,labels.width,labels.height);
   map._duoProbe.lastRenderMs=performance.now()-started;
@@ -327,5 +436,5 @@ function installDuoPointProbe(map, data) {
  }
  const unload=()=>disable(false);
  container.addEventListener('click',click,true);container.addEventListener('pointerdown',down,true);container.addEventListener('pointermove',move,true);map.on('unload',unload);
- map._duoProbe={show,profileAt,barbParts,fraction,altitude,solarTimes,nearestObservation,cloudColumn,cloudOpacity,render:draw,disable,get last(){return last;},get active(){return active;}};
+ map._duoProbe={show,profileAt,barbParts,fraction,altitude,solarTimes,nearestObservation,cloudColumn,cloudOpacity,classifyClouds,pressureValue,render:draw,disable,get last(){return last;},get active(){return active;}};
 }

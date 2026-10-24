@@ -20,7 +20,9 @@ def forecast(point=None, *, start=NOW, hours=None, model='ecmwf_ifs025', changes
                   precipitation=0.)
     heights = (110, 530, 760, 1450, 2000, 3000, 4200, 5600, 7200, 9200)
     temperatures = (27, 23, 21, 16, 13.5, 9, -2, -15, -26, -40)
-    for p, height, t in zip(PRESSURE_LEVELS_HPA, heights, temperatures):
+    # Preserve this fixture's original physical profile when new request levels
+    # are added; 900 hPa remains a bracketed interpolation unless overridden.
+    for p, height, t in zip((1000,950,925,850,800,700,600,500,400,300), heights, temperatures):
         values.update({f'temperature_{p}hPa':t, f'geopotential_height_{p}hPa':height,
                        f'relative_humidity_{p}hPa':70., f'wind_speed_{p}hPa':10.,
                        f'wind_direction_{p}hPa':270., f'vertical_velocity_{p}hPa':.2})

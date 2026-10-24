@@ -9,8 +9,9 @@ from datetime import timedelta
 
 from config import HOURLY_VARIABLES
 from soaring_physics import Profile, boundary_layer_height
+from atmospheric_moisture import complete_moisture
 
-COVERAGE_REVISION = 1
+COVERAGE_REVISION = 2
 PARCEL_SOURCE = 'estimated dry-parcel mixing depth'
 
 
@@ -62,6 +63,7 @@ def complete_forecasts(forecasts, model):
             values[name], units[name] = tuple(series), unit
             if any(origins):
                 provenance[name] = tuple(origins)
+        complete_moisture(values,units,provenance)
         resolved = replace(primary, model=model.api_name, times=times, hourly=values,
                            units=units, field_sources=provenance,
                            fetched_at=min(f.fetched_at for f in sources),

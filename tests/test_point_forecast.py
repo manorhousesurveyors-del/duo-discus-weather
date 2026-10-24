@@ -52,7 +52,7 @@ class PointDataTests(unittest.TestCase):
         self.assertTrue(all(x is None for x in missing['s']))
         self.assertTrue(all(x is None for p in missing['p'] for x in p))
         row=probe.hour_sample(source,NOW)
-        self.assertEqual(row['p'][probe.LEVELS.index(250)],[None]*5)
+        self.assertEqual(row['p'][probe.LEVELS.index(250)],[None]*len(probe.PRESSURE_FIELDS))
         self.assertIsNone(row['s'][probe.FIELDS.index('gust')])
         json.dumps(row,allow_nan=False)
 
@@ -119,7 +119,7 @@ class PointIsolationTests(unittest.TestCase):
                 self.assertEqual(probe.PROBE_API_REVISION,1)  # Off remains dormant.
                 at.toggle(key='point_probe_enabled').set_value(True).run()
                 self.assertFalse(at.exception)
-                self.assertEqual(probe.PROBE_API_REVISION,4)
+                self.assertEqual(probe.PROBE_API_REVISION,5)
                 self.assertFalse(any('temporarily unavailable' in w.value for w in at.warning))
 
     def test_off_never_imports_probe_other_pages_reset_and_import_failure_is_local(self):

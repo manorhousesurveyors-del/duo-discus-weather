@@ -26,7 +26,7 @@ import importlib
 import runtime_imports
 
 # The compatibility registry itself may also predate this deployment.
-if getattr(runtime_imports,'API_REVISION',0)<6:
+if getattr(runtime_imports,'API_REVISION',0)<7:
     importlib.reload(runtime_imports)
 optional_module=runtime_imports.optional_module
 
@@ -50,12 +50,12 @@ CATEGORY_COLOURS = {'VFR':'#15835d','MVFR':'#2674c5','IFR':'#d84949','LIFR':'#a3
 
 
 @st.cache_resource(max_entries=2,show_spinner=False)
-def load_recorded(path,modified,coverage_revision=1):
+def load_recorded(path,modified,coverage_revision=2):
     return load_bundle(Path(path))
 
 
 @st.cache_resource(ttl=1800,max_entries=6,show_spinner=False)
-def load_sites(model_key: str, refresh_bucket: int, coverage_revision=1):
+def load_sites(model_key: str, refresh_bucket: int, coverage_revision=2):
     from uk_map_grid import regional_future
     return regional_future(refresh_bucket,model_key)
 
@@ -470,11 +470,11 @@ def _main():
     st.set_page_config(page_title='Duo · UK soaring weather',page_icon='⛅',layout='wide',initial_sidebar_state='expanded')
     # Cached pre-deployment Forecast objects lack the provenance schema. Retire
     # only weather state once; preserve tasks, navigation and user preferences.
-    if st.session_state.get('forecast_coverage_revision') != 1:
+    if st.session_state.get('forecast_coverage_revision') != 2:
         for key in list(st.session_state):
             if key.startswith(('forecast_bundle:','forecast_fallback:')):
                 del st.session_state[key]
-        st.session_state['forecast_coverage_revision']=1
+        st.session_state['forecast_coverage_revision']=2
     st.markdown('<style>.block-container{padding-top:1.5rem}div[data-testid="stMetric"]{background:#fff;border:1px solid #dce5e8;border-radius:12px;padding:12px}'
                 'h1{letter-spacing:-.04em}section[data-testid="stSidebar"]{border-right:1px solid #dce5e8}</style>',unsafe_allow_html=True)
     now=datetime.now(UTC)
@@ -776,7 +776,7 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
             if probe_enabled:
                 try:
                     probe=importlib.import_module('point_forecast_meteogram')
-                    if getattr(probe,'PROBE_API_REVISION',0)<4:
+                    if getattr(probe,'PROBE_API_REVISION',0)<5:
                         probe=importlib.reload(probe)
                     probe.add_probe(view,probe_forecasts,day,aviation=aviation,loading=loading)
                 except Exception:

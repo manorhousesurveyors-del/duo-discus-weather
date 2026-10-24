@@ -53,7 +53,7 @@ async def main():
                 if(r>230&&g>230&&b>230)white++;
               }
               return {ms:p.lastRenderMs,rows:rows.map(r=>({day:r.day,label:r.label,climb:r.climb,agl:r.agl,msl:r.displayMsl,core:r.core,sink:r.sink,solar:r.solar,sources:r.sources,temperature:r.temperature})),stats:p.lastRenderDetails,
-               pixels:{blue,grey,white},nearCloud:p.cloudColumn({top:4900,lcl:5100,cloud_low:30}),dryGap:p.cloudColumn({top:4900,lcl:5200,cloud_low:100}),exactCloud:p.cloudColumn({top:5100,lcl:5100,cloud_low:0}),png:canvas.toDataURL('image/png')};
+               pixels:{blue,grey,white},nearCloud:p.cloudColumn({top:4950,lcl:5100,cloud_low:30}),dryGap:p.cloudColumn({top:4900,lcl:5200,cloud_low:100}),exactCloud:p.cloudColumn({top:5100,lcl:5100,cloud_low:0}),png:canvas.toDataURL('image/png')};
             }''',{'payload':payload,'name':name})
             (out/(name+'.png')).write_bytes(base64.b64decode(result.pop('png').split(',')[1]))
             assert result['ms']<100,result['ms']
@@ -66,8 +66,8 @@ async def main():
                 active=[r for r in result['rows'] if r['solar']==325]
                 assert active and all(1.5<=r['climb']<=2.3 and r['agl']>1000 for r in active)
             if name=='paired':
-                assert all(r['sources']==['ukmo_seamless'] and r['temperature']==8 for r in result['rows'][:12])
-                assert all(r['sources']==['ecmwf_ifs025'] and r['temperature']==9 for r in result['rows'][12:])
+                assert all('ukmo_seamless' in r['sources'] and r['temperature']==8 for r in result['rows'][:12])
+                assert all('ecmwf_ifs025' in r['sources'] and r['temperature']==9 for r in result['rows'][12:])
             assert result['stats']['contours']>0 and result['stats']['clouds']
             assert all(n>0 for n in result['stats']['cloudPixels'].values())
             assert all(n>100 for n in result['pixels'].values()),result['pixels']

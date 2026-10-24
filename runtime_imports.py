@@ -10,7 +10,7 @@ import sys
 from threading import RLock
 
 # Bump when new compatibility contracts must reach an already-running app.
-API_REVISION = 6
+API_REVISION = 7
 
 _lock = RLock()
 _log = logging.getLogger(__name__)
@@ -18,7 +18,8 @@ _log = logging.getLogger(__name__)
 # Dependency order matters: a reloaded consumer must bind the current providers.
 # Empty tuples check function presence; other tuples check newly added keywords.
 LAZY_APIS = {
-    'config': {'forecast_variables': (), 'duo_circling_sink_knots': ()},
+    'config': {'forecast_variables': (), 'moisture_variables': (), 'duo_circling_sink_knots': ()},
+    'atmospheric_moisture': {'complete_moisture': ()},
     'data_ingestion': {'parse_forecast': ('variables',), 'split_model_response': (), 'Forecast': ('field_sources','source_runs')},
     'soaring_physics': {'evaluate_thermals': ('loading',), 'thermal_usable_depth': ()},
     'forecast_coverage': {'complete_forecasts': ()},

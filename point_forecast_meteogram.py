@@ -9,28 +9,35 @@ import streamlit as st
 
 from config import LOCAL_TIMEZONE, METRES_TO_FEET, MPS_TO_KNOTS
 from soaring_physics import Profile, evaluate_thermals, wind_components
+from atmospheric_moisture import dewpoint, relative_humidity, ice_relative_humidity
 
-PROBE_API_REVISION = 4
-LEVELS = (950, 900, 850, 700, 600, 500, 400, 300, 250, 200)
+PROBE_API_REVISION = 5
+LEVELS = (950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200)
+PRESSURE_FIELDS = ('height_ft','rh','u','v','cloud_cover','temperature','dewpoint','rh_ice')
 FIELDS = ('temperature', 'dewpoint', 'depth', 'climb', 'heat', 'solar',
-          'u', 'v', 'gust', 'mslp', 'rain', 'cloud_low', 'cloud_mid', 'cloud_high', 'core', 'sink')
+          'u', 'v', 'gust', 'mslp', 'rain', 'cloud_low', 'cloud_mid', 'cloud_high', 'core', 'sink',
+          'cloud_total', 'cape', 'lifted_index', 'showers')
 
 
 def number(value):
     return round(float(value), 3) if value is not None and math.isfinite(value) else None
 
 
-def pressure_cloud(profile, pressure):
+def pressure_scalar(profile, pressure, name):
     values=profile.values
-    direct=values.get(f'cloud_cover_{pressure}hPa')
-    if direct is not None:return number(direct)
+    direct=values.get(f'{name}_{pressure}hPa')
+    if direct is not None:return direct
     for lower,upper in zip(profile.levels,profile.levels[1:]):
         if upper.pressure_hpa<pressure<lower.pressure_hpa:
-            a=values.get(f'cloud_cover_{int(lower.pressure_hpa)}hPa');b=values.get(f'cloud_cover_{int(upper.pressure_hpa)}hPa')
+            a=values.get(f'{name}_{int(lower.pressure_hpa)}hPa');b=values.get(f'{name}_{int(upper.pressure_hpa)}hPa')
             if a is None or b is None:return None
             weight=math.log(pressure/lower.pressure_hpa)/math.log(upper.pressure_hpa/lower.pressure_hpa)
-            return number(a+weight*(b-a))
+            return a+weight*(b-a)
     return None
+
+
+def pressure_cloud(profile, pressure):
+    return pressure_scalar(profile,pressure,'cloud_cover')
 
 
 def pressure_sample(profile, pressure):
@@ -39,14 +46,23 @@ def pressure_sample(profile, pressure):
     """
     level=profile.level(pressure)
     if level is not None:
-        return [number(v) for v in (level.height_m*METRES_TO_FEET,level.rh_percent,
-                                    level.u_mps,level.v_mps)]+[pressure_cloud(profile,pressure)]
+        temperature=level.temperature_c
+        td=pressure_scalar(profile,pressure,'dew_point')
+        rh=level.rh_percent if level.rh_percent is not None else relative_humidity(temperature,td)
+        if td is None:td=dewpoint(temperature,rh)
+        return [number(v) for v in (level.height_m*METRES_TO_FEET,rh,level.u_mps,level.v_mps,
+                pressure_cloud(profile,pressure),temperature,td,ice_relative_humidity(temperature,rh))]
     values=profile.values;suffix=f'_{pressure}hPa'
     height=values.get('geopotential_height'+suffix)
-    if height is None or height<=profile.forecast.terrain_elevation_m+2:return [None]*5
+    if height is None or height<=profile.forecast.terrain_elevation_m+2:return [None]*len(PRESSURE_FIELDS)
     speed,direction=values.get('wind_speed'+suffix),values.get('wind_direction'+suffix)
     u,v=wind_components(speed,direction) if speed is not None and direction is not None else (None,None)
-    return [number(height*METRES_TO_FEET),number(values.get('relative_humidity'+suffix)),number(u),number(v),pressure_cloud(profile,pressure)]
+    temperature,td=values.get('temperature'+suffix),values.get('dew_point'+suffix)
+    rh=values.get('relative_humidity'+suffix)
+    if rh is None:rh=relative_humidity(temperature,td)
+    if td is None:td=dewpoint(temperature,rh)
+    return [number(v) for v in (height*METRES_TO_FEET,rh,u,v,pressure_cloud(profile,pressure),
+                               temperature,td,ice_relative_humidity(temperature,rh))]
 
 
 def hour_sample(forecast, when, loading='dry'):
@@ -60,11 +76,12 @@ def hour_sample(forecast, when, loading='dry'):
              thermal.net_climb_knots,thermal.sensible_heat_flux_wm2,values.get('shortwave_radiation'),
              u,v,None if values.get('wind_gusts_10m') is None else values['wind_gusts_10m']*MPS_TO_KNOTS,
              values.get('pressure_msl'),values.get('precipitation'),values.get('cloud_cover_low'),
-             values.get('cloud_cover_mid'),values.get('cloud_cover_high'),thermal.core_updraught_knots,thermal.circling_sink_knots]
+             values.get('cloud_cover_mid'),values.get('cloud_cover_high'),thermal.core_updraught_knots,thermal.circling_sink_knots,
+             values.get('cloud_cover'),values.get('cape'),values.get('lifted_index'),values.get('showers')]
         return {'s':[number(v) for v in row],'p':[pressure_sample(profile,p) for p in LEVELS],
                 'sources':forecast.sources_at(when)}
     except (KeyError,ValueError,TypeError):
-        return {'s':[None]*len(FIELDS),'p':[[None]*5 for _ in LEVELS]}
+        return {'s':[None]*len(FIELDS),'p':[[None]*len(PRESSURE_FIELDS) for _ in LEVELS]}
 
 
 @st.cache_resource(ttl=1800,max_entries=12,show_spinner=False)
@@ -102,11 +119,12 @@ def prepare_bundle(run_id,day,loading='dry',*,_forecasts):
             'retrieved':primary.fetched_at.isoformat(),
             'series':[{'model':f.model,'retrieved':f.fetched_at.isoformat(),
                        'hours':[hour_sample(f,when,loading) for when in hours]} for f in ordered]})
-    return {'columns':columns,'stations':stations,'fields':FIELDS,'levels':LEVELS,
+    return {'columns':columns,'stations':stations,'fields':FIELDS,'levels':LEVELS,'pressure_fields':PRESSURE_FIELDS,
             'model':'UKMO seamless → ECMWF fallback' if len(models)>1 else next(iter(models),'Unavailable'),
-            'loading':loading,'max_distance_km':120,
+            'loading':loading,'loading_label':'Wing loading: '+('43 kg/m² · water ballast' if loading=='ballasted' else '34 kg/m² · no water ballast'),
+            'max_distance_km':120,
             'cycle_note':'Model run time is not supplied by this API. Retrieval time is shown.',
-            'notes':'Cached grid interpolation; no click-time request. Missing fields use labelled model support or a bracketed dry-parcel mixing-depth estimate. Solar heating drives thermal strength. Hourly sources appear in the table. RH/cloud shading is a proxy, not a measured cloud cross-section. Unsupported hours and levels stay unavailable. 10 m wind is supplied; 2 m wind is unavailable.'}
+            'notes':'Cached grid interpolation; no click-time request. Vertical temperature, dewpoint and humidity use model support, Magnus conversion or bracketed pressure interpolation. Cloud shapes classify moisture, inversions and instability; they are estimates, not observed clouds or confirmed thunderstorms. Hatched areas mark missing moisture evidence. Hourly sources and cloud types appear below. 10 m wind is supplied; 2 m wind is unavailable.'}
 
 
 def observation_payload(aviation):

@@ -97,7 +97,7 @@ def make_snapshot(forecasts, failures, anchor):
 class UKGridBundle:
     """One resource per cycle, with separate lazy results for each named model."""
     def __init__(self, cycle):
-        self.coverage_revision = 1
+        self.coverage_revision = 2
         self.cycle = cycle
         self.anchor = datetime.fromtimestamp(cycle * 1800, UTC)
         self._lock = Lock()
@@ -166,20 +166,20 @@ class UKGridBundle:
 
 
 @st.cache_resource(ttl=1800, max_entries=2, show_spinner=False)
-def load_uk_map_grid(forecast_cycle_30min_bucket, coverage_revision=1):
+def load_uk_map_grid(forecast_cycle_30min_bucket, coverage_revision=2):
     return UKGridBundle(forecast_cycle_30min_bucket)
 
 
 def session_grid(cycle):
     bundle = st.session_state.get('uk_map_grid_bundle')
-    if bundle is None or bundle.cycle != cycle or getattr(bundle,'coverage_revision',0) != 1:
+    if bundle is None or bundle.cycle != cycle or getattr(bundle,'coverage_revision',0) != 2:
         bundle = load_uk_map_grid(cycle)
         st.session_state['uk_map_grid_bundle'] = bundle
     return bundle
 
 
 @st.cache_resource(ttl=1800,max_entries=2,show_spinner=False)
-def regional_sources(cycle):
+def regional_sources(cycle, coverage_revision=2):
     def fetch():
         http=GridHttpClient()
         client=OpenMeteoClient(http.settings,http=http)
@@ -188,7 +188,7 @@ def regional_sources(cycle):
 
 
 @st.cache_resource(ttl=1800,max_entries=6,show_spinner=False)
-def regional_future(cycle,model_key):
+def regional_future(cycle,model_key, coverage_revision=2):
     result = Future()
     def completed(raw):
         def publish():

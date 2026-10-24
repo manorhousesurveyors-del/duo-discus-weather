@@ -954,3 +954,42 @@ each dropdown choice still produced five valid Long Mynd ratings with 8/8 local
 coverage. The borrowed model fields remained labelled. These are measured API
 responses, not a promise of provider uptime or validation of forecast skill.
 No alert email, WhatsApp message or mobile push was sent.
+
+## Vertical moisture and cloud graphics overhaul
+
+The full suite passed **280 tests**. The new moisture tests cover Magnus RH and
+dewpoint recovery, ice supersaturation, true zero preservation, hourly donor
+provenance, 900 hPa interpolation and all three models' request schemas. A Node
+test executes the production JavaScript classifier against nine synthetic
+profiles and the exact Cu depth, 150-ft LCL proximity, RH, CAPE, lifted-index,
+inversion, precipitation and ice-temperature boundaries.
+
+`python scripts/verify_cloud_graphics.py` passed nine Chromium image checks:
+humilis, mediocris, congestus, spread-out, Cb potential, stratus, cirrus, clear
+and missing-data scenes. Canvas draws took **6.1–9.0 ms** locally. Pixel checks
+distinguished shaded towers, silver stratus and translucent upper ice wisps;
+cloud bases stayed on the LCL. The pressure-profile selector and explicit
+34 kg/m² loading label also passed. Images and measurements are retained under
+the ignored `var/cloud-browser/` directory. These are schematic forecast-cloud
+illustrations, not rendered observations or validation against SkySight data.
+
+The full point-probe browser passed off/on, coordinate, airfield and BGA clicks,
+close/re-enable, seven-page isolation, high-DPI rendering, vertical scale,
+cached observations and document-cache recovery. Coordinate and airfield draws
+took **47.0 / 25.7 ms**, reaching paint in **52.6 / 27.4 ms**, without click-time
+network requests or Streamlit reruns. The existing dry/ballasted/paired thermal
+regression passed unchanged core/sink and usable-height checks. A separate real
+dropdown/browser pass covered all **15 model/day combinations**, with five valid
+ratings, 8/8 coverage, working maps and probes; maximum draw/paint was
+**37.8 / 43.2 ms**. No JavaScript errors were reported.
+
+Live verified-HTTPS requests confirmed the expanded **129-field** contract for
+ECMWF, ICON and UKMO. UKMO returned 900 hPa temperature, dewpoint, RH, cloud cover
+and CAPE; its missing showers can use a labelled donor. Lifted index remained
+unavailable when every provider omitted it. The first full-horizon UKMO request
+timed out, while ECMWF/ICON supplied usable fallback profiles; a subsequent
+two-hour UKMO schema check succeeded. Pressure levels below model terrain were
+correctly excluded. Provider omissions were not converted into invented clear
+sky or instability. No notifications were sent during validation.
+
+Dependency, Python compilation, JavaScript syntax and whitespace checks passed.

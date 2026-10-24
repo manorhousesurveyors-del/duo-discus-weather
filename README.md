@@ -31,6 +31,14 @@ Probe disclose supporting sources. Each day card separates **8/8 local hours
 covered** from the number of hours suitable for soaring. The Duo polar and
 single circling-sink deduction remain unchanged.
 
+The Point Forecast Probe now draws separate cumulus puffs/towers, inversion
+spread-out, layered stratus, ice-cloud wisps and potential Cb anvils. Expand
+**Vertical moisture, dewpoint and instability** to inspect temperature, dewpoint,
+water/ice humidity and cloud cover at each pressure level. Cloud forms are
+forecast heuristics, with missing evidence hatched. The header explicitly shows
+**Wing loading: 34 kg/m² · no water ballast** or the 43 kg/m² ballasted option;
+the loading choice does not disable clouds.
+
 Public weather APIs need no credentials. The first map/grid load can take a few
 minutes because requests respect Open-Meteo's weighted quota. Allow about 2 GB
 RAM for the dashboard and land mask; the mask alone expands to about 1 GB.
