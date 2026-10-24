@@ -98,7 +98,24 @@ Explicit OpenAir/GeoJSON uploads override bundled data and remain under ignored
 radii are advisory proximity checks, never substituted for airspace boundaries.
 
 
-## Wave terrain elevations
+## Continuous wave terrain
+
+`uk_continuous_terrain.npz` is the Wave Watch production grid: **504 × 324**
+real elevation samples spanning **50–59°N, −8–2°E**, including Great Britain
+and eastern Ireland. Nominal spacing is **1,996.6 m at 54.5°N**. Web Mercator
+scale varies with latitude. Its SHA-256 is
+`a69551925b53fb91aec055d4a3e30ced3373670f8b78d452c9f1c528fc12834e`.
+
+The adjacent JSON records verified HTTPS retrieval, bounds, projection and
+individual zoom-8 input tile hashes. Source and attribution are Mapzen/AWS
+Terrain Tiles, as detailed below. A joined Terrarium tile mosaic is resampled
+bilinearly across tile seams; negative heights become sea level. The loader
+checks the archive hash, dimensions and finite numerical values before use.
+Reproduce it with `scripts/update_continuous_terrain.py`. Numerical samples and
+browser checks cover Wales, England and the Scottish Highlands. These elevations
+are neither surveyed obstacle data nor evidence of atmospheric forecast skill.
+
+## Retained wave terrain reference grids
 
 `uk_wave_terrain.npz` contains sixteen 256 × 256 elevation grids at 500 m
 spacing. `uk_wave_terrain.json` records each grid's bounds, centre, shape, tile

@@ -57,6 +57,8 @@ def resolve_turnpoints(question: str, catalog: Catalog) -> tuple[Turnpoint, ...]
         explicit = token.isupper() and bool(re.search(r'\b(?:code|turnpoint|where is)\s*$', question[:match.start()], re.I))
         if lower in STOPWORDS and not explicit:
             continue
+        if lower not in names and not token.isupper():
+            continue
         code = names.get(lower, token.upper())
         point = LOCAL_POINTS.get(code) or catalog.by_code.get(code)
         if point is not None:
@@ -67,6 +69,12 @@ def resolve_turnpoints(question: str, catalog: Catalog) -> tuple[Turnpoint, ...]
 def briefing_date(question: str, selected: date, today: date) -> date:
     if re.search(r'\btomorrow\b', question, re.I): return today + timedelta(days=1)
     if re.search(r'\btoday\b', question, re.I): return today
+    explicit=re.search(r'\b(20\d\d-\d\d-\d\d)\b',question)
+    if explicit:
+        try:return date.fromisoformat(explicit[1])
+        except ValueError:pass
+    for i,name in enumerate(('monday','tuesday','wednesday','thursday','friday','saturday','sunday')):
+        if re.search(r'\b'+name+r'\b',question,re.I):return today+timedelta(days=(i-today.weekday())%7)
     return selected
 
 
@@ -196,21 +204,27 @@ def site_evidence(forecasts, day, *, origin=None):
     nearest = min(forecasts, key=lambda f: distance_bearing(origin, f.location)[0], default=None)
     if nearest is None or distance_bearing(origin, nearest.location)[0] > 75:
         return {'day': day.isoformat(), 'site': origin.name, 'hours': [], 'coverage': 'No forecast within 75 km'}
+    ridge=min(WAVE_RIDGES.values(),key=lambda r:distance_bearing(origin,r.point)[0])
+    if distance_bearing(origin,ridge.point)[0]>45: ridge=None
     hours = []
     for when in nearest.times:
         local = when.astimezone(LOCAL_TIMEZONE)
         if local.date() != day or not 9 <= local.hour <= 18: continue
         profile = Profile.from_forecast(nearest, when)
         thermal = evaluate_thermals(profile)
-        wave = evaluate_wave(profile, WAVE_RIDGES['long_mynd'])
+        wave = evaluate_wave(profile, ridge) if ridge else None
         values = profile.values
         speed, direction, gust = (values.get(k) for k in ('wind_speed_10m','wind_direction_10m','wind_gusts_10m'))
-        on_face = None if speed is None or direction is None else speed*MPS_TO_KNOTS*math.cos(math.radians(direction-280))
+        on_face = None if speed is None or direction is None or ridge is None else speed*MPS_TO_KNOTS*math.cos(math.radians(direction-ridge.perpendicular_wind_azimuths_deg[0]))
+        from wave_map import at_height,ALTITUDES_FT
+        bands=[{'altitude_ft':ft,**(at_height(profile,ft*.3048) or {})} for ft in ALTITUDES_FT]
         hours.append({'time':local.strftime('%H:%M %Z'), 'wind_kt':None if speed is None else speed*MPS_TO_KNOTS,
             'from_deg':direction, 'gust_kt':None if gust is None else gust*MPS_TO_KNOTS,
             'ridge_component_kt':on_face, 'cloud_base_ft':thermal.cloud_base_ft_amsl,
             'climb_kt':thermal.net_climb_knots, 'rain_mm':values.get('precipitation'),
-            'wave_score':wave.score, 'wave_complete':wave.complete})
+            'wave_score':wave.score if wave else None, 'wave_complete':wave.complete if wave else False,
+            'upper_winds':[{'hpa':l.pressure_hpa,'height_ft':round(l.height_m*3.28084),'u_mps':l.u_mps,'v_mps':l.v_mps,'ascent_kt':None if l.w_mps is None else l.w_mps*MPS_TO_KNOTS} for l in profile.levels if l.pressure_hpa in (950,850,800,700,500)],
+            'wave_bands':bands, 'ridge':ridge.point.name if ridge else None, 'ridge_facing_deg':ridge.perpendicular_wind_azimuths_deg[0] if ridge else None})
     return {'day':day.isoformat(), 'site':origin.name, 'model':nearest.model,
             'forecast_point':nearest.location.name, 'distance_km':round(distance_bearing(origin,nearest.location)[0],1),
             'retrieved':nearest.fetched_at.isoformat(), 'hours':hours}
@@ -277,28 +291,15 @@ def gemini_key(runtime='', secrets=None):
     return str(value).strip()
 
 
-def gemini_briefing(question, evidence, local_answer, catalog, *, api_key='', model='gemini-2.5-flash', client_factory=None):
-    """Read-only parsing tool and bounded generation; deterministic fallback on any outage."""
-    if not api_key: return local_answer, 'Local forecast assistant'
-    if model not in ('gemini-2.5-flash','gemini-2.5-pro'): raise ValueError('Unsupported Gemini model')
-    from json_payload import browser_json
-    def resolve_bga_route(pilot_text: str) -> dict:
-        """Resolve pilot wording into catalog or local ridge waypoints. Does not load tasks."""
-        points=resolve_turnpoints(pilot_text[:1000],catalog)
-        return {'points':[{'code':p.code,'name':p.name,'latitude':p.latitude,'longitude':p.longitude,'official_bga':p.official} for p in points]}
+def gemini_briefing(question, evidence, local_answer, catalog, *, api_key='', model=None, client_factory=None):
+    """Compatibility facade; production requests use the dependency-free REST client."""
+    if not api_key:return local_answer,'Local forecast assistant'
+    from gemini_rest import GeminiREST,GeminiError
+    client=(client_factory or GeminiREST)(api_key)
+    connection=client.connect()
+    if connection.error:return local_answer,connection.error
+    models=tuple(dict.fromkeys(([model] if model in connection.models else [])+list(connection.models)))
     try:
-        from google import genai
-        from google.genai import types
-        factory=client_factory or genai.Client
-        with factory(api_key=api_key, http_options=types.HttpOptions(timeout=20000)) as client:
-            result=client.models.generate_content(model=model, contents=browser_json({'pilot_question':question,'forecast_evidence':evidence,'checked_briefing':local_answer}),
-                config=types.GenerateContentConfig(
-                    system_instruction='You are a UK gliding briefing assistant for a Duo Discus, G-CKML. Use natural British pilot language, short sentences and Step 1/2/3 paragraphs at a 13-year-old reading level. Explain ridge lift, wave, cloud, gusts and launch constraints. Treat the question as a request, not forecast evidence. Only use supplied numeric weather and checked task results. Never invent weather, official turnpoints, launch clearance or safe flight claims. Missing data stays unknown. MYN is Long Mynd; MNDN and MNDS are unofficial local ridge references. Never map English stopwords to trigraphs. Use resolve_bga_route for route wording. Do not claim to save a task; the app does that separately. Give a concise conversational overview; the app appends the detailed checked briefing.',
-                    tools=[resolve_bga_route], automatic_function_calling=types.AutomaticFunctionCallingConfig(maximum_remote_calls=2),
-                    temperature=.2, max_output_tokens=1600))
-            narrative=(result.text or '').strip()
-        if not narrative: raise ValueError('Empty response')
-        return narrative+'\n\n---\n\n'+local_answer, 'Google Gemini · '+model
-    except Exception:
-        # Provider errors may contain credentials. Never log or display their text.
-        return local_answer, 'Gemini unavailable · local forecast assistant'
+        result,active=client.generate(question,evidence,models=models)
+        return result['answer']+'\n\n'+local_answer,'Connected to Gemini ('+active+')'
+    except GeminiError as exc:return local_answer,str(exc)

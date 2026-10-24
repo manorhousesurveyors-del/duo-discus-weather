@@ -52,21 +52,16 @@ class PilotTests(unittest.TestCase):
         self.assertIn('west-facing ridge',answer)
         self.assertNotIn('Build or load a task first',answer)
 
-    def test_gemini_tool_is_read_only_and_failure_preserves_local_briefing(self):
-        factory=MagicMock();client=factory.return_value.__enter__.return_value
-        client.models.generate_content.return_value=SimpleNamespace(text='Let’s review the ridge wind.')
-        text,source=gemini_briefing(QUESTION,{'wind':None},'Checked hourly briefing',self.catalog,api_key='private-test-key',client_factory=factory)
-        self.assertIn('Google Gemini',source);self.assertIn('Checked hourly briefing',text)
-        kwargs=client.models.generate_content.call_args.kwargs
-        self.assertNotIn('private-test-key',kwargs['contents'])
-        tool=kwargs['config'].tools[0]
-        self.assertEqual([p['code'] for p in tool(ROUTE)['points']],['MYN','MNDN','MNDS','MYN'])
-        client.models.generate_content.side_effect=RuntimeError('secret private-test-key')
-        text,source=gemini_briefing(QUESTION,{},'local fallback',self.catalog,api_key='private-test-key',client_factory=factory)
-        self.assertEqual(text,'local fallback');self.assertNotIn('private-test-key',source)
-        factory.reset_mock()
-        self.assertEqual(gemini_briefing(QUESTION,{},'local',self.catalog,client_factory=factory)[0],'local')
-        factory.assert_not_called()
+    def test_rest_facade_preserves_local_briefing_on_provider_failure(self):
+        from gemini_rest import Connection,GeminiError
+        factory=MagicMock();client=factory.return_value
+        client.connect.return_value=Connection(('gemini-3-flash-preview',),'key')
+        client.generate.return_value=({'answer':'Review the wind.'},'gemini-3-flash-preview')
+        text,source=gemini_briefing(QUESTION,{},'Checked hourly briefing',self.catalog,api_key='test-key',client_factory=factory)
+        self.assertIn('Connected to Gemini',source);self.assertIn('Checked hourly briefing',text)
+        client.generate.side_effect=GeminiError(429,'Quota exhausted')
+        text,source=gemini_briefing(QUESTION,{},'Local briefing',self.catalog,api_key='test-key',client_factory=factory)
+        self.assertEqual(text,'Local briefing');self.assertIn('HTTP 429',source)
 
     def test_key_precedence(self):
         with patch.dict('os.environ',{'GEMINI_API_KEY':'environment'}):
@@ -90,7 +85,7 @@ briefing_panel(load_catalog(),date(2026,10,24),'dry','ifs025',1,(),None,None,(),
             self.assertFalse(at.exception)
             saved=at.session_state['tasks_by_day']['2026-10-24']
             self.assertEqual([p.code for p in saved],['MYN','MNDN','MNDS','MYN'])
-            self.assertIn('Hourly forecast data is missing',at.session_state['briefing_messages'][-1]['content'])
+            self.assertIn('no complete hourly forecast',at.session_state['briefing_messages'][-1]['content'])
             day=NOW.date()
             payload={'date':day.isoformat(),'points':[{'code':p.code,'lat':p.latitude,'lon':p.longitude} for p in saved], 'complete':True}
             event={'last_object_clicked':{'duo':{'kind':'task_sync','value':json.dumps(payload),'nonce':'regression'}}}

@@ -42,7 +42,7 @@ def _packed(array):
     return base64.b64encode(zlib.compress(values.tobytes(),6)).decode()
 
 
-def wave_payload(forecasts,when,*,terrain=None):
+def legacy_wave_payload(forecasts,when,*,terrain=None):
     from terrain_wave import load_terrain,profile_for_domain,solve_field,mercator_y,inverse_y
     terrain=load_terrain() if terrain is None else terrain
     frames=[{'altitude':a,'tiles':[],'positive_cells':0,'negative_cells':0,'peak':None,'bars':[],'sites':[]} for a in ALTITUDES_FT]
@@ -93,6 +93,42 @@ def wave_payload(forecasts,when,*,terrain=None):
         'terrain_status':'Verified elevation grids loaded' if terrain else 'Terrain unavailable: run scripts/update_wave_terrain.py; no hill-specific field is fabricated.'}
 
 
+def wave_payload(forecasts,when,*,terrain=None):
+    """One continuous national canvas; no site clipping or ownership masks."""
+    if terrain is not None: return legacy_wave_payload(forecasts,when,terrain=terrain)
+    from terrain_wave import load_continuous_terrain,continuous_field
+    try:grid=load_continuous_terrain()
+    except (OSError,ValueError,KeyError):
+        return {'when':when.isoformat(),'frames':[{'altitude':a,'tiles':[],'peak':None,'sites':[],'positive_cells':0,'negative_cells':0} for a in ALTITUDES_FT],
+            'domains':[],'bands':WAVE_BANDS,'source':'Continuous terrain unavailable','limits':'No wave field fabricated.',
+            'terrain_status':'Verified continuous terrain is missing; run scripts/update_continuous_terrain.py.'}
+    fields,winds,profiles=continuous_field(grid,forecasts,when,ALTITUDES_FT)
+    h=grid['heights'];gy,gx=np.gradient(h,grid['spacing_m']);shade=np.clip((.7+.5*(-gx+gy))/np.sqrt(1+gx*gx+gy*gy),0,1)
+    relief=np.zeros((*h.shape,4),dtype=np.uint8);relief[:,:,:3]=np.rint(150+95*shade)[:,:,None];relief[:,:,3]=np.where(h>0,125,0)
+    frames=[];encoded=[]
+    for i,(alt,field) in enumerate(zip(ALTITUDES_FT,fields)):
+        rgba=np.zeros((*h.shape,4),dtype=np.uint8);valid=np.isfinite(field)
+        # Continuous colour interpolation between physical velocity stops.
+        stops=[-8,-4,-2,-.5,0,.5,2,4,6,8,12]
+        colours=['#153c92','#153c92','#277ad1','#5acde2','#ffffff','#fff4a1','#ffe234','#ff992b','#e8392e','#7a164b','#7a164b']
+        values=np.nan_to_num(field)
+        for c,j in enumerate((1,3,5)):rgba[:,:,c]=np.interp(values,stops,[int(col[j:j+2],16) for col in colours]).astype(np.uint8)
+        rgba[:,:,3]=np.where(valid,np.minimum(165,np.maximum(0,(np.abs(values)-.35)*300)),0).astype(np.uint8)
+        peak=float(np.nanmax(field)) if valid.any() else None
+        tile={'key':'uk','bounds':grid['bounds'],'image':_png(rgba),'peak':None if peak is None else round(max(0,peak),1),'wind':None,
+            'wind_u':_packed(winds[i][0]*100),'wind_v':_packed(winds[i][1]*100)}
+        encoded.append(_packed(field*100))
+        frames.append({'altitude':alt,'tiles':[tile],'peak':peak,'sites':[],
+            'positive_cells':int(np.count_nonzero(field>=.5)),'negative_cells':int(np.count_nonzero(field<=-.5))})
+    domain={'key':'uk','name':'Continuous UK / eastern Ireland','latitude':54.5,'longitude':-3.,'bounds':grid['bounds'],
+        'rows':h.shape[0],'cols':h.shape[1],'spacing_m':grid['spacing_m'],'terrain':_packed(h),'fields':encoded,'relief':_png(relief),
+        'diagnostics':{},'profiles':profiles,'weather_model':'Blended loaded profiles','weather_distance_km':None}
+    return {'when':when.isoformat(),'frames':frames,'domains':[domain],'bands':WAVE_BANDS,'encoding':'zlib-i16le-base64',
+        'source':'Continuous ~2 km Mapzen terrain · regional spectral wave solutions + available Open-Meteo background ascent',
+        'limits':'Independent linear estimate, not SkySight. Smooth atmospheric blending; variable map scale, unresolved rotor and uncertain amplitudes/crest positions. Unsupported heights or profiles stay transparent.',
+        'terrain_status':'Verified continuous elevation mosaic loaded'}
+
+
 def add_wave_map(map_view,forecasts,when):
     import streamlit as st
     from streamlit.runtime.scriptrunner import get_script_run_ctx
@@ -100,7 +136,7 @@ def add_wave_map(map_view,forecasts,when):
     from airspace import load_airspace,display_airspace
     from config import LOCAL_TIMEZONE
     import folium,html
-    key=(when.isoformat(),tuple((f.location.key,f.model,f.fetched_at.isoformat()) for f in forecasts))
+    key=(when.isoformat(),tuple((f.location.key,f.model,f.fetched_at.isoformat()) for f in forecasts if f.location.key.startswith(('region:','ridge:'))))
     cache=st.session_state.setdefault('_wave_products',{}) if get_script_run_ctx(suppress_warning=True) else {}
     if key not in cache:cache.clear();cache[key]=wave_payload(forecasts,when)
     script(map_view,'wave_map.js','installDuoWave',cache[key])
@@ -108,7 +144,7 @@ def add_wave_map(map_view,forecasts,when):
     if body:
         display=display_airspace(body)
         display={**display,'features':[{**f,'properties':{k:html.escape(v) if isinstance(v,str) else v for k,v in f['properties'].items()}} for f in display['features']]}
-        folium.GeoJson(display,name='Airspace boundaries · simplified display',show=False,
+        folium.GeoJson(display,name='Airspace boundaries · simplified display',show=True,
             style_function=lambda _:dict(color='#a52a49',weight=.8,fillOpacity=.02),
             tooltip=folium.GeoJsonTooltip(fields=['name','floor','ceiling'],aliases=['Name','Lower','Upper'])).add_to(map_view)
     reorder_layer_control(map_view)

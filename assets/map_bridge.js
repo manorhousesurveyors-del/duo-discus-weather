@@ -15,7 +15,14 @@ function installDuoBridge(map, identity) {
     const size=width+':'+height;if(size===lastSize)return;lastSize=size;
     map.invalidateSize(true);map.fire('resize',{newSize:L.point(width,height)});
   });};
-  const observer=new ResizeObserver(resize),visible=new IntersectionObserver(entries=>{if(entries.some(e=>e.isIntersecting))resize();});
+  let pendingPoint=null;
+  map.on('click',e=>{const p=map._duoBga?.nearest(e.containerPoint,18)||map._duoAirfields?.nearest(e.containerPoint,18);pendingPoint={lat:p?.lat??e.latlng.lat,lon:p?.lon??e.latlng.lng,name:p?.name||'Clicked map location'};});
+  const observer=new ResizeObserver(resize),visible=new IntersectionObserver(entries=>{
+    if(entries.some(e=>e.isIntersecting))resize();
+    // Publish the last selected location once when leaving a map, never on
+    // mousemove or on every task click. The bot then sees that exact point.
+    else if(pendingPoint&&window.duoMapEvent){window.duoMapEvent('briefing_point',JSON.stringify(pendingPoint),[pendingPoint.lat,pendingPoint.lon]);pendingPoint=null;}
+  });
   observer.observe(container);visible.observe(container);const timer=setInterval(resize,500);
   document.addEventListener('visibilitychange',resize);resize();
   map.on('unload',()=>{observer.disconnect();visible.disconnect();clearInterval(timer);cancelAnimationFrame(resizeFrame);document.removeEventListener('visibilitychange',resize);});

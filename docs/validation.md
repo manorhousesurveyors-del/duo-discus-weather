@@ -587,3 +587,53 @@ there is no `Previous state unavailable` throw in the workflow or alert runner.
 Final full suite: **211 tests passed** (`python -m unittest discover -s tests -v`,
 119 seconds). `pip check`, Python compilation, generated map JavaScript checks
 and `git diff --check` passed. The final browser process exited successfully.
+
+## Free-form REST assistant, elastic tasks and continuous wave field
+
+Validated on **24 October 2026**, Python 3.12 and headless Chromium.
+
+- Full suite: **220 tests passed** in 132 seconds. Coverage includes account model
+  discovery/pagination, API-key and bearer headers, credential-redacted HTTP
+  errors, disabled-model fallback, quota handling, ordinary English versus BGA
+  codes, site-specific ridge headings, five-day hourly evidence, grounded route
+  proposals, missing weather and continuous terrain/wave blending.
+- Dependency consistency, Python compilation, JavaScript syntax and
+  `git diff --check` passed.
+- Browser local fallback answered the described Mynd ridge route and a weather
+  forecast with hourly winds, sector thresholds, five-day stars and both national
+  circuit assessments. No 250 km gate or lowercase-code substitution appeared.
+- Browser REST integration used an **explicit mock provider**: account discovery,
+  a 404 for `gemini-3.1-pro-preview`, fallback to `gemini-3-flash-preview`, free-form
+  response, checked route proposal and loading `MYN → MNDN → MYN` all passed.
+  Clicking Denbigh on the map, leaving for the bot and asking for the weather
+  forecast “here” also selected Denbigh’s site briefing correctly.
+  A separate verified-HTTPS request reached Google's actual models endpoint and
+  returned an authentication error for an intentionally invalid credential.
+  No valid account key was available; live generation/model entitlement is
+  therefore **not verified**. The model list makes no unsupported availability
+  claim about Gemini 3.8 or any other version.
+- Physical mouse checks snapped a cursor 15 px from CVN exactly onto the point,
+  replaced a turnpoint, inserted one through a midpoint handle, and moved linked
+  Start/Finish points. There were **zero server updates during movement and one
+  per drop**. Measured elastic updates were 1.1–2.9 ms on this test machine.
+- Wave browser checks found one national domain with BGA dots hidden. Terrain
+  and supported wave values were sampled over Snowdonia, Cambrian Mountains,
+  Brecon, Mynd, Pennines, Lakes, Cheviots, Highlands, Cairngorms and NW Highlands.
+  All nine height switches stayed in the browser (0.7–2.3 ms measured). Clicked
+  and dragged cross-sections also passed, with zero server updates.
+- General map checks reported zero JavaScript exceptions or failed public assets.
+  Task, Wave and Traffic maps remained visible with missing weather. Synthetic
+  recorded weather tests exercise rendering and logic, not meteorological skill.
+
+Public map assets were obtained through Python's certificate-verifying HTTPS
+client for Chromium in the managed proxy environment. No TLS verification was
+disabled. Wave elevations were fetched from the attributed real Terrarium data;
+the resulting ~2 km full-domain linear model remains an independent diagnostic,
+not a reproduction or validation of SkySight forecasts.
+
+Reproduction scripts: `scripts/verify_client_maps.py`,
+`scripts/verify_route_drag.py` (recorded app on port 8504), and
+`scripts/verify_gemini_browser.py` (isolated `scripts/gemini_browser_fixture.py`
+on port 8505). Both apps require a recorded `DUO_DASHBOARD_SNAPSHOT` and should
+use separate `DUO_TASK_STORE` directories. The Gemini fixture patches only the
+transport for its process; it is never imported by the production app.

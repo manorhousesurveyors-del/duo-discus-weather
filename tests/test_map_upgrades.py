@@ -199,5 +199,5 @@ class RouteAndWaveTests(unittest.TestCase):
         self.assertTrue(all(tile['image'].startswith('data:image/png;base64,') for f in body['frames'] for tile in f['tiles']))
         self.assertTrue(any(f['negative_cells'] for f in body['frames']))
         self.assertTrue(any(f['positive_cells'] for f in body['frames']))
-        self.assertTrue(any('Denbigh' in s['name'] for s in body['frames'][0]['sites']))
-        empty=wave_payload((),NOW);self.assertTrue(all(f['positive_cells']==0 and not f['bars'] for f in empty['frames']))
+        self.assertEqual(len(body['domains']),1);self.assertEqual(body['domains'][0]['bounds'],[[50.,-8.],[59.,2.]])
+        empty=wave_payload((),NOW);self.assertTrue(all(f['positive_cells']==0 and not f.get('bars') for f in empty['frames']))

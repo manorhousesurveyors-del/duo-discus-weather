@@ -217,6 +217,12 @@ def process_map_event(interaction,catalog,day,mode,*,event_key='last_map_event',
     clicked=interaction.get('last_object_clicked') or {}
     if clicked.get('duo') and clicked!=previous.get('last_object_clicked'):
         command=clicked['duo'];kind=command.get('kind');value=command.get('value','')
+        if kind=='briefing_point':
+            try:
+                data=json.loads(value)
+                st.session_state['briefing_point']=GeoPoint('clicked',str(data.get('name','Clicked map location'))[:100],float(data['lat']),float(data['lon']))
+            except (ValueError,TypeError,KeyError):pass
+            return
         if kind=='task_sync':
             from uk_airfields import airfield_by_id
             from route_tools import complete_task
@@ -374,94 +380,98 @@ def catalog_panel(catalog):
 
 
 def briefing_panel(catalog,day,loading,model_key,bucket,forecasts,assessment,classification,waves,*,recorded=False,today=None):
-    from briefing_bot import briefing_date, pilot_briefing, gemini_key, gemini_briefing
+    import hashlib
+    from briefing_bot import briefing_date,gemini_key
+    from gemini_rest import GeminiREST,Connection,GeminiError
+    from flight_briefing import build_context,local_response,validated_suggestions
     st.subheader('Help & Briefing Bot')
-    st.caption('Ask about the selected day, your task, BGA points or a new route. Suggestions are checked against corridor weather before being marked achievable.')
-    with st.expander('Gemini settings · optional'):
-        runtime=st.text_input('GEMINI_API_KEY',type='password',key='gemini_runtime_key',help='Optional: use Google Gemini for a conversational overview. Your key stays in this server session. Weather and your question are sent to Google only when you ask. Leave blank for the local assistant.')
-        model=st.selectbox('Gemini model',['gemini-2.5-flash','gemini-2.5-pro'],key='gemini_model',help='Flash answers quickly. Pro may take longer. Your Google account quota and charges apply.')
-        if st.button('Forget pasted key',help='Remove the pasted key from this session.',on_click=lambda:st.session_state.pop('gemini_runtime_key',None)):
-            st.rerun()
-    try: secret_key=st.secrets.get('GEMINI_API_KEY','')
-    except (FileNotFoundError,st.errors.StreamlitSecretNotFoundError): secret_key=''
-    api_key=gemini_key(runtime,{'GEMINI_API_KEY':secret_key})
-    context=f'{day.isoformat()}|{loading}|{model_key}|{bucket}|{catalog.content_sha256}'
+    st.caption('Ask freely about weather, flying sectors, a clicked location or any task. Route proposals are checked before you load them.')
+    try: secret=st.secrets.get('GEMINI_API_KEY','')
+    except (FileNotFoundError,st.errors.StreamlitSecretNotFoundError):secret=''
+    with st.expander('Gemini settings · connection and models'):
+        runtime=st.text_input('GEMINI_API_KEY',type='password',key='gemini_runtime_key',help='Google API key or bearer token. Questions and forecast context go to Google only when you ask. The credential remains in server session memory.')
+        auth=st.selectbox('Credential type',['auto','key','bearer'],format_func=lambda v:{'auto':'Auto detect','key':'API key','bearer':'Bearer token'}[v],help='Auto tries the credential type suggested by its prefix, then the alternative on an authentication error. AQ prefixes alone do not prove token validity.')
+        key=gemini_key(runtime,{'GEMINI_API_KEY':secret})
+        fingerprint=hashlib.sha256((auth+key).encode()).hexdigest()
+        refresh=st.button('Check connection / refresh models',help='Query Google’s model list for this credential. Only available text models appear in the selector.')
+        if st.button('Forget pasted key',help='Clear this session’s pasted credential.',on_click=lambda:st.session_state.pop('gemini_runtime_key',None)):st.rerun()
+        saved=st.session_state.get('gemini_connection')
+        if saved is None or saved['fingerprint']!=fingerprint or refresh:
+            connection=GeminiREST(key,auth).connect()
+            st.session_state['gemini_connection']={'fingerprint':fingerprint,'connection':connection}
+            st.session_state.pop('gemini_active_model',None);st.session_state.pop('gemini_last_error',None)
+        else:connection=saved['connection']
+        choices=list(connection.models)
+        model=st.selectbox('Gemini model',choices or ['Local assistant'],help='Discovered from your account. Newer available Gemini versions appear first. Disabled models fall back to another listed model.')
+        status=st.session_state.get('gemini_last_error') or connection.error
+        if key and status:st.error(status)
+        elif key:st.success('🟢 Connected to Gemini ('+st.session_state.get('gemini_active_model',model)+')')
+        else:st.caption('Local forecast assistant · no key needed')
     history=st.session_state.setdefault('briefing_messages',[])
     for message in history[-12:]:
-        with st.chat_message(message['role']): st.markdown(message['content'])
-    buttons=st.columns(3)
-    question=None
-    if buttons[0].button('Suggest 250 km',help='Search official BGA triangles and out-and-returns from MYN, screen weather, then verify the best candidate corridors.'):
-        question='Suggest a 250 km task from MYN'
-    if buttons[1].button('Suggest 300 km',help='Search 300 km BGA candidates from MYN using today’s selected model and wing loading. Missing data cannot produce an achievable recommendation.'):
-        question='Suggest a 300 km task from MYN'
-    if buttons[2].button('Explain my task',help='Explain the active task’s launch window, weakest leg, weather constraints and confidence limits using its current calculation.'):
-        question='Why is my task achievable or not?'
-    typed=st.chat_input('Ask for a task, day briefing, turnpoint or explanation…',max_chars=1000)
-    question=typed or question
+        with st.chat_message(message['role']):st.markdown(message['content'])
+    buttons=st.columns(3);question=None;explicit_search=False
+    if buttons[0].button('Suggest 250 km',help='Explicitly search candidate 250 km BGA tasks, and explain the regional weather even when none fits.'):
+        question='Suggest a 250 km task from MYN';explicit_search=True
+    if buttons[1].button('Suggest 300 km',help='Explicitly search candidate 300 km BGA tasks with hourly corridor checks.'):
+        question='Suggest a 300 km task from MYN';explicit_search=True
+    if buttons[2].button('Explain my task',help='Discuss the active route and alternatives against regional and hourly weather.'):
+        question='Explain my task and the best sectors to use'
+    question=st.chat_input('Ask for a task, day briefing, turnpoint or explanation…',max_chars=4000) or question
     if question:
-        history.append({'role':'user','content':question})
-        intent=parse_intent(question,catalog)
         requested_day=briefing_date(question,day,today or datetime.now(LOCAL_TIMEZONE).date())
-        evidence={}
-        if intent.kind=='route':
-            route=intent.route
-            try:
-                validate_task(route)
-                weather,failures=task_weather(route,forecasts,model_key,bucket,recorded=recorded)
-                result=assess_task(route,weather,requested_day,loading,preference=(FORECAST_MODELS[model_key].api_name,))
-                set_task(requested_day,route,rerun=False)
+        selected=st.session_state.get('briefing_point')
+        if not selected and st.session_state.get('inspector_coordinate'):
+            lat,lon=st.session_state['inspector_coordinate'];selected=GeoPoint('clicked','Clicked map location',lat,lon)
+        if not selected and st.session_state.get('selected_airfield'):
+            from uk_airfields import airfield_by_id
+            field=airfield_by_id(st.session_state['selected_airfield']);selected=field.turnpoint.point if field else None
+        with st.spinner('Comparing hourly weather, five-day sectors and your route…'):
+            evidence,proposed=build_context(question,catalog,forecasts,requested_day,today or day,loading,selected=selected,active=active_task(day),assessment=assessment)
+            response=local_response(question,evidence);suggestions=[]
+            if proposed:
+                suggestions=[('Your described route','Review the weather verdict before loading.',proposed)]
+                # Preserve explicit route-entry behaviour, but questions and AI
+                # proposals never mutate the active task without the load button.
+                if not re.search(r'\?|\b(?:forecast|could|should|would|suggest)\b',question,re.I):
+                    set_task(requested_day,proposed,rerun=False)
+                    from route_tools import complete_task
+                    complete_task(requested_day,proposed)
+                    response='Loaded your described route.\n\n'+response
+                    if today is not None and 0<=(requested_day-today).days<5:st.session_state['bot_forecast_day']=(requested_day-today).days
+            if explicit_search:
+                intent=parse_intent(question,catalog);origin=catalog.by_code.get('MYN')
+                tasks=shortlist_tasks(catalog,origin,intent.target_km,forecasts,requested_day,loading,preference=(FORECAST_MODELS[model_key].api_name,))
+                suggestions.extend(('Candidate task','Compare the checked hourly corridor and margins.',task) for task in tasks)
+            source='Local forecast assistant'
+            if key and connection.models:
+                try:
+                    client=GeminiREST(key,connection.auth)
+                    answer,active=client.generate(question,evidence,models=tuple(dict.fromkeys([model,*connection.models])),history=history)
+                    response=answer['answer']+'\n\n---\n\n**Checked weather evidence**\n\n'+response
+                    suggestions+=validated_suggestions(answer,catalog)
+                    st.session_state['gemini_active_model']=active;st.session_state.pop('gemini_last_error',None)
+                    source='Connected to Gemini ('+active+')'
+                except GeminiError as exc:
+                    st.session_state['gemini_last_error']=str(exc);source=str(exc)+' · local briefing below'
+            elif key:source=connection.error+' · local briefing below'
+            evaluated=[]
+            for name,reason,task in suggestions[:4]:
+                weather,failures=task_weather(task,forecasts,model_key,bucket,recorded=recorded)
+                result=assess_task(task,weather,requested_day,loading,preference=(FORECAST_MODELS[model_key].api_name,))
+                evaluated.append((name,reason,task,result,failures))
+            st.session_state['assistant_routes']={'day':requested_day,'model':model_key,'loading':loading,'items':evaluated}
+        history.extend([{'role':'user','content':question},{'role':'assistant','content':response+'\n\n*'+source+'*'}])
+        st.session_state['briefing_messages']=history[-24:];st.rerun()
+    saved=st.session_state.get('assistant_routes',{})
+    if saved.get('model')==model_key and saved.get('loading')==loading:
+        for i,(name,reason,task,result,failures) in enumerate(saved.get('items',[])):
+            st.markdown('**'+name+'** · '+' → '.join(p.code for p in task))
+            st.caption(reason+' '+explain_task(result))
+            if failures:st.caption('; '.join(failures[:2]))
+            if st.button('Load suggested route onto map',key=f'assistant_load_{i}',help='Load this proposed geometry on its briefing date. The displayed verdict may be marginal, unachievable or unknown; loading is not flight approval.'):
+                set_task(saved['day'],task,rerun=False)
                 from route_tools import complete_task
-                complete_task(requested_day,route)
-                if today is not None and 0<=(requested_day-today).days<5:
-                    st.session_state['bot_forecast_day']=(requested_day-today).days
-                response,evidence=pilot_briefing(question,forecasts,requested_day,assessment=result,route=route)
-                response=f'Loaded your task for {requested_day:%a %d %b}.\n\n'+response
-                if failures: response+='\n\nForecast gaps: '+'; '.join(failures[:3])
-            except (ValueError,IngestionError) as exc:
-                response=f'Please check this route: {exc}'
-        elif intent.kind=='suggest':
-            origin=catalog.by_code.get(intent.origin_code)
-            if origin is None:
-                response=f'Origin {intent.origin_code} is not in the current catalog. Check the trigraph in the task builder.'
-            else:
-                with st.spinner('Screening BGA geometry and checking candidate corridor forecasts…'):
-                    tasks=shortlist_tasks(catalog,origin,intent.target_km,forecasts,day,loading,
-                        preference=(FORECAST_MODELS[model_key].api_name,),shape=intent.shape)
-                    suggestions=[]
-                    for task in tasks:
-                        weather,failures=task_weather(task,forecasts,model_key,bucket,recorded=recorded)
-                        result=assess_task(task,weather,day,loading,preference=(FORECAST_MODELS[model_key].api_name,))
-                        suggestions.append((task,result,failures))
-                suggestions.sort(key=lambda entry:(entry[1].best is not None,entry[1].verdict=='FULLY ACHIEVABLE',
-                                                   -entry[1].best.elapsed_hours if entry[1].best else -999),reverse=True)
-                st.session_state['task_suggestions']={'context':context,'items':suggestions}
-                good=[entry for entry in suggestions if entry[1].best is not None]
-                if good:
-                    task,result,_=good[0]
-                    response=f'Best checked candidate: **'+ ' → '.join(p.code for p in task)+'**. '+explain_task(result)
-                    if intent.load_best:
-                        set_task(day,task,rerun=False); response+=' Loaded as your active task.'
-                else:
-                    response=(f'No achievable {intent.target_km} km task was established among {len(suggestions)} checked corridors. '
-                              'Review the candidate reasons below, choose a shorter distance, or refresh incomplete forecasts. This bounded search is not proof that no other route could work.')
-        elif intent.kind in ('weather','wave','day','help') or (intent.kind=='explain' and assessment is None):
-            response,evidence=pilot_briefing(question,forecasts,requested_day,assessment=assessment if requested_day==day else None)
-        else: response=answer_question(intent,catalog,assessment,classification,waves)
-        with st.spinner('Preparing your pilot briefing…'):
-            response,source=gemini_briefing(question,evidence,response,catalog,api_key=api_key,model=model)
-        response+='\n\n*'+source+'*'
-        history.append({'role':'assistant','content':response})
-        st.session_state['briefing_messages']=history[-24:]
-        st.rerun()
-    saved=st.session_state.get('task_suggestions',{})
-    if saved.get('context')==context:
-        for i,(task,result,failures) in enumerate(saved['items']):
-            st.markdown('**'+' → '.join(p.code for p in task)+f'** · {result.distance_km:.0f} km · {result.verdict}')
-            st.caption(explain_task(result))
-            if failures: st.caption('; '.join(failures[:3]))
-            if st.button('Load this task',key=f'bot_load_{i}',disabled=result.best is None,
-                         help='Load this verified candidate into the selected day’s builder and draw its legs. Operational checks remain necessary before flight.'):
-                set_task(day,task)
-    elif saved:
-        st.caption('Earlier suggestions belong to different forecast settings. Request new suggestions for the selected day/model/loading.')
+                complete_task(saved['day'],task)
+                if today is not None and 0<=(saved['day']-today).days<5:st.session_state['bot_forecast_day']=(saved['day']-today).days
+                st.rerun()

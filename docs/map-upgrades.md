@@ -101,27 +101,27 @@ Current NOTAM activation and legal clearance need official sources.
 
 ## Wave Watch
 
-The previous regional positive-motion interpolation and lee bars are replaced
-by signed terrain-forced fields over 16 overlapping 128 km computational windows.
-Real 500 m elevation samples cover the named Welsh, Shropshire, English and
-Scottish ridges. These windows define calculation coverage; their shapes are
-not wave polygons. The nearest available ridge atmosphere must be within 160 km.
+A single terrain grid covers 50–59°N, −8–2°E at approximately 2 km spacing.
+Regional atmospheric columns force the full grid, with smoothly blended signed
+solutions and no internal site clipping boxes. BGA turnpoints and airfield dots
+start hidden; the Layers control can show them. Airspace uses thin boundaries.
 
 Nine buttons select 3,000 / 7,000 / 10,000 / 12,000 / 13,000 / 16,000 / 20,000 /
 23,000 / 25,000 ft AMSL. All raster layers, wind vectors and section samples are
 bundled and decoded once. Altitude switches, pan/zoom, hill clicks and dragged
 cross-sections need no forecast requests or Python reruns. Each badge gives the
-peak positive estimate for computational regions intersecting the current view.
+peak positive estimate among grid cells in the current view.
 It is not the strength at every point in that height band.
 
 Blue/cyan show sink; pale yellow through purple show lift. Values between
-−0.5 and +0.5 kt, below-ground cells and unsupported data are transparent.
+−0.35 and +0.35 kt are transparent, with a smooth alpha transition towards
+±0.5 kt. Below-ground cells and unsupported data are also transparent.
 Regular black arrows show flow towards the wind's destination. A hill click
 selects 20 km upwind to 70 km downwind; Draw Wave X-Section permits any dragged
 track. The chart spans the surface to 25,000 ft, samples terrain at 1 km and
 interpolates the nine solved levels. Unsupported heights remain grey.
 
-The 500 m terrain spacing does not make the coarse atmospheric forecast equally
+The approximately 2 km terrain spacing does not make the coarse atmospheric forecast equally
 precise. The damped linear Fourier/WKB model cannot establish exact crests,
 rotor, nonlinear breaking, usable climb or a safe entry point. It is an
 independent diagnostic, not SkySight data or a replica of its forecast model.

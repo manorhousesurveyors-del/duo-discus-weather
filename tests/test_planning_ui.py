@@ -99,7 +99,7 @@ class PlanningUiTests(unittest.TestCase):
                 self.assertFalse(at.exception)
                 self.assertEqual(at.session_state['tasks_by_day'][prefix.removeprefix('sidebar_')],())
 
-    def test_bot_only_loads_after_explicit_click_and_successful_weather_check(self):
+    def test_bot_proposals_show_verdict_and_only_load_after_explicit_click(self):
         from streamlit.testing.v1 import AppTest
         from tests.test_task_planning import weather
         script='''
@@ -117,14 +117,15 @@ briefing_panel(b.load_catalog(),date(2026,6,10),'dry','ifs025',1,(),None,None,()
                 next(button for button in at.button if button.label=='Suggest 250 km').click().run()
                 self.assertFalse(at.exception)
                 self.assertFalse(list(Path(directory).glob('*.json')))
-                load=next(button for button in at.button if button.label=='Load this task')
-                self.assertEqual(load.disabled,not available)
+                load=next(button for button in at.button if button.label=='Load suggested route onto map')
+                self.assertFalse(load.disabled)
                 if available:
                     load.click().run()
                     self.assertFalse(at.exception)
                     self.assertEqual([p.code for p in at.session_state['tasks_by_day']['2026-06-10']],['AAA','BBB','AAA'])
                 else:
-                    self.assertIn('No achievable',at.session_state['briefing_messages'][-1]['content'])
+                    self.assertIn('unknown',at.session_state['briefing_messages'][-1]['content'])
+                    self.assertIn('INSUFFICIENT DATA',str(at.session_state['assistant_routes']))
 
     def test_rendered_thermal_png_preserves_physical_palette(self):
         import base64

@@ -84,7 +84,9 @@ separate terrain calculation below; it does not add assumed lift to XC tasks.
 
 ## Terrain-forced Wave Watch
 
-Mapzen Terrarium elevations are sampled on sixteen 256 × 256 grids at 500 m.
+Mapzen Terrarium elevations form one 504 × 324 grid covering 50–59°N, −8–2°E.
+Nominal spacing is 1,997 m at 54.5°N in Web Mercator; ground scale varies with
+latitude. This includes eastern Ireland, not the whole island.
 After light spatial smoothing, terrain slope forces vertical velocity through
 `w0 = U dh/dx + V dh/dy`. Reported U⊥ is the RMS slope-normal wind component;
 the Fourier forcing itself uses the local two-dimensional gradient.
@@ -105,7 +107,18 @@ beyond the profile, below-ground wave values or invented missing terrain is used
 This approximates both signed phases; damping, linearity and horizontal uniformity
 of each atmospheric column are assumptions. It is not a terrain-resolving NWP
 solver and has not been calibrated against observed UK wave climbs. The displayed
-500 m detail and interpolated sections must not imply equivalent forecast skill.
+2 km detail and interpolated sections must not imply equivalent forecast skill.
+
+Up to eight spatially separated regional/ridge atmosphere profiles each force
+the entire terrain grid. Gaussian weights (110 km scale) blend their signed
+solutions smoothly; there are no nearest-site ownership or crop boundaries.
+Cells farther than 350 km from a supported profile remain unknown. Available
+pressure-level model vertical motion adds a background ascent/sink component;
+missing motion is not fabricated. Below-terrain and unsupported altitude cells
+remain masked. This blend of horizontally uniform linear solutions is an
+approximation, not a spatially varying atmospheric PDE or SkySight’s algorithm.
+The finite domain is padded and tapered at its outer edges. The older sixteen
+500 m grids remain only for reference/regression coverage.
 
 ## Independent UK RASP-style day stars
 

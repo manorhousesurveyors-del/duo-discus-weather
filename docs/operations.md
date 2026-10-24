@@ -249,6 +249,7 @@ The static file contains only the filtered current public reports, not a flight
 history. Both static snapshots and `var/ogn-devices.json` are ignored by Git.
 
 Bundled wave terrain needs no elevation download during normal map use.
-To reproduce or refresh it, run `.venv/bin/python scripts/update_wave_terrain.py`.
+To reproduce or refresh it, run `.venv/bin/python scripts/update_continuous_terrain.py`.
 Inspect the metadata/hashes and rerun tests before committing the new archive.
-This makes a bounded 34-tile elevation download, not a basemap scrape.
+This fetches the bounded set of zoom-8 elevation tiles recorded in the metadata.
+The older `update_wave_terrain.py` reproduces the retained 500 m reference grids.

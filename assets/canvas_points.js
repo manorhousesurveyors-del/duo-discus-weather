@@ -25,7 +25,7 @@ function installDuoCanvasAPI(map) {
    }
    this.lastDrawMs=performance.now()-start;
   },
-  nearest(point){let best=null,dist=13;const x=Math.floor(point.x/24),y=Math.floor(point.y/24);for(let i=-1;i<=1;i++)for(let j=-1;j<=1;j++)for(const hit of this.hits.get((x+i)+':'+(y+j))||[]){const d=Math.hypot(hit.x-point.x,hit.y-point.y);if(d<dist){best=hit.p;dist=d;}}return best;},
+  nearest(point,radius=13){let best=null,dist=radius;const x=Math.floor(point.x/24),y=Math.floor(point.y/24);for(let i=-1;i<=1;i++)for(let j=-1;j<=1;j++)for(const hit of this.hits.get((x+i)+':'+(y+j))||[]){const d=Math.hypot(hit.x-point.x,hit.y-point.y);if(d<dist){best=hit.p;dist=d;}}return best;},
   hover(e){const p=this.nearest(e.containerPoint);if(p===this.hovered)return;this.hovered=p;if(this.tip)this._map.removeLayer(this.tip);if(!p){this.options.onLeave?.();return;}
    this.tip=L.tooltip({direction:'top',offset:[0,-8],opacity:.97}).setLatLng([p.lat,p.lon]).setContent(this.options.tooltip?.(p)||duoEsc(p.name)).addTo(this._map);this.options.onHover?.(p,this.tip);},
   click(e){const p=this.nearest(e.containerPoint);if(!p)return;if(e.originalEvent){if(e.originalEvent._duoSelected)return;e.originalEvent._duoSelected=true;}

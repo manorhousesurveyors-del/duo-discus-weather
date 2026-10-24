@@ -100,7 +100,7 @@ async def verify(args):
             if await root.evaluate('el=>window.map_div._duoWave.ready'):break
             await page.wait_for_timeout(500)
         assert await root.evaluate('el=>window.map_div._duoWave.ready')
-        await root.evaluate('el=>window.map_div.setView([52.85,-3.5],8,{animate:false})')
+        await root.evaluate('el=>{window.map_div.setView([52.85,-3.5],8,{animate:false});}')
         await page.wait_for_timeout(800)
         baseline = len(sent)
         result['wave'] = {'levels':[]}
@@ -108,7 +108,7 @@ async def verify(args):
             await frame.locator(f'[data-wave-level="{i}"]').click()
             result['wave']['levels'].append(await root.evaluate('el=>{const w=window.map_div._duoWave;return {altitude:w.data.frames[w.index].altitude,switch_ms:w.switchMs,render_ms:w.renderMs};}'))
         await frame.locator('[data-wave-level="3"]').click()
-        await root.evaluate('el=>window.map_div.on("click",e=>window._verifiedWaveClick={lat:e.latlng.lat,lon:e.latlng.lng})')
+        await root.evaluate('el=>{window.map_div.on("click",e=>window._verifiedWaveClick={lat:e.latlng.lat,lon:e.latlng.lng});}')
         xy = await root.evaluate('el=>{const p=window.map_div.latLngToContainerPoint([52.92,-3.7]);return {x:p.x,y:p.y};}')
         box = await root.bounding_box()
         await page.mouse.click(box['x']+xy['x'],box['y']+xy['y'])
@@ -118,7 +118,11 @@ async def verify(args):
         assert abs(result['wave']['clicked']['lon']+3.7)<.01
         result['wave']['section_ms'] = await root.evaluate('el=>window.map_div._duoWave.sectionMs')
         result['wave']['regions'] = await root.evaluate("el=>window.map_div._duoWave.data.domains.map(d=>({name:d.name,terrain:window.map_div._duoWave.pointProfile(L.latLng(d.latitude,d.longitude)).terrain}))")
-        assert len(result['wave']['regions'])==16
+        assert len(result['wave']['regions'])==1
+        assert await root.evaluate('el=>!window.map_div.hasLayer(window.map_div._duoBga)')
+        result['wave']['coverage']=await root.evaluate("el=>{const w=window.map_div._duoWave;return [[53.07,-4.08,'Snowdonia'],[52.47,-3.78,'Cambrian'],[51.9,-3.4,'Brecon'],[52.5,-2.9,'Mynd'],[54.7,-2.48,'Pennines'],[54.55,-3.05,'Lakes'],[55.48,-2.15,'Cheviots'],[56.8,-5,'Highlands'],[57.2,-3.5,'Cairngorms'],[58,-5,'NW Highlands']].map(([lat,lon,name])=>{const p=w.pointProfile(L.latLng(lat,lon));return {name,terrain:p.terrain,values:p.values};});}")
+        assert all(p['terrain'] is not None and any(v is not None for v in p['values']) for p in result['wave']['coverage'])
+
         await page.screenshot(path=str(output/'wave.png'),full_page=True)
         await frame.locator('.duo-section-close').click()
         await frame.locator('[data-wave-section]').check()
@@ -129,7 +133,7 @@ async def verify(args):
         await frame.locator('.duo-wave-section').wait_for(timeout=5000)
         result['wave']['drag_section_ms'] = await root.evaluate('el=>window.map_div._duoWave.sectionMs')
         await frame.locator('[data-wave-section]').uncheck()
-        await root.evaluate('el=>window.map_div.panBy([30,20],{animate:false})')
+        await root.evaluate('el=>{window.map_div.panBy([30,20],{animate:false});}')
         await page.wait_for_timeout(700)
         result['wave']['updates'] = len(sent)-baseline
         assert result['wave']['updates']==0
@@ -160,7 +164,7 @@ async def verify(args):
             answer=await messages.last.inner_text()
             assert 'THE — Thetford' not in answer
             assert 'Build or load a task first' not in answer
-            assert 'Wind and ridge lift' in answer and 'West launch' in answer
+            assert 'Wind and ridge lift' in answer and 'launch/landing hazards' in answer
             result['briefings'].append({'question':question,'answer':answer})
         assert 'MNDN' in result['briefings'][0]['answer'] and 'MNDS' in result['briefings'][0]['answer']
         frame,root=await open_map('Task planner','[data-action="clear"]')

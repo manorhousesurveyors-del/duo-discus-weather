@@ -76,7 +76,7 @@ def atmosphere(profile,heading):
             'u':np.array([l.u_mps for l in levels]),'v':np.array([l.v_mps for l in levels])}
 
 
-def solve_field(heights,spacing_m,profile,altitudes_ft):
+def solve_field(heights,spacing_m,profile,altitudes_ft,*,pad_fraction=.5):
     """Return signed kt fields and diagnostics; unknown heights are null.
 
     Spatial frequencies 2–40 km retain ridge detail. A damped harmonic response
@@ -99,7 +99,7 @@ def solve_field(heights,spacing_m,profile,altitudes_ft):
     smooth=gaussian_filter(heights,.7)
     gy,gx=np.gradient(smooth,spacing_m)
     slope=np.hypot(gx,gy);normal=np.sqrt(np.mean((u*gx+v*gy)**2)/max(np.mean(slope**2),1e-12))
-    pad=(shape[0]//2,shape[1]//2)
+    pad=(max(8,int(shape[0]*pad_fraction)),max(8,int(shape[1]*pad_fraction)))
     h=np.pad(smooth,((pad[0],pad[0]),(pad[1],pad[1])),mode='reflect')
     h=(h-h.mean())*np.outer(np.hanning(h.shape[0]),np.hanning(h.shape[1]))
     ky=2*np.pi*fftfreq(h.shape[0],spacing_m)[:,None];kx=2*np.pi*fftfreq(h.shape[1],spacing_m)[None,:]
@@ -149,3 +149,68 @@ def profile_for_domain(forecasts,when,domain):
         try:candidates.append((distance,Profile.from_forecast(f,when)))
         except KeyError:pass
     return min(candidates,key=lambda x:x[0]) if candidates else (None,None)
+
+
+CONTINUOUS_PATH=Path(__file__).with_name('data')/'uk_continuous_terrain.npz'
+
+@lru_cache(maxsize=1)
+def load_continuous_terrain():
+    meta=json.loads(CONTINUOUS_PATH.with_suffix('.json').read_text())
+    if hashlib.sha256(CONTINUOUS_PATH.read_bytes()).hexdigest()!=meta['sha256']:raise ValueError('Continuous terrain checksum mismatch')
+    with np.load(CONTINUOUS_PATH,allow_pickle=False) as data:heights=data['heights'].astype(float)
+    if heights.shape!=(meta['rows'],meta['cols']) or not np.isfinite(heights).all():raise ValueError('Continuous terrain dimensions invalid')
+    return {**meta,'heights':heights}
+
+
+def continuous_field(terrain,forecasts,when,altitudes_ft,*,maximum_profiles=8):
+    """Partition-of-unity blend of full-domain linear spectral solutions.
+
+    All profiles force the SAME terrain grid. Smooth Gaussian weights blend
+    atmospheric regimes, avoiding crop/nearest-owner seams. This is a regional
+    linear approximation, not a variable-coefficient mesoscale PDE solver.
+    """
+    h=terrain['heights'];south,west=terrain['bounds'][0];north,east=terrain['bounds'][1]
+    lat=np.array([inverse_y(y) for y in np.linspace(mercator_y(south),mercator_y(north),h.shape[0])])
+    lon=np.linspace(west,east,h.shape[1]);xx,yy=np.meshgrid(lon,lat)
+    candidates=[]
+    for forecast in forecasts:
+        if not forecast.location.key.startswith(('region:','ridge:')):continue
+        try:p=Profile.from_forecast(forecast,when)
+        except (KeyError,ValueError):continue
+        if len(p.levels)>=4:candidates.append(p)
+    # Farthest-point sampling covers all available atmospheric regions, avoiding
+    # dozens of nearly identical North Wales profiles and bounding computation.
+    chosen=[]
+    if candidates:
+        chosen=[min(candidates,key=lambda p:abs(p.forecast.location.latitude-54.5))]
+        while len(chosen)<min(maximum_profiles,len(candidates)):
+            remaining=[p for p in candidates if p not in chosen]
+            next_profile=max(remaining,key=lambda p:min(distance_bearing(p.forecast.location,q.forecast.location)[0] for q in chosen))
+            if min(distance_bearing(next_profile.forecast.location,q.forecast.location)[0] for q in chosen)<40:break
+            chosen.append(next_profile)
+    sums=[np.zeros(h.shape) for _ in altitudes_ft];weights=[np.zeros(h.shape) for _ in altitudes_ft]
+    wind_u=[np.zeros(h.shape) for _ in altitudes_ft];wind_v=[np.zeros(h.shape) for _ in altitudes_ft]
+    profiles=[];nearest=np.full(h.shape,np.inf)
+    from wave_map import at_height
+    for p in chosen:
+        point=p.forecast.location;distance=np.hypot((yy-point.latitude)*111,(xx-point.longitude)*111*np.cos(np.radians(yy)))
+        nearest=np.minimum(nearest,distance)
+        weight=np.exp(-.5*(distance/110)**2)
+        fields,diagnostics=solve_field(h,terrain['spacing_m'],p,altitudes_ft,pad_fraction=.125)
+        profiles.append({'name':point.name,'lat':point.latitude,'lon':point.longitude,'diagnostics':diagnostics,
+            'model':p.forecast.model,'retrieved':p.forecast.fetched_at.isoformat()})
+        for i,field in enumerate(fields):
+            wind=at_height(p,altitudes_ft[i]*.3048)
+            if field is None or not wind or wind['u'] is None or wind['v'] is None:continue
+            valid=np.isfinite(field);w=weight*valid
+            # Coarse model omega supplies background ascent, distinct from the
+            # terrain perturbation. Its missing value adds no assumed ascent.
+            background=wind['w']*MPS_TO_KNOTS if wind['w'] is not None else 0.
+            sums[i]+=np.nan_to_num(field+background)*w;weights[i]+=w
+            wind_u[i]+=wind['u']*w;wind_v[i]+=wind['v']*w
+    fields=[];winds=[]
+    for i in range(len(altitudes_ft)):
+        valid=(weights[i]>1e-6)&(nearest<350)&(h<altitudes_ft[i]*.3048)
+        fields.append(np.divide(sums[i],weights[i],out=np.full(h.shape,np.nan),where=valid))
+        winds.append([np.divide(a,weights[i],out=np.full(h.shape,np.nan),where=valid) for a in (wind_u[i],wind_v[i])])
+    return fields,winds,profiles

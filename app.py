@@ -387,7 +387,7 @@ def build_map(forecasts, when, *, layers, aviation=None, radar=None, convergence
         add_colour_legend(map_view,'Potential cloud base · ft AMSL',['#e6f5f6','#77bdc8','#2b82a3','#344781'],1500,8000)
     cloud_group.add_to(map_view); wave_group.add_to(map_view)
     if turnpoints and ('BGA turnpoints' in layers or map_identity=='wave'):
-        add_waypoints(map_view,turnpoints,show=True)
+        add_waypoints(map_view,turnpoints,show=map_identity!='wave')
     if visual_mode=='route':add_task_editor(map_view,task,when,forecasts,loading)
     if task and visual_mode!='route':
         active=folium.FeatureGroup(name=f'Active task · {task_distance(task):.0f} km')
@@ -638,7 +638,7 @@ def main():
     with wave_tab:
         st.subheader('Wave Watch Map')
         from wave_map import add_wave_map
-        wave_map,_=build_map(combined,when,layers=[],visual_mode='clean',include_modes=False,map_identity='wave',turnpoints=catalog.turnpoints,aviation=aviation,show_airfields=show_airfields,live_airfields=not bool(recorded),selected_airfield=st.session_state.get('airfield_popup:last_wave_event'))
+        wave_map,_=build_map(combined,when,layers=[],visual_mode='clean',include_modes=False,map_identity='wave',turnpoints=catalog.turnpoints,aviation=aviation,show_airfields=False,live_airfields=not bool(recorded),selected_airfield=st.session_state.get('airfield_popup:last_wave_event'))
         add_wave_map(wave_map,combined,when)
         def on_wave_click():process_map_event(st.session_state.get('wave_map',{}),catalog,day,'Inspect weather',event_key='last_wave_event',visual_override='wave')
         st_folium(wave_map,height=720,use_container_width=True,pixelated=False,key='wave_map',on_change=on_wave_click,wrap_longitude=False,returned_objects=['last_object_clicked','last_clicked'])

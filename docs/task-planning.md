@@ -135,16 +135,13 @@ Toggle it in Map layers or the Leaflet control. **Thermals on by default** store
 an `?thermals=on` / `off` preference in the URL; bookmark that URL to retain it.
 
 The Help & Briefing Bot combines a deterministic task/weather engine with optional
-Google Gemini narration. Without a key it provides the full local briefing.
-Try “suggest a 250 km triangle from MYN”,
-“find and load a 300 km out-and-return”, “why is my task marginal?”, “what kind of
-day is this?”, or “where is MYN?”. It searches published BGA geometry at or above the requested distance (up to
-8% longer), screens
-candidates using nearby weather, then checks up to three actual corridors with
-the task engine. Only candidates with a complete modeled flight can be loaded
-as achievable suggestions; an explicit load request or button is required.
-Changing the day, model, loading, catalog or forecast refresh invalidates prior
-suggestions. A failed bounded search is not proof that every possible task fails.
+Google Gemini conversation. Without a key it provides the full local briefing.
+Try “weather forecast for Denbigh tomorrow”, “why is my task marginal?”, or
+“which sector has the best cloud base?”. Explicit distance-search buttons screen
+BGA candidates using nearby weather, then check their corridors with the task
+engine. Proposed routes display their calculated verdict before loading; loading
+geometry does not make an unknown or unachievable route suitable for flight.
+A failed bounded search is not proof that every possible task fails.
 
 Sidebar controls, metrics, table headings and markers carry hover explanations.
 The bot's explanation cites calculated windows, weakest legs and missing/poor
@@ -161,17 +158,46 @@ establish achievability; that limitation remains in the briefing.
 
 “Tomorrow” means the day after the current local date (snapshot date in recorded
 mode), rather than the day after the sidebar selection. Site briefings need no
-task: they show hourly surface wind, gusts, west-face wind component, cloud base,
-thermals, precipitation and wave evidence. Ridge support uses a 280° facing
-direction and a 5 kt on-face screening threshold, not a measured lift or launch
-limit. Missing gusts/heights remain unknown. Short West takeoff considerations
+task: they show hourly surface wind, gusts, site-specific ridge component, cloud
+base, thermals, precipitation, upper winds and wave evidence. Ridge support uses
+the nearby ridge’s facing direction (Mynd 280°, Denbigh 270°) and a 5 kt on-face
+screening threshold. Beyond 45 km of a known ridge, its orientation is unknown. Missing gusts/heights remain unknown. Short West takeoff considerations
 require current site conditions and the duty instructor's decision.
 
 Set `GEMINI_API_KEY` in Streamlit Secrets or the server environment; a password
 input under **Gemini settings** overrides it for that session. **Forget pasted
-key** removes the runtime value. Do not put keys into Git. Supported models are
-`gemini-2.5-flash` and `gemini-2.5-pro`. The question and weather/task evidence
-are sent to Google when a key is configured. The SDK exposes the same read-only
-route resolver as a tool; the model cannot write a task. Responses retain the
-deterministic evidence below the narrative. Timeout, missing key, quota and
-provider failures retain the local briefing without exposing provider errors.
+key** removes the runtime value. Never commit credentials. `gemini_rest.py` uses
+standard-library verified HTTPS, so it does not depend on a Google SDK install.
+API keys use Google's `?key=` parameter; bearer credentials use `Authorization`.
+Auto detection tries the other method on authentication errors. An AQ prefix
+alone does not prove validity or access to the Gemini API.
+
+**Check connection / refresh models** queries the paginated account model list.
+Only available text `generateContent` models appear. Newer versions rank first;
+requested names such as `gemini-3.8-flash` appear only if returned by Google.
+Generation falls back across discovered models on 400/403/404; quota failures
+stop promptly. The badge shows the connected/last successful model or the HTTP
+reason, with credentials redacted. Listing access does not establish generation
+quota. Questions, recent conversation, forecasts and waypoint context are sent
+to Google when a configured key is used. The app checks proposed codes and task
+weather, then offers **Load suggested route onto map** with the verdict visible.
+
+Typed questions always use the free-form briefing path. Only the explicit
+**Suggest 250 km / Suggest 300 km** buttons run the bounded candidate search.
+Lowercase ordinary words never match three-letter codes; explicit uppercase
+trigraphs and full waypoint names still work. Described route commands retain
+the direct-load behaviour above. AI route proposals require a load click.
+
+The assistant receives five days of hourly regional evidence, star ratings,
+selected-site upper winds and background wave-height bands, active task legs,
+and both requested geographic circuits. Local fallback includes hourly weather,
+sector thresholds, STF, five-day stars, circuit screening and leg tactics.
+Nearby stored forecasts are used only within 75 km, with source distances
+reported; missing coverage stays unknown. This screening does not replace the
+planner's fetched corridor analysis or its airspace checks.
+
+A map click is retained locally and handed to the bot when leaving that map.
+Ask about “here” or “the clicked point” to use it. Point clicks and mouse movements
+do not themselves cause Python reruns. Route edits use 18 px snapping; a drop
+saves one edited task. Numbered route points are draggable, + handles insert
+points, and closed Start/Finish endpoints remain linked.

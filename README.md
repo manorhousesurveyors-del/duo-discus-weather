@@ -49,8 +49,11 @@ it enabled. **Help & Briefing Bot** answers from the selected forecasts/catalog
 and checks suggested BGA triangles and out-and-returns before offering to load
 them. The local assistant needs no key; optional Google Gemini adds a natural
 pilot briefing. Set `GEMINI_API_KEY` in Streamlit Secrets or the environment, or
-paste it into **Gemini settings** in the bot tab. Flash is the default; Pro is
-also available. Provider outages fall back to the checked local briefing.
+paste it into **Gemini settings** in the bot tab. The standard-library HTTPS
+client discovers your account’s available Gemini models, orders newer versions
+first and offers a selector. API-key and bearer authentication are supported.
+Connection errors show the HTTP reason; failed generation retains the local
+briefing. No Google SDK or guessed model availability is required.
 Controls, metrics, table columns and map markers
 have hover explanations.
 
@@ -100,12 +103,18 @@ AIRAC validity shown. Current OpenAir/GeoJSON uploads can override them.
 
 **Task planner** draws browser-local routes with a cursor-following dashed leg,
 distance/bearing labels and STF, thermal and PFD overlays. Finish or Analyse
-saves the draft; individual clicks do not reload the forecast. BGA points and
+saves the draft; individual clicks do not reload the forecast. An 18 px magnetic
+snap highlights nearby waypoints. Drag numbered points to replace them, or drag
+a leg’s + handle to insert a point; legs and distances update locally and each
+drop saves once. Closed Start/Finish points move together. BGA points and
 airfields share viewport-culled canvas layers over fast terrain tiles.
 
-**Wave watch** uses verified 500 m terrain across 16 ridge areas, with nine
+**Wave watch** uses one verified, approximately 2 km terrain grid covering
+50–59°N, 8°W–2°E (Great Britain and eastern Ireland), with nine
 locally switched heights from 3,000 to 25,000 ft, signed lift/sink colours,
-wind arrows and clickable or dragged vertical cross-sections. This is an
+wind arrows and clickable or dragged vertical cross-sections. BGA dots start off
+and can be enabled in Layers. Regional atmospheric columns blend over the full
+terrain grid without site crop boxes. This is an
 experimental terrain-forced linear estimate, not an exact SkySight forecast.
 
 **Day stars** combine distance, climb, usable height, window and spread-out
