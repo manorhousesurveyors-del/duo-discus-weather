@@ -2,14 +2,37 @@
 
 ## Start with a dry run
 
-Install `requirements.txt` in a Python 3.12 virtual environment and run
+Install `requirements-watchdog.txt` in a Python 3.12 virtual environment and run
 `python alerts.py --dry-run`. Reports are written even when no threshold is met.
-Exit 0 means evaluation completed; exit 2 signals a request/configuration/output
-failure, an unavailable regional evaluation, or a failed/uncertain primary send. A
-missing CallMeBot key is a skipped optional channel, not an error. ntfy failure
-is reported but does not fail a Gmail-enabled run; an ntfy-only delivery failure
-still exits 2. The
-reports retain missing fields, incomplete horizons and warnings.
+Weather timeouts, rate limits, missing fields and unavailable evaluations return
+**exit 0**, with degraded/unavailable status and explicit warnings in reports.
+They do not imply good flying weather. Scheduled sends use `--send --scheduled`:
+provider delivery failures are also recorded without failing the job. Accepted,
+failed, uncertain and deferred deliveries remain distinct in JSON and the ledger.
+Manual `--test-email` and ordinary `--send` still return 2 for unconfirmed primary
+delivery. Missing CallMeBot credentials skip that optional channel. Unexpected
+programming errors, invalid configuration, corrupt input and filesystem failures
+remain nonzero; the workflow has no blanket `|| true` around alert evaluation.
+
+Weather uses at most twelve concurrent batches, one attempt, a 3.5-second socket
+timeout and a **shared 12-second wall-clock deadline**, including the convergence
+grid. No pacing or retry sleeps run in this transport. Slow DNS/transfers cannot
+hold process exit: weather-only workers are daemon threads and never touch the
+ledger or send messages. Late results are discarded. Same-coordinate, exact-hour
+model completion now also applies to the watchdog: native fields win, donor
+fields retain provenance, RH may use T/Td and BLH may use the bracketed parcel.
+CAPE remains optional; missing evidence is never converted to positive lift.
+
+Scheduled notification attempts share a 12-second budget, with at most six
+seconds for each full exchange on the Linux runner (four-second socket timeout).
+Started timeouts retain an uncertain claim; channels not started before the
+deadline are deferred without a claim. They can be considered at the next run.
+`watchdog-summary.json` and the Actions summary record timing, evaluation and
+delivery status. Weather and delivery are measured separately from runner setup.
+The full test suite runs in `tests.yml` on code changes, not every six-hour alert.
+The watchdog installs only NumPy and the land mask, using their existing pins.
+The job targets under a minute, but GitHub setup/cache/artifact latency is outside
+the script's deadline. A two-minute job cap is a last resort, not a normal wait.
 
 `--send` permits qualifying scheduled notifications; `--test-email` permits
 one explicit Gmail delivery test. Both validate their credentials before fetching. For scheduled sends, recorded data older than two hours or future-dated by more
@@ -72,7 +95,8 @@ uses Gmail only, and does not change the scheduled-alert ledger. Each manual
 invocation, including a rerun, requests a new test email. It overrides a different
 `DUO_EMAIL_TO` for this test and still uses `SMTP_USERNAME` as the sender.
 
-The test fetches one ECMWF Long Mynd forecast instead of the national grid.
+The test fetches the three Long Mynd model forecasts concurrently, with the same
+bounded hourly gap repair, instead of the national grid.
 Unavailable or stale weather produces labelled unavailable star rows and still
 allows the delivery test; it never invents ratings. Requests include
 `past_hours=24` so today's morning window is present, including BST/GMT changes.
@@ -112,8 +136,11 @@ compatible runner. Artifact restore inputs and durable-state behavior are retain
 
 ## Durable state and recovery
 
-The WAL SQLite ledger is `var/duo_discus.sqlite3`. Discovery searches retained
-artifacts belonging to this workflow/default branch, including older failed
+The WAL SQLite ledger is `var/duo_discus.sqlite3`. Discovery searches the named
+`soaring-watchdog-state` artifacts first, rather than every past workflow run,
+and verifies each candidate's workflow path and default branch. Its API calls
+have three-second timeouts, no retries and a six-second total discovery budget.
+It considers retained artifacts including older failed
 runs and the current run's earlier attempts. A later failed run without an
 artifact does not hide an earlier backup. The newest available candidate is
 downloaded and verified for integrity, schema, columns and audit references.
@@ -124,8 +151,9 @@ a valid empty SQLite ledger—the application's equivalent of `{}`. These
 recovery cases exit 0 and permit the job to continue. Invalid downloaded files
 remain untouched; invalid local working state is moved to `rejected-state/`.
 The alert CLI also recovers an invalid local ledger. Recreating the ledger
-forgets earlier sends and can repeat alerts. Installation, forecast, filesystem
-and real delivery errors retain their normal failure reporting.
+forgets earlier sends and can repeat alerts. Installation, filesystem and
+programming errors retain nonzero failure reporting; provider warnings remain
+visible in the reports and Actions summary under the scheduled policy above.
 
 Schema 2 adds the ntfy channel. The workflow first verifies schema-1 artifacts
 read-only, keeps the restored copy, then migrates the working ledger atomically.
@@ -134,8 +162,8 @@ profile. Previously sent or uncertain email/WhatsApp records still suppress
 duplicates. Local `DatabaseManager` performs the same migration when opened.
 
 After state validation, an `always()` step makes a consistent SQLite backup,
-including WAL transactions, and uploads it for 90 days even if installation,
-tests or delivery fail. Reports are retained 14 days. Organization/repository
+including WAL transactions, and uploads **soaring-watchdog-state** for **30 days**
+even if installation or delivery fails. Reports are retained 14 days. Organization/repository
 retention limits can shorten this period. Artifacts include recipient addresses
 and forecast results; repository access controls apply. Weather bundles remain
 local runtime files and are not uploaded by the workflow.
@@ -317,8 +345,8 @@ points, 120 forecast hours and 24 past hours. Each request has a 3.5-second sock
 timeout, one attempt and no pacing/retry sleeps. Wind frames and the read-only
 hour-indexed NumPy cube are prepared by the worker. This is not a guaranteed
 3.5-second total transfer deadline or a promised two-second provider response.
-Regional forecasts also update in the background. Alert/watchdog transports
-retain their existing retry and pacing policy.
+Regional forecasts also update in the background. The watchdog now uses its own
+bounded single-attempt transport, described at the start of this guide.
 
 Only the Weather page's wind/thermal/PFD/XC/STF modes request the national grid.
 The other six pages return before that branch. Task optimisation may read an

@@ -1,7 +1,7 @@
 """Six-hour soaring watchdog. Default is a dry run; explicit modes enable delivery.
 
 Creates auditable HTML/JSON briefings even when no threshold is reached. Public
-forecast reads are retryable; notification submissions deliberately are not.
+forecast reads share a short deadline; neither reads nor submissions retry.
 SQLite delivery claims protect scheduled runs and preserve uncertain outcomes.
 --test-email requests one email independently of thresholds and alert history.
 See docs/operations.md for credentials and durable scheduler state.
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
@@ -19,10 +20,13 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import smtplib
 import sqlite3
 import ssl
 import uuid
+from threading import current_thread, main_thread
+from time import monotonic
 from typing import Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -30,12 +34,14 @@ from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_ope
 
 import numpy as np
 
-from config import (DEFAULT_EMAIL_RECIPIENT, DEFAULT_WHATSAPP_RECIPIENT, FORECAST_MODELS,
+from config import (DEFAULT_EMAIL_RECIPIENT, DEFAULT_WHATSAPP_RECIPIENT, FORECAST_MODELS, HOURLY_VARIABLES,
                     LOCAL_TIMEZONE, MONITORING_ZONES, ROUTES, SMTP_HOST, SMTP_SSL_PORT,
                     WAVE_RIDGES, Settings, convergence_grid, forecast_locations)
 from data_ingestion import (Forecast, IngestionError, OpenMeteoClient, _json_default, _write_json,
                             forecast_from_snapshot, utc_datetime)
 from database import AlertKey, DatabaseManager
+from forecast_coverage import complete_forecasts
+from watchdog_weather import fetch_weather
 from day_rating import DayRating,rate_day,best_rating
 from soaring_physics import (ConvergenceResult, Profile, TaskDay, ThermalResult, WaveResult,
                              detect_convergence, evaluate_task_day, evaluate_thermals,
@@ -57,18 +63,19 @@ class ForecastBundle:
 
 def collect_forecasts(*, grid_step: float = .5, client: OpenMeteoClient | None = None,
                       include_grid: bool = True) -> ForecastBundle:
-    client = client or OpenMeteoClient()
-    main = client.fetch_batched(forecast_locations(), FORECAST_MODELS.values())
-    errors = [f'{f.target} / {f.provider}: {f.message}' for f in main.failures]
+    groups = [('regional', forecast_locations(), FORECAST_MODELS.values(), HOURLY_VARIABLES, 8)]
     grid_forecasts = ()
     if include_grid:
-        grid = convergence_grid(step_degrees=grid_step, max_points=client.settings.max_grid_points)
-        batch = client.fetch_batched([p for row in grid for p in row],
-                                     (FORECAST_MODELS['icon_eu'], FORECAST_MODELS['ifs025']),
-                                     variables=GRID_VARIABLES)
-        grid_forecasts = batch.forecasts
-        errors.extend(f'{f.target} / {f.provider}: {f.message}' for f in batch.failures)
-    return ForecastBundle(main.forecasts, grid_forecasts, grid_step, tuple(errors), datetime.now(UTC))
+        grid = convergence_grid(step_degrees=grid_step, max_points=(client.settings if client else Settings.from_env()).max_grid_points)
+        groups.append(('grid', [p for row in grid for p in row],
+                       (FORECAST_MODELS['icon_eu'], FORECAST_MODELS['ifs025']), GRID_VARIABLES, 50))
+    batches = fetch_weather(groups, client=client)
+    raw = batches['regional'].forecasts
+    forecasts = tuple(f for model in FORECAST_MODELS.values() for f in complete_forecasts(raw, model))
+    if include_grid:
+        grid_forecasts = batches['grid'].forecasts
+    errors = tuple(f'{f.target} / {f.provider}: {f.message}' for batch in batches.values() for f in batch.failures)
+    return ForecastBundle(forecasts, grid_forecasts, grid_step, errors, datetime.now(UTC))
 
 
 def save_bundle(bundle: ForecastBundle, path: Path) -> None:
@@ -164,7 +171,7 @@ def build_briefing(bundle: ForecastBundle, horizon_days: int, *, now: datetime |
     # Hourly providers cannot represent cron minute 17: compare the enclosing UTC
     # forecast hour at +48/+120 h, explicitly retained in the briefing.
     target = now.replace(minute=0, second=0, microsecond=0) + timedelta(days=horizon_days)
-    preference = ('ukmo_uk_deterministic_2km','icon_eu','ecmwf_ifs025') if horizon_days == 2 else ('icon_eu','ecmwf_ifs025')
+    preference = ('ukmo_seamless','ukmo_uk_deterministic_2km','icon_eu','ecmwf_ifs025') if horizon_days == 2 else ('icon_eu','ecmwf_ifs025')
     regions, warnings, triggers, waves = [], list(bundle.errors), [], []
     for key, point in MONITORING_ZONES.items():
         forecast = select_forecast(bundle.forecasts, key, target, preference)
@@ -173,6 +180,8 @@ def build_briefing(bundle: ForecastBundle, horizon_days: int, *, now: datetime |
             warnings.append(f'{point.name}: no forecast at target hour')
             continue
         thermal = evaluate_thermals(Profile.from_forecast(forecast, target))
+        if forecast.supplemental_sources:
+            warnings.append(f'{point.name}: {forecast.model} supported by '+', '.join(forecast.supplemental_sources))
         comparisons = []
         for model in FORECAST_MODELS.values():
             other = select_forecast(bundle.forecasts, key, target, (model.api_name,))
@@ -188,7 +197,7 @@ def build_briefing(bundle: ForecastBundle, horizon_days: int, *, now: datetime |
             triggers.append(f'Thermal route: {route.name}')
     for key, ridge in WAVE_RIDGES.items():
         forecast = select_forecast(bundle.forecasts, 'ridge:'+key, target,
-                                   ('ecmwf_ifs025','ukmo_uk_deterministic_2km','icon_eu'))
+                                   ('ecmwf_ifs025','ukmo_seamless','ukmo_uk_deterministic_2km','icon_eu'))
         if forecast is not None:
             wave = evaluate_wave(Profile.from_forecast(forecast, target), ridge)
             waves.append(wave)
@@ -220,9 +229,10 @@ def _display(value, suffix='', digits=1):
 
 
 def collect_test_forecasts() -> ForecastBundle:
-    """One Long Mynd/ECMWF request; an email test needs no national grid."""
-    batch=OpenMeteoClient().fetch_batched((MONITORING_ZONES['shropshire'],),(FORECAST_MODELS['ifs025'],))
-    return ForecastBundle(batch.forecasts,(),.5,
+    """Three concurrent Long Mynd sources; an email test needs no national grid."""
+    batch=fetch_weather([('local',(MONITORING_ZONES['shropshire'],),FORECAST_MODELS.values(),HOURLY_VARIABLES,8)])['local']
+    forecasts=complete_forecasts(batch.forecasts,FORECAST_MODELS['ukmo'])
+    return ForecastBundle(forecasts,(),.5,
         tuple(f'{f.target} / {f.provider}: {f.message}' for f in batch.failures),datetime.now(UTC))
 
 
@@ -388,6 +398,34 @@ class DeliveryError(RuntimeError):
         self.uncertain = uncertain
 
 
+@contextmanager
+def delivery_timeout(seconds=6.0):
+    """Bound the whole SMTP/HTTP exchange, including DNS, on the Linux runner.
+
+Socket timeouts still apply elsewhere. A timed-out started delivery is uncertain
+and retains its ledger claim; no retry or false acceptance is recorded.
+"""
+    if not hasattr(signal, 'setitimer') or current_thread() is not main_thread():
+        yield
+        return
+    started = monotonic()
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+
+    def expired(*_):
+        raise DeliveryError('Notification time budget exceeded; acceptance is unknown')
+
+    signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, max(.001, min(seconds, previous_timer[0]) if previous_timer[0] else seconds))
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0]:
+            signal.setitimer(signal.ITIMER_REAL, max(.001, previous_timer[0]-(monotonic()-started)), previous_timer[1])
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         raise DeliveryError('Notification endpoint redirected; outcome requires review')
@@ -407,7 +445,7 @@ def send_email(settings: DeliverySettings, briefing: Briefing, delivery_id: str)
     message.set_content(render_whatsapp(briefing))
     message.add_alternative(render_html(briefing), subtype='html')
     try:
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_SSL_PORT, timeout=30, context=ssl.create_default_context()) as smtp:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_SSL_PORT, timeout=4, context=ssl.create_default_context()) as smtp:
             smtp.login(settings.smtp_username,settings.gmail_app_password)
             refused = smtp.send_message(message)
             if refused:
@@ -435,7 +473,7 @@ def send_whatsapp(settings: DeliverySettings, briefing: Briefing, delivery_id: s
                           data=body,headers={'Authorization':'Basic '+authorization,'Content-Type':'application/x-www-form-urlencoded'},method='POST')
     try:
         opener = build_opener(HTTPSHandler(context=ssl.create_default_context()),_NoRedirect())
-        with opener.open(request,timeout=30) as response:
+        with opener.open(request,timeout=4) as response:
             status, raw = response.status, response.read(65537)
         if len(raw) > 65536:
             raise DeliveryError('Notification response too large; outcome uncertain')
@@ -465,7 +503,7 @@ def send_ntfy(settings: DeliverySettings, briefing: Briefing, delivery_id: str) 
                  'Priority':'high' if (best_rating(briefing.ratings) and best_rating(briefing.ratings).stars>=3) else 'default'})
     try:
         opener=build_opener(HTTPSHandler(context=ssl.create_default_context()),_NoRedirect())
-        with opener.open(request,timeout=30) as response:
+        with opener.open(request,timeout=4) as response:
             status,raw=response.status,response.read(65537)
         if len(raw)>65536:raise DeliveryError('ntfy response too large; outcome uncertain')
         result=json.loads(raw)
@@ -483,14 +521,18 @@ def send_ntfy(settings: DeliverySettings, briefing: Briefing, delivery_id: str) 
 
 
 def dispatch(briefing: Briefing, database: DatabaseManager, settings: DeliverySettings, *,
-             senders: Mapping[str,Callable] | None = None) -> dict[str,str]:
+             senders: Mapping[str,Callable] | None = None, deadline: float | None = None) -> dict[str,str]:
     settings.validate()
     if not briefing.triggers:
         return {}
     senders = senders or {'email':send_email,'whatsapp':send_whatsapp,'ntfy':send_ntfy}
+    deadline = deadline if deadline is not None else monotonic()+12
     outcomes = settings.skipped_channels.copy()
     for channel in settings.channels:
         if channel in settings.skipped_channels:continue
+        if monotonic() >= deadline:
+            outcomes[channel] = 'deferred: delivery time budget exhausted'
+            continue
         recipient = {'email':settings.email_to.lower(),'whatsapp':settings.whatsapp_to,'ntfy':settings.ntfy_url}[channel]
         key = AlertKey(briefing.target_time.astimezone(LOCAL_TIMEZONE).date(),briefing.horizon_days,
                        'briefing','national',channel,recipient)
@@ -501,14 +543,15 @@ def dispatch(briefing: Briefing, database: DatabaseManager, settings: DeliverySe
         delivery_id = hashlib.sha256(json.dumps(key.values).encode()).hexdigest()[:32]
         database.start_delivery(claim)
         try:
-            provider_id = senders[channel](settings,briefing,delivery_id)
+            with delivery_timeout(min(6., max(.001, deadline-monotonic()))):
+                provider_id = senders[channel](settings,briefing,delivery_id)
         except DeliveryError as exc:
             database.mark_failed(claim,error=str(exc),uncertain=exc.uncertain)
             outcomes[channel] = 'uncertain' if exc.uncertain else 'failed'
         except Exception as exc:
             # Preserve the unresolved send, without exposing provider URLs/secrets.
             database.mark_failed(claim,error=f'Unexpected sender failure: {type(exc).__name__}',uncertain=True)
-            outcomes[channel] = 'uncertain'
+            raise  # A programming crash must still fail Actions.
         else:
             database.mark_sent(claim,provider_message_id=provider_id)
             outcomes[channel] = 'accepted'
@@ -544,7 +587,8 @@ def manual_test_email(args, settings: DeliverySettings) -> int:
     report={'briefing':asdict(briefing),'recipient':settings.email_to,'delivery':'pending'}
     _write_json(args.output_dir/'briefing-test-email.json',report)
     try:
-        provider_id=send_email(settings,briefing,'manual-test-'+uuid.uuid4().hex)
+        with delivery_timeout():
+            provider_id=send_email(settings,briefing,'manual-test-'+uuid.uuid4().hex)
     except DeliveryError as exc:
         report.update(delivery='uncertain' if exc.uncertain else 'failed',error=str(exc))
     else:
@@ -556,6 +600,7 @@ def manual_test_email(args, settings: DeliverySettings) -> int:
 
 
 def main(argv=None) -> int:
+    started = monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--send',action='store_true',help='Submit notifications using configured credentials')
@@ -564,6 +609,7 @@ def main(argv=None) -> int:
     parser.add_argument('--snapshot',type=Path,help='Use an existing forecast bundle')
     parser.add_argument('--output-dir',type=Path,default=Path('var/briefings'))
     parser.add_argument('--grid-step',type=float,default=.5)
+    parser.add_argument('--scheduled',action='store_true',help='Record provider/delivery warnings without failing the scheduled job; programming/configuration errors still fail')
     parser.add_argument('--at',help='Timezone-aware evaluation time, for dry-run replay only')
     args = parser.parse_args(argv)
     settings = DeliverySettings.from_env()
@@ -583,22 +629,35 @@ def main(argv=None) -> int:
     if not args.snapshot:
         save_bundle(bundle,args.output_dir/'forecast-bundle.json')
     database = open_delivery_database() if args.send else None
-    summary, failed = [], bool(bundle.errors)
+    weather_elapsed = monotonic()-started
+    summary, failed = [], False
+    delivery_deadline = monotonic()+12
     for horizon in (5,2):
         briefing = build_briefing(bundle,horizon,now=now)
         (args.output_dir/f'briefing-{horizon}day.html').write_text(render_html(briefing),encoding='utf-8')
         _write_json(args.output_dir/f'briefing-{horizon}day.json',asdict(briefing))
-        outcomes = dispatch(briefing,database,settings) if args.send else {}
+        outcomes = dispatch(briefing,database,settings,deadline=delivery_deadline) if args.send else {}
         # Push supplements Gmail. Report its failure without failing a working
-        # email run; a push-only run still fails when delivery is unconfirmed.
-        failed |= any(value in {'failed','uncertain'} for channel,value in outcomes.items()
+        # email run; outside --scheduled, an unconfirmed push-only run fails.
+        failed |= any(value in {'failed','uncertain'} or value.startswith('deferred:') for channel,value in outcomes.items()
                       if channel!='ntfy' or 'email' not in settings.channels)
-        # No data is an evaluation failure, never an all-clear briefing.
-        failed |= all(r.thermal is None for r in briefing.regions)
         summary.append({'horizon_days':horizon,'target_time':briefing.target_time,
-                        'triggers':briefing.triggers,'delivery':outcomes,'warnings':briefing.warnings})
-    print(json.dumps({'mode':'send' if args.send else 'dry-run','briefings':summary},default=_json_default,indent=2))
-    return 2 if failed else 0
+                        'triggers':briefing.triggers,'delivery':outcomes,'warnings':briefing.warnings,
+                        'evaluation':'unavailable' if all(r.thermal is None for r in briefing.regions) else
+                        'degraded' if bundle.errors or any(r.stars is None for r in briefing.ratings) else 'complete'})
+    report = {'mode':'send' if args.send else 'dry-run','scheduled':args.scheduled,
+              'weather_seconds':round(weather_elapsed,3),'elapsed_seconds':round(monotonic()-started,3),
+              'delivery_warning':failed,'briefings':summary}
+    _write_json(args.output_dir/'watchdog-summary.json',report)
+    print(json.dumps(report,default=_json_default,indent=2))
+    if os.environ.get('GITHUB_STEP_SUMMARY'):
+        with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a',encoding='utf-8') as handle:
+            handle.write(f"### Watchdog · {report['elapsed_seconds']:.1f}s\n\n")
+            for row in summary:
+                handle.write(f"- {row['horizon_days']}-day evaluation: **{row['evaluation']}**; "
+                             f"{len(row['warnings'])} forecast notes; delivery: `{json.dumps(row['delivery'])}`\n")
+            handle.write('\nMissing forecasts are unavailable, not an all-clear. See the saved briefing reports.\n')
+    return 2 if failed and not args.scheduled else 0
 
 
 if __name__ == '__main__':

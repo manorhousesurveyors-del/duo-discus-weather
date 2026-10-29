@@ -485,31 +485,9 @@ class OpenMeteoClient:
         if 'temperature_2m' not in fields:
             raise ValueError("temperature_2m is required for coverage validation")
 
-        def fetch_chunk(chunk, model):
-            response = self.http.get_json(OPEN_METEO_URL, {
-                'latitude': ','.join(str(p.latitude) for p in chunk),
-                'longitude': ','.join(str(p.longitude) for p in chunk),
-                'models': model.api_name, 'hourly': ','.join(fields),
-                'forecast_hours': model.horizon_hours + 1, 'past_hours': 24, 'timezone': 'GMT', 'timeformat': 'unixtime',
-                'wind_speed_unit': 'ms', 'temperature_unit': 'celsius', 'precipitation_unit': 'mm',
-                'cell_selection': 'nearest',
-            }, ttl_seconds=self.settings.forecast_cache_seconds)
-            bodies = [response.body] if isinstance(response.body, dict) else response.body
-            if not isinstance(bodies,list) or len(bodies) != len(chunk):
-                raise SchemaError('Multi-coordinate response count does not match request')
-            result, bad = [], []
-            for index, (point, body) in enumerate(zip(chunk, bodies)):
-                if not isinstance(body, dict) or body.get('location_id', index) != index:
-                    raise SchemaError('Multi-coordinate response order is invalid')
-                try:
-                    result.append(parse_forecast(JsonResponse(body, response.fetched_at, response.from_cache), point, model))
-                except IngestionError as exc:
-                    bad.append(FetchFailure(point.key, model.api_name, str(exc)))
-            return result, bad
-
         forecasts, failures = [], []
         with ThreadPoolExecutor(max_workers=self.settings.http_workers) as pool:
-            jobs = {pool.submit(fetch_chunk, points[i:i+batch_size], model): (points[i:i+batch_size], model)
+            jobs = {pool.submit(self._fetch_chunk, points[i:i+batch_size], model, fields): (points[i:i+batch_size], model)
                     for model in selected for i in range(0, len(points), batch_size)}
             for future in as_completed(jobs):
                 chunk, model = jobs[future]
@@ -521,6 +499,29 @@ class OpenMeteoClient:
                     failures.extend(FetchFailure(p.key, model.api_name, str(exc)) for p in chunk)
         return ForecastBatch(tuple(sorted(forecasts, key=lambda f: (f.location.key, f.model))),
                              tuple(sorted(failures, key=lambda f: (f.target, f.provider))))
+
+    def _fetch_chunk(self, chunk, model, fields):
+        """One validated batch request; callers own concurrency and deadlines."""
+        response = self.http.get_json(OPEN_METEO_URL, {
+            'latitude': ','.join(str(p.latitude) for p in chunk),
+            'longitude': ','.join(str(p.longitude) for p in chunk),
+            'models': model.api_name, 'hourly': ','.join(fields),
+            'forecast_hours': model.horizon_hours + 1, 'past_hours': 24, 'timezone': 'GMT', 'timeformat': 'unixtime',
+            'wind_speed_unit': 'ms', 'temperature_unit': 'celsius', 'precipitation_unit': 'mm',
+            'cell_selection': 'nearest',
+        }, ttl_seconds=self.settings.forecast_cache_seconds)
+        bodies = [response.body] if isinstance(response.body, dict) else response.body
+        if not isinstance(bodies,list) or len(bodies) != len(chunk):
+            raise SchemaError('Multi-coordinate response count does not match request')
+        result, bad = [], []
+        for index, (point, body) in enumerate(zip(chunk, bodies)):
+            if not isinstance(body, dict) or body.get('location_id', index) != index:
+                raise SchemaError('Multi-coordinate response order is invalid')
+            try:
+                result.append(parse_forecast(JsonResponse(body, response.fetched_at, response.from_cache), point, model))
+            except IngestionError as exc:
+                bad.append(FetchFailure(point.key, model.api_name, str(exc)))
+        return result, bad
 
 
 @dataclass(frozen=True, slots=True)

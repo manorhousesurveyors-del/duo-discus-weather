@@ -993,3 +993,56 @@ correctly excluded. Provider omissions were not converted into invented clear
 sky or instability. No notifications were sent during validation.
 
 Dependency, Python compilation, JavaScript syntax and whitespace checks passed.
+
+## Bounded watchdog recovery — 29 October 2026
+
+The reported #20 run was on `4702d35`. GitHub's Actions API returned Forbidden
+from this environment, so its private step logs could not be independently
+retrieved. Inspection of that exact checkout found `failed = bool(bundle.errors)`
+and an additional no-regional-data failure, both returning exit 2. The watchdog
+also used the general three-attempt, 20-second HTTP client with a shared weighted
+pacer, then fetched convergence separately. Its workflow installed all app
+dependencies and ran the complete test suite on every schedule. These paths
+explain how provider gaps could both delay and fail the job. State recovery was
+already nonfatal; the quoted empty-ledger warning was not an exception.
+
+The watchdog now shares a 12-second weather deadline across at most twelve
+single-attempt workers, preserves successful batches and applies the same hourly
+UKMO/ICON/ECMWF completion as the dashboard. Scheduled operational warnings stay
+green and appear in reports; programming exceptions still fail. The artifact
+name is consistently `soaring-watchdog-state`, retained for 30 days. Discovery
+checks candidate workflow provenance under a six-second deadline. Full tests
+are retained in a separate push/PR/manual workflow.
+
+`python alerts.py --dry-run` against live verified-HTTPS Open-Meteo completed in
+**15.472 seconds wall clock, exit 0**. This included real timeouts: hourly donor
+support recovered all **23 regional sites for all three selections**; 166 of
+216 convergence points were available per model. Incomplete convergence stayed
+explicit. At Long Mynd, each model produced **8/8 covered local hours** and valid
+Star Ratings on **29 October–2 November**. No ratings were manufactured for
+missing weather. Runtime logs/snapshots are ignored under
+`var/watchdog-live-check/` and `var/watchdog-live-timing.json`.
+
+A fresh Python 3.12 environment installed only `requirements-watchdog.txt` in
+**7.70 seconds**, passed `pip check`, and replayed that complete live snapshot in
+**6.205 seconds, exit 0**. GitHub runner startup and artifact service latency
+were not measured; these local results do not guarantee an Actions job duration.
+
+The complete unit suite passed **291 tests** in **62.918 seconds**. New tests
+exercise HTTP 429 without sleeps, stalled DNS/body deadlines, partial-result
+preservation, the twelve-worker ceiling, actual subprocess exit with blocked
+daemon workers, all three models' five-day repair, total-outage exit 0, timed-out
+notification claims, deferred channels, code-crash propagation, fresh-state
+recovery, workflow routing and 30-day artifact retention. Notification tests
+use mocked providers; no email, WhatsApp or ntfy notification was sent.
+
+All **eight** browser verification scripts passed: cloud graphics, thermal
+probe, model coverage, full point probe, lazy pages, route drag, mocked Gemini,
+and the broader client maps. The nine cloud-family scenes drew in at most
+**11.7 ms**; all **15 model/day** cases retained five ratings, 8/8 coverage,
+working maps and positive synthetic midday probe lift/height, with maximum
+draw/paint **51.0/56.9 ms**. These retain the existing scalloped Cu/towers,
+spread-out rolls, stratus bands, ice wisps and potential storm anvils, plus the
+explicit wing-loading label. No extra moisture is invented during an outage.
+Browser artifacts remain under ignored `var/` directories. Compilation,
+JavaScript syntax and `git diff --check` also passed.

@@ -81,7 +81,7 @@ class RecoveryTests(unittest.TestCase):
         for manual,send,expected in (('true','true','--test-email'),('false','true','--send'),('false','false','--dry-run')):
             result=subprocess.run(['bash','-eu','-c',command],capture_output=True,text=True,check=True,
                 env={**os.environ,'PATH':str(self.root)+os.pathsep+os.environ['PATH'],'MANUAL_TEST_EMAIL':manual,'SEND_NOTIFICATIONS':send})
-            self.assertEqual(result.stdout.splitlines(),['alerts.py',expected])
+            self.assertEqual(result.stdout.splitlines(),['alerts.py',expected]+(['--scheduled'] if expected=='--send' else []))
 
 
 class ManualEmailTests(unittest.TestCase):

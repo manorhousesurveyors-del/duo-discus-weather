@@ -172,7 +172,7 @@ because `.env` files are not automatically loaded.
 
 ## Automated alerts
 
-[The workflow](.github/workflows/soaring_watchdog.yml) runs `alerts.py --send` at
+[The workflow](.github/workflows/soaring_watchdog.yml) runs `alerts.py --send --scheduled` at
 **00:17, 06:17, 12:17 and 18:17 UTC**, subject to GitHub scheduling delays. It must
 be present on the repository's default branch and Actions must be enabled.
 Configure repository secrets and variables using [the operations guide](docs/operations.md).
@@ -189,6 +189,11 @@ remains an alternative with an approved template. The SQLite ledger is backed up
 runners. Older failed-run artifacts are considered when a later run has none.
 Unavailable/corrupt state is logged and automatically replaced with a valid
 empty ledger, allowing execution to continue; earlier alerts may then repeat.
+State artifacts retain the same name for 30 days. Weather batches share a
+12-second deadline and use the dashboard's hourly model-gap repair. API warnings
+and scheduled provider failures remain visible in reports without failing the
+job; code/configuration/storage failures still fail. The slim scheduled runtime
+is separate from the full application tests, which run on pushes and pull requests.
 With valid state, uncertain scheduled provider outcomes retain their audit trail. A channel's accepted briefing is suppressed
 for the same target local date and 2/5-day horizon. No live notifications were
 sent during implementation; provider paths were verified with mocks.

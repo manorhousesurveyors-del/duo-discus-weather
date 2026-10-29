@@ -1,0 +1,4 @@
+# Scheduled alerts do not need Streamlit, plotting, document or map dependencies.
+# Keep these pins identical to requirements.txt.
+numpy==2.3.5
+global-land-mask==1.0.0
