@@ -348,6 +348,23 @@ hour-indexed NumPy cube are prepared by the worker. This is not a guaranteed
 Regional forecasts also update in the background. The watchdog now uses its own
 bounded single-attempt transport, described at the start of this guide.
 
+As of 6 November, the fresh-session and regional-loader default is ICON-EU.
+The cycle's regional bundle completes missing fields, then validates all five
+10:00–18:00 local windows. If simple completion is insufficient, a better-covered
+ICON/ECMWF sounding is selected with explicit provenance. A failed large batch
+gets one recovery pass for unsupported regional anchors using single-point
+ICON/ECMWF requests and the shared 12-second recovery deadline. The original
+failure notes remain available. Neither changing the day/hour nor switching
+models repeats this recovery. Nothing fetches the national grid for it.
+
+While a fresh regional Future is pending, Weather shows the loading message and
+keeps page navigation available. It does not publish empty ratings as 0/8 or
+start the national grid. Completed results trigger a page update through the
+existing progress fragment. A real all-provider outage still reports missing
+evidence; the application does not manufacture ratings. Cache revision 3 and
+runtime API revision 8 retire earlier failed bundles and cached loader code
+during hot deployment while retaining saved tasks and explicit model choices.
+
 Only the Weather page's wind/thermal/PFD/XC/STF modes request the national grid.
 The other six pages return before that branch. Task optimisation may read an
 already completed current-cycle grid; it never starts one. Its explicit corridor

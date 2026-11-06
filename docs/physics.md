@@ -13,9 +13,21 @@ missing, without nearest-hour substitution or extrapolation.
 All three sidebar choices use `forecast_coverage.complete_forecasts`. Missing
 fields (including CAPE and upper winds) use ECMWF first, then ICON, then UKMO,
 skipping the selected model. A completely failed primary response can use a
-healthy donor. Native values, including real zeroes, are never overwritten.
+healthy donor. Field completion preserves native values, including real zeroes.
 Fields with incompatible units are not combined. CAPE is optional; it is not
 a requirement for thermal or Star Rating calculations.
+
+The regional loader additionally calls `complete_regional_forecasts`, checking
+10:00–17:00 Europe/London on all five displayed dates before publishing. It
+requires the union of Star Rating and day-classification evidence: climb,
+usable height, spread-out, rain and a supported 925/850 hPa wind. A profile below
+8/8 is compared with complete ICON/ECMWF soundings at the same requested point.
+A donor may replace the whole site profile only if its coverage improves and no
+date loses covered hours. Using the whole profile keeps terrain and vertical
+velocity units consistent; all replaced values carry the donor identity.
+This guard can repair an unusable non-null primary field that a null-only merge
+cannot fix. It never selects a donor just for stronger lift: zero-climb, rainy
+and one-star days with full evidence retain their original forecast.
 
 If no provider supplies boundary-layer height, the completed pressure sounding
 provides the bracketed dry-parcel estimate described below. Solar heating enters

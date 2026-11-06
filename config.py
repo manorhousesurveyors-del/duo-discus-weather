@@ -258,6 +258,11 @@ FORECAST_MODELS: Mapping[str, ForecastModel] = MappingProxyType({
 })
 
 
+def default_forecast_model() -> str:
+    """Shared fresh-session/regional-loader default; explicit choices persist."""
+    return 'icon_eu'
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     database_path: Path = PROJECT_ROOT / "var" / "duo_discus.sqlite3"

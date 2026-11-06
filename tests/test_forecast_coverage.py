@@ -130,9 +130,10 @@ class ForecastCoverageTests(unittest.TestCase):
         import uk_map_grid as grid
         raw=missing_model_fixture()
         grid.regional_sources.clear();grid.regional_future.clear()
-        with patch.object(grid.OpenMeteoClient,'fetch_batched',return_value=ForecastBatch(raw,())) as fetch:
+        with patch.object(grid,'forecast_locations',return_value=(raw[0].location,)), \
+             patch.object(grid.OpenMeteoClient,'fetch_batched',return_value=ForecastBatch(raw,())) as fetch:
             for key in FORECAST_MODELS:
-                batch=grid.regional_future(100,key).result(timeout=10)
+                batch=grid.regional_future(int(START.timestamp()//1800),key).result(timeout=10)
                 self.assertEqual(batch.forecasts[0].model,FORECAST_MODELS[key].api_name)
                 self.assertTrue(batch.forecasts[0].supplemental_sources)
             fetch.assert_called_once()

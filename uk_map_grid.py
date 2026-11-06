@@ -7,11 +7,13 @@ import math
 import numpy as np
 import streamlit as st
 
-from config import FORECAST_MODELS, OPEN_METEO_URL, Settings, forecast_locations
+from config import (FORECAST_MODELS, LOCAL_TIMEZONE, OPEN_METEO_URL, Settings,
+                    default_forecast_model, forecast_locations)
 from data_ingestion import (FetchFailure, ForecastBatch, IngestionError, JsonHttpClient,
                             JsonResponse, SchemaError, OpenMeteoClient, parse_forecast, utc_datetime)
 from map_weather import national_grid, wind_payload
-from forecast_coverage import complete_forecasts
+from forecast_coverage import (COVERAGE_REVISION, complete_forecasts,
+                               complete_regional_forecasts, soaring_coverage)
 
 _pool = ThreadPoolExecutor(max_workers=12, thread_name_prefix='uk-map-grid')
 
@@ -97,7 +99,7 @@ def make_snapshot(forecasts, failures, anchor):
 class UKGridBundle:
     """One resource per cycle, with separate lazy results for each named model."""
     def __init__(self, cycle):
-        self.coverage_revision = 2
+        self.coverage_revision = COVERAGE_REVISION
         self.cycle = cycle
         self.anchor = datetime.fromtimestamp(cycle * 1800, UTC)
         self._lock = Lock()
@@ -166,35 +168,67 @@ class UKGridBundle:
 
 
 @st.cache_resource(ttl=1800, max_entries=2, show_spinner=False)
-def load_uk_map_grid(forecast_cycle_30min_bucket, coverage_revision=2):
+def load_uk_map_grid(forecast_cycle_30min_bucket, coverage_revision=3):
     return UKGridBundle(forecast_cycle_30min_bucket)
 
 
 def session_grid(cycle):
     bundle = st.session_state.get('uk_map_grid_bundle')
-    if bundle is None or bundle.cycle != cycle or getattr(bundle,'coverage_revision',0) != 2:
+    if bundle is None or bundle.cycle != cycle or getattr(bundle,'coverage_revision',0) != COVERAGE_REVISION:
         bundle = load_uk_map_grid(cycle)
         st.session_state['uk_map_grid_bundle'] = bundle
     return bundle
 
 
+def fetch_regional_sources(cycle):
+    """One shared source bundle, including a bounded recovery of missing regions.
+
+    A large multi-coordinate timeout must not poison the complete 30-minute
+    cycle. Retry only unsupported regional anchors as small, independent
+    ICON/ECMWF requests, once before publishing the bundle. Model/day/hour
+    switches share this work; the national map grid is never involved.
+    """
+    http = GridHttpClient()
+    client = OpenMeteoClient(http.settings, http=http)
+    points = forecast_locations()
+    batch = client.fetch_batched(points, FORECAST_MODELS.values(), batch_size=8)
+    first_day = datetime.fromtimestamp(cycle*1800, UTC).astimezone(LOCAL_TIMEZONE).date()
+    resolved = {f.location.key: f for f in complete_regional_forecasts(
+        batch.forecasts, FORECAST_MODELS[default_forecast_model()], first_day)}
+    missing = tuple(p for p in points if p.key.startswith('region:') and
+                    (p.key not in resolved or min(soaring_coverage(resolved[p.key], first_day)) < 8))
+    if not missing:
+        return batch
+    from watchdog_weather import fetch_weather
+    recovery = fetch_weather([('regional', missing,
+        (FORECAST_MODELS['icon_eu'], FORECAST_MODELS['ifs025']), grid_variables(), 1)],
+        client=client)['regional']
+    combined = {(f.location.key, f.model): f for f in batch.forecasts}
+    for forecast in recovery.forecasts:
+        key = (forecast.location.key, forecast.model)
+        previous = combined.get(key)
+        # Preserve a useful original when the fresh retry supplies less evidence.
+        if previous is None or sum(soaring_coverage(forecast, first_day)) >= sum(soaring_coverage(previous, first_day)):
+            combined[key] = forecast
+    return ForecastBatch(tuple(combined.values()), batch.failures+recovery.failures)
+
+
 @st.cache_resource(ttl=1800,max_entries=2,show_spinner=False)
-def regional_sources(cycle, coverage_revision=2):
-    def fetch():
-        http=GridHttpClient()
-        client=OpenMeteoClient(http.settings,http=http)
-        return client.fetch_batched(forecast_locations(),FORECAST_MODELS.values(),batch_size=8)
-    return _pool.submit(fetch)
+def regional_sources(cycle, coverage_revision=3):
+    return _pool.submit(fetch_regional_sources, cycle)
 
 
 @st.cache_resource(ttl=1800,max_entries=6,show_spinner=False)
-def regional_future(cycle,model_key, coverage_revision=2):
+def regional_future(cycle,model_key=None, coverage_revision=3):
+    model_key = model_key or default_forecast_model()
     result = Future()
     def completed(raw):
         def publish():
             try:
                 batch = raw.result()
-                result.set_result(ForecastBatch(complete_forecasts(batch.forecasts,FORECAST_MODELS[model_key]),batch.failures))
+                first_day = datetime.fromtimestamp(cycle*1800, UTC).astimezone(LOCAL_TIMEZONE).date()
+                result.set_result(ForecastBatch(complete_regional_forecasts(
+                    batch.forecasts, FORECAST_MODELS[model_key], first_day), batch.failures))
             except Exception as exc:
                 result.set_exception(exc)
         _pool.submit(publish)

@@ -10,7 +10,7 @@ import app
 import bga_turnpoints as b
 import planning_ui as ui
 from alerts import ForecastBundle, save_bundle
-from config import forecast_locations
+from config import FORECAST_MODELS, forecast_locations
 from tests.fixtures import NOW, forecast
 from tests.test_task_planning import A, B, DAY, TASK
 
@@ -202,8 +202,9 @@ briefing_panel(b.load_catalog(),date(2026,6,10),'dry','ifs025',1,(),None,None,()
         with tempfile.TemporaryDirectory() as directory:
             snapshot=Path(directory)/'snapshot.json'
             save_bundle(ForecastBundle(tuple(forecast(p,start=NOW.replace(hour=0)) for p in forecast_locations()),(),.5,(),NOW),snapshot)
-            def corridor(points,*args,**kwargs):
-                return tuple(forecast(p,start=NOW.replace(hour=0)) for p in corridor_points(points)),()
+            def corridor(points,base,model_key,*args,**kwargs):
+                return tuple(forecast(p,start=NOW.replace(hour=0),model=FORECAST_MODELS[model_key].api_name)
+                             for p in corridor_points(points)),()
             with patch.dict('os.environ',{'DUO_TASK_STORE':directory+'/tasks','DUO_DASHBOARD_SNAPSHOT':str(snapshot)}), \
                  patch('planning_ui.task_weather',side_effect=corridor), \
                  patch('route_tools.publish_downloads',return_value='app/static/tasks/test/duo-task'):

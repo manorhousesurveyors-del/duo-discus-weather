@@ -23,10 +23,13 @@ including winter GMT. The initial view selects tomorrow at 13:00 after today's
 13:00 has passed. Refresh weather explicitly to request new data; cached
 forecasts last 30 minutes and aviation observations 60 seconds.
 
-The Met Office, ECMWF and ICON selections preserve native forecast values and
-fill missing fields hour by hour from the other models. Missing boundary-layer
+Fresh sessions default to **DWD ICON-EU · 7 km**. Explicit model choices persist.
+The Met Office, ECMWF and ICON selections fill missing fields hour by hour
+from the other models before daily coverage checks. Missing boundary-layer
 height uses a bracketed parcel estimate when necessary; missing CAPE alone never
-blocks a rating. The Weather caption, Data quality table and Point Forecast
+blocks a rating. If a regional profile still has fewer than eight covered hours,
+the loader checks complete ICON/ECMWF soundings and chooses one only when coverage
+improves without reducing another day's coverage. The Weather caption, Data quality table and Point Forecast
 Probe disclose supporting sources. Each day card separates **8/8 local hours
 covered** from the number of hours suitable for soaring. The Duo polar and
 single circling-sink deduction remain unchanged.
@@ -39,8 +42,10 @@ forecast heuristics, with missing evidence hatched. The header explicitly shows
 **Wing loading: 34 kg/m² · no water ballast** or the 43 kg/m² ballasted option;
 the loading choice does not disable clouds.
 
-Public weather APIs need no credentials. The first map/grid load can take a few
-minutes because requests respect Open-Meteo's weighted quota. Allow about 2 GB
+Public weather APIs need no credentials. Regional and national fetches run in
+the background. Fresh startup shows a loading message while the regional check
+finishes, rather than false 0/8 cards. Unsupported regions get one bounded
+recovery fetch in the same cycle; an actual total outage remains explicit. Allow about 2 GB
 RAM for the dashboard and land mask; the mask alone expands to about 1 GB.
 Dependencies are pinned in [requirements.txt](requirements.txt).
 

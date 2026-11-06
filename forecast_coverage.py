@@ -1,17 +1,17 @@
 """Explicit, time-aligned model support for dashboard and task forecasts.
 
-Keep every supplied primary value. Fill gaps only at the same requested
-coordinate and exact UTC hour, retaining donor identity for every value. CAPE
-is optional evidence, never a prerequisite for dry thermal or day ratings.
+Field completion preserves primary values at exact coordinates and UTC hours.
+The regional coverage guard may select a complete donor profile when that
+improves coverage. CAPE remains optional evidence for thermal/day ratings.
 """
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
-from config import HOURLY_VARIABLES
-from soaring_physics import Profile, boundary_layer_height
+from config import FORECAST_MODELS, HOURLY_VARIABLES, LOCAL_TIMEZONE
+from soaring_physics import Profile, boundary_layer_height, evaluate_thermals
 from atmospheric_moisture import complete_moisture
 
-COVERAGE_REVISION = 2
+COVERAGE_REVISION = 3
 PARCEL_SOURCE = 'estimated dry-parcel mixing depth'
 
 
@@ -101,3 +101,69 @@ def complete_forecasts(forecasts, model):
             notes.append('Partially missing variables: ' + ', '.join(partial))
         results.append(replace(resolved, missing_counts=counts, warnings=tuple(notes)))
     return tuple(results)
+
+
+def soaring_coverage(forecast, first_day, days=5):
+    """Known hours, not flyable hours: use the rating AND classification fields.
+
+    Zero climb, rain and poor days are valid evidence. CAPE is optional. Do not
+    replace bad flying weather simply because a different model looks better.
+    """
+    coverage = []
+    for offset in range(days):
+        known = 0
+        for hour in range(10, 18):
+            when = datetime.combine(first_day+timedelta(days=offset), time(hour), LOCAL_TIMEZONE)
+            try:
+                profile = Profile.from_forecast(forecast, when)
+            except KeyError:
+                continue
+            thermal = evaluate_thermals(profile)
+            wind = any(level and level.u_mps is not None and level.v_mps is not None
+                       for level in (profile.level(925), profile.level(850)))
+            if (wind and thermal.conservative_climb_knots is not None
+                    and thermal.usable_top_ft_amsl is not None and thermal.overdevelopment is not None
+                    and profile.values.get('precipitation') is not None):
+                known += 1
+        coverage.append(known)
+    return tuple(coverage)
+
+
+def complete_regional_forecasts(forecasts, model, first_day):
+    """Complete fields before validation, then prefer a usable donor sounding.
+
+    If hourly merging still leaves a day below 8/8, compare ICON/ECMWF profiles
+    at that exact requested coordinate. Replace the whole site's profile only
+    when coverage improves, retaining donor identity and internally consistent
+    terrain/units. This never fabricates weather during a total provider outage.
+    """
+    forecasts = tuple(forecasts)
+    result = []
+    for selected in complete_forecasts(forecasts, model):
+        coverage = soaring_coverage(selected, first_day)
+        score = (sum(n == 8 for n in coverage), sum(coverage))
+        best = selected
+        if min(coverage) < 8:
+            peers = tuple(f for f in forecasts if f.location == selected.location)
+            for key in ('icon_eu', 'ifs025'):
+                donor = FORECAST_MODELS[key]
+                if donor.api_name == model.api_name:
+                    continue
+                candidates = complete_forecasts(peers, donor)
+                if not candidates:
+                    continue
+                candidate = candidates[0]
+                other = soaring_coverage(candidate, first_day)
+                other_score = (sum(n == 8 for n in other), sum(other))
+                # Never repair one date by removing valid coverage from another.
+                if other_score > score and all(a >= b for a, b in zip(other, coverage)):
+                    best, coverage, score = candidate, other, other_score
+                if min(coverage) == 8:
+                    break
+        if best is not selected:
+            supplied_by = best.model
+            best = complete_forecasts((best,), model)[0]
+            best = replace(best, warnings=best.warnings+(
+                f'Coverage fallback to {supplied_by}: a more complete five-day sounding replaced the unusable primary profile.',))
+        result.append(best)
+    return tuple(result)

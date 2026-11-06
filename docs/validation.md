@@ -1046,3 +1046,37 @@ spread-out rolls, stratus bands, ice wisps and potential storm anvils, plus the
 explicit wing-loading label. No extra moisture is invented during an outage.
 Browser artifacts remain under ignored `var/` directories. Compilation,
 JavaScript syntax and `git diff --check` also passed.
+
+## Fresh-session forecast recovery — 6 November 2026
+
+The fresh live path still selected UKMO by default. More importantly, a pending
+regional Future fell through to the empty-forecast UI, producing false 0/8 cards
+before the fetch completed. Raw model support already existed, but a failed
+multi-point source bundle had no targeted recovery and stayed cached for the
+cycle. These paths are now covered directly rather than only through recorded
+snapshots: ICON-EU is the shared startup default, pending Weather renders a
+loading state, and the regional loader validates five days before publishing.
+
+The suite passed **296 tests** in **73.506 seconds**. New tests execute the real
+`app._main()` in an empty AppTest session with a synthetic live transport, then
+verify the default, five 8/8 cards, explicit UKMO/ECMWF choices and transport
+reuse. Other cases cover pending navigation, a **7/8** primary sounding repaired
+by a complete donor, preservation of zero-climb one-star weather, all-provider
+outage, coordinate isolation and one shared targeted recovery after batch
+failure. The optimiser fixture now honours the selected model, rather than
+silently assuming the previous ECMWF recorded-session default.
+
+An actual Open-Meteo regional check completed in **11.631 seconds**. Despite
+16 failed point/model responses, all **23 sites** retained forecasts and all
+three Long Mynd selections gave **8/8 covered hours** and valid **one-star**
+ratings on **6–10 November**. Complete evidence does not imply good soaring.
+The runtime summary is in ignored `var/fresh-forecast-live.json`.
+
+`verify_fresh_forecast.py` passed in Chromium against the deliberately delayed,
+synthetic live-path fixture on port 8507. It observed the loading state, ICON-EU
+default, five valid cards and supported UKMO selection. A DOM observer detected
+**zero unavailable-message flashes**, and no browser errors occurred.
+`verify_forecast_coverage.py` also passed all **15 model/day cases**, with maximum
+probe draw/paint **56.3/63.8 ms** and zero script errors. The synthetic fixtures
+are labelled and send no messages or live weather requests. Compilation and
+whitespace checks passed; no notifications were sent during any validation.

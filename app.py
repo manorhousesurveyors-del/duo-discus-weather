@@ -1,7 +1,7 @@
 """Interactive UK soaring dashboard. Start with: streamlit run app.py.
 
-The requested model retains its native values; explicit, labelled model support
-fills missing fields. Point probes read cached samples without click-time I/O.
+The requested model is preferred; labelled support fills missing fields or
+replaces unusable regional profiles. Point probes reuse cached samples.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ import importlib
 import runtime_imports
 
 # The compatibility registry itself may also predate this deployment.
-if getattr(runtime_imports,'API_REVISION',0)<7:
+if getattr(runtime_imports,'API_REVISION',0)<8:
     importlib.reload(runtime_imports)
 optional_module=runtime_imports.optional_module
 
@@ -39,7 +39,7 @@ from task_planning import task_distance
 
 from alerts import (ForecastBundle, GRID_VARIABLES, evaluate_convergence, load_bundle)
 from config import (FORECAST_MODELS, LOCAL_TIMEZONE, MONITORING_ZONES,
-                    WAVE_RIDGES, GeoPoint, convergence_grid, forecast_locations)
+                    WAVE_RIDGES, GeoPoint, convergence_grid, default_forecast_model, forecast_locations)
 from data_ingestion import (AviationWeatherClient, Forecast, IngestionError, JsonHttpClient,
                             OpenMeteoClient, utc_datetime)
 from soaring_physics import (CP, RD, Profile, dewpoint_c, distance_bearing,
@@ -50,12 +50,12 @@ CATEGORY_COLOURS = {'VFR':'#15835d','MVFR':'#2674c5','IFR':'#d84949','LIFR':'#a3
 
 
 @st.cache_resource(max_entries=2,show_spinner=False)
-def load_recorded(path,modified,coverage_revision=2):
+def load_recorded(path,modified,coverage_revision=3):
     return load_bundle(Path(path))
 
 
 @st.cache_resource(ttl=1800,max_entries=6,show_spinner=False)
-def load_sites(model_key: str, refresh_bucket: int, coverage_revision=2):
+def load_sites(model_key: str, refresh_bucket: int, coverage_revision=3):
     from uk_map_grid import regional_future
     return regional_future(refresh_bucket,model_key)
 
@@ -470,11 +470,12 @@ def _main():
     st.set_page_config(page_title='Duo · UK soaring weather',page_icon='⛅',layout='wide',initial_sidebar_state='expanded')
     # Cached pre-deployment Forecast objects lack the provenance schema. Retire
     # only weather state once; preserve tasks, navigation and user preferences.
-    if st.session_state.get('forecast_coverage_revision') != 2:
+    if st.session_state.get('forecast_coverage_revision') != 3:
         for key in list(st.session_state):
             if key.startswith(('forecast_bundle:','forecast_fallback:')):
                 del st.session_state[key]
-        st.session_state['forecast_coverage_revision']=2
+        st.session_state.pop('uk_map_grid_bundle',None)
+        st.session_state['forecast_coverage_revision']=3
     st.markdown('<style>.block-container{padding-top:1.5rem}div[data-testid="stMetric"]{background:#fff;border:1px solid #dce5e8;border-radius:12px;padding:12px}'
                 'h1{letter-spacing:-.04em}section[data-testid="stSidebar"]{border-right:1px solid #dce5e8}</style>',unsafe_allow_html=True)
     now=datetime.now(UTC)
@@ -512,9 +513,9 @@ def _main():
         st.subheader('Forecast controls')
         visual_mode=st.selectbox('Map mode',list(MODES),format_func=MODES.get,key='visual_mode',
             help='Choose one main map view. The floating Map modes menu offers the same choices; Clean Map hides weather overlays.')
-        if 'forecast_model' not in st.session_state:st.session_state['forecast_model']='ifs025' if recorded else 'ukmo'
+        if 'forecast_model' not in st.session_state:st.session_state['forecast_model']=default_forecast_model()
         model_key=st.selectbox('Forecast model',list(MODEL_LABELS),format_func=MODEL_LABELS.get,key='forecast_model',
-            help='Keep this model’s native values. Missing fields use ECMWF/ICON support or a bracketed parcel-height estimate, labelled in Data quality and the point probe. No missing value is treated as good weather.')
+            help='Fresh sessions start with ICON-EU. Missing fields use labelled model support; an unusable five-day profile falls back to a better-covered ICON/ECMWF sounding. Missing evidence is never treated as good weather.')
         if 'bot_forecast_day' in st.session_state:
             st.session_state['forecast_day']=st.session_state.pop('bot_forecast_day')
         default_day=1 if anchor.astimezone(LOCAL_TIMEZONE).hour>=13 else 0
@@ -577,6 +578,7 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
     from route_tools import optimizer_panel,task_sheet_panel
     from help_guide import render_help
     from app_cache import forecast_run_id,covered_forecasts
+    regional_loading=False
     if recorded:
         forecasts=covered_forecasts(forecast_run_id(recorded.forecasts),model_key,_forecasts=recorded.forecasts); errors=recorded.errors
     elif active_page in ('Help Guide','Help & Briefing Bot','Data quality','Live OGN Glider Radar'):
@@ -594,10 +596,16 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
                 forecasts=st.session_state.get('forecast_bundle:'+model_key,())
                 errors=(str(exc),)
         else:
+            regional_loading=True
             forecasts=st.session_state.get('forecast_bundle:'+model_key,())
             errors=()
             grid_progress(pending,'Regional forecasts are updating in the background. Stored data retains its retrieval time.')
     st.session_state['forecast_bundle:'+model_key]=forecasts
+    if regional_loading and not forecasts and active_page=='Weather map':
+        st.info('Loading the five-day regional forecast and checking ICON-EU / ECMWF coverage…')
+        # Pending is not a forecast failure. Do not create 0/8 ratings or start a
+        # national grid before the regional source/fallback check has finished.
+        return
     if active_page=='Help Guide':
         render_help(catalog,None,None,(),forecasts=forecasts,day=day,today=anchor.astimezone(LOCAL_TIMEZONE).date(),model_key=model_key,bucket=bucket,recorded=bool(recorded))
         return
@@ -608,10 +616,10 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
         catalog_panel(catalog)
         st.divider();st.subheader('Forecast quality')
         weather_table([{'Location':f.location.name,'Retrieved UTC':f.fetched_at.isoformat(),'Available through':str(f.available_through),'Gap support':', '.join(f.supplemental_sources) or 'None','Unavailable fields':', '.join(f.unavailable_variables)} for f in forecasts],
-            {'Location':'Requested forecast coordinate.','Retrieved UTC':'Oldest contributing response retrieval time.','Available through':'Last non-null surface-temperature hour.','Gap support':'Models or parcel estimates used only where requested-model fields were missing. Exact field/hour sources are retained in the forecast.','Unavailable fields':'Fields still absent after model support. CAPE is optional for thermal ratings.'})
+            {'Location':'Requested forecast coordinate.','Retrieved UTC':'Oldest contributing response retrieval time.','Available through':'Last non-null surface-temperature hour.','Gap support':'Models or parcel estimates filling missing fields, or a complete fallback sounding when coverage improves. Exact field/hour sources are retained.','Unavailable fields':'Fields still absent after model support. CAPE is optional for thermal ratings.'})
         if errors:st.warning('\n'.join(dict.fromkeys(errors)))
         return
-    if not forecasts: st.warning('No regional forecast is available for this model. The task builder and exports remain available.')
+    if not forecasts and not regional_loading: st.warning('No regional forecast is available for this model. The task builder and exports remain available.')
     assessment=None; task_forecasts=()
     if len(points)>=2 and active_page=='Task planner':
         try:
@@ -677,7 +685,7 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
     assert active_page=='Weather map'
     support=sorted({s for f in combined for s in f.supplemental_sources})
     if support:
-        st.caption(MODEL_LABELS[model_key]+' · Missing fields supported by '+', '.join(support)+'. Native model values are preserved.')
+        st.caption(MODEL_LABELS[model_key]+' · Forecast supported by '+', '.join(support)+'. Complete fallback profiles are used only when coverage improves.')
     wind_product=None
     if visual_mode in ('wind','thermal','pfd','xc','stf') and not recorded:
         from uk_map_grid import session_grid,grid_progress
