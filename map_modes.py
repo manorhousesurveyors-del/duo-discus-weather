@@ -5,6 +5,7 @@ import json
 import folium
 import streamlit as st
 from branca.element import MacroElement, Template
+from client_map import install_wind_canvas
 from map_weather import BANDS, contour_features, soaring_samples, wind_payload
 
 MODES = {'clean':'Off / Clean Map', 'wind':'Windy-style Wind Stream', 'radar':'Weather Radar',
@@ -29,6 +30,7 @@ def map_products(forecasts,when,anchor,loading,mode):
 
 def add_map_modes(map_view,forecasts,when,anchor,loading,*,mode='clean',radar=None,task=(),rate_grid=None,radar_point=None,hide_menu=False,wind_product=None):
     if mode not in MODES: mode='clean'
+    if mode=='wind':install_wind_canvas(map_view)
     samples,contours,wind=([],{'type':'FeatureCollection','features':[]},wind_product) if mode=='wind' and wind_product is not None else map_products(forecasts,when,anchor,loading,mode)
     payload={'mode':mode,'modes':MODES,'when':when.isoformat(),'wind':wind,'samples':samples,
              'contours':contours,'bands':BANDS.get(mode),'radar':radar,'points':len(task),

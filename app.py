@@ -26,7 +26,7 @@ import importlib
 import runtime_imports
 
 # The compatibility registry itself may also predate this deployment.
-if getattr(runtime_imports,'API_REVISION',0)<10:
+if getattr(runtime_imports,'API_REVISION',0)<11:
     importlib.reload(runtime_imports)
 optional_module=runtime_imports.optional_module
 

@@ -125,13 +125,19 @@ function installDuoModes(map, data) {
     try{const saved=JSON.parse(sessionStorage.getItem('duo-wind')||'null');if(saved&&saved.signature===signature){level=saved.level;index=saved.index;}else{index=Math.max(0,w.times.findIndex(t=>new Date(t)>=new Date(data.when)));}}catch(e){}
     const save=()=>{try{sessionStorage.setItem('duo-wind',JSON.stringify({signature,level,index}));}catch(e){}};
     const altitude=control('topleft','duo-altitude',w.levels.map((label,i)=>'<button data-level="'+i+'" aria-pressed="'+(i===level)+'" title="Pressure-level height is approximate. Missing levels use log-pressure vector interpolation; underground levels show labelled surface wind.">'+esc(label)+'</button>').join(''));
-    const timeline=control('bottomleft','duo-timeline','<label for="duo-wind-time">'+esc(w.labels[index])+'</label><input id="duo-wind-time" aria-label="Five-day hourly wind timeline" title="Move through five days. Grey or empty coverage means this model has no data for that hour." type="range" min="0" max="'+(w.times.length-1)+'" value="'+index+'"><button class="duo-play" title="Play or pause the wind forecast timeline.">▶ Play timeline</button><small>Model forecast · '+esc(w.source)+'. White particles show motion towards the wind destination. Spatial gap estimates: '+(w.coverage?.spatial_estimates||0)+'; furthest nearest source '+(w.coverage?.max_nearest_source_km||0)+' km. Estimates get less reliable across large gaps.</small>');
-    control('bottomright','duo-legend','<b>Wind speed · kt</b><div class="duo-ramp" style="background:linear-gradient(90deg,#2558ad,#25aabc,#60b860,#f1dd49,#ed653b,#d2356f,#be49c9)"></div><div class="duo-labels"><span>0</span><span>10</span><span>20</span><span>30</span><span>40</span><span>60+</span></div>');
-    const canvas=L.DomUtil.create('canvas','duo-wind-heat',map.getPanes().overlayPane),particles=L.DomUtil.create('canvas','duo-wind-particles',map.getPanes().overlayPane);
-    for(const c of [canvas,particles]){c.style.position='absolute';c.style.pointerEvents='none';c.style.zIndex='300';}
-    const ctx=canvas.getContext('2d'),pc=particles.getContext('2d');let grid=[],cols=0,rows=0,swarm=[],last=0;
-    const stops=[[0,[37,88,173]],[10,[37,170,188]],[20,[96,184,96]],[30,[241,221,73]],[40,[237,101,59]],[50,[210,53,111]],[65,[190,73,201]]];
-    function colour(speed){for(let i=1;i<stops.length;i++)if(speed<=stops[i][0]){const a=stops[i-1],b=stops[i],f=(speed-a[0])/(b[0]-a[0]);return 'rgba('+a[1].map((c,j)=>Math.round(c+(b[1][j]-c)*f)).join(',')+',.56)';}return 'rgba(190,73,201,.56)';}
+    const timeline=control('bottomleft','duo-timeline','<label for="duo-wind-time">'+esc(w.labels[index])+'</label><input id="duo-wind-time" aria-label="Five-day hourly wind timeline" title="Move through five days. Grey or empty coverage means this model has no data for that hour." type="range" min="0" max="'+(w.times.length-1)+'" value="'+index+'"><button class="duo-play" title="Play or pause the wind forecast timeline.">▶ Play timeline</button><small>Model forecast · '+esc(w.source)+'. Black arrows move with the wind; barbs point into it. Spatial gap estimates: '+(w.coverage?.spatial_estimates||0)+'; furthest nearest source '+(w.coverage?.max_nearest_source_km||0)+' km. Estimates get less reliable across large gaps.</small>');
+    const displayBar=control('topright','duo-altitude','<button data-wind-display title="Switch instantly between arrows moving with the wind and meteorological barbs pointing into it. Map-click inspection works in both views." aria-pressed="false">Wind Display: Streaming Arrows</button>');
+    const displayButton=displayBar.querySelector('button');
+    control('bottomright','duo-legend','<b>Wind · kt</b><small>Arrows move with the wind.<br>Barbs point into the wind: half = 5 kt, full = 10 kt, triangle = 50 kt. Circle = calm.<br>Click for wind at every altitude.</small>');
+    // Wind has no coloured raster at any zoom. Suppress a legacy canvas on
+    // initial render and immediately on zoom, including zoom >= 7.
+    function hideLegacyRaster(){map.getContainer().querySelectorAll('.duo-wind-heat,.duo-wind-raster').forEach(c=>{c.style.display='none';c.style.filter='none';});}
+    const particles=L.DomUtil.create('canvas','duo-wind-particles leaflet-zoom-hide',map.getPanes().overlayPane);
+    particles.style.cssText='position:absolute;pointer-events:none;z-index:300;filter:none';
+    const pc=particles.getContext('2d'),glyphs=map._duoWindGlyphs,motion=window.matchMedia('(prefers-reduced-motion: reduce)');
+    let grid=[],cols=0,rows=0,swarm=[],last=0,display='arrows',barbs=[],spacing=100,drawFrames=0,arrowCount=0;
+    let width=0,height=0,ratio=1;
+    try{if(sessionStorage.getItem('duo-wind-display')==='barbs')display='barbs';}catch(e){}
     function weights(lat,lon){
       const g=w.grid,ys=g.latitudes,xs=g.longitudes;
       if(lat<ys[0]||lat>ys.at(-1)||lon<xs[0]||lon>xs.at(-1))return [];
@@ -141,25 +147,68 @@ function installDuoModes(map, data) {
       return [[(1-fx)*(1-fy),g.indices[row][col]],[fx*(1-fy),g.indices[row][col+1]],[(1-fx)*fy,g.indices[row+1][col]],[fx*fy,g.indices[row+1][col+1]]].filter(p=>p[1]!==null&&p[0]>0);
     }
     function sample(weight,t=index,l=level){let u=0,v=0,total=0,interpolated=false,terrain=false,spatial=false,count=0;for(const [f,i] of weight){const a=w.stations[i].values[t]?.[l];if(!a)continue;u+=a[0]*f;v+=a[1]*f;total+=f;count++;interpolated||=!!(a[2]&1);terrain||=!!(a[2]&2);spatial||=!!(a[2]&4);}return total?{u:u/total,v:v/total,interpolated,terrain,spatial,count}:null;}
-    function rebuild(){
-      if(!alive)return;const size=map.getSize(),origin=map.containerPointToLayerPoint([0,0]);
-      for(const c of [canvas,particles]){c.width=size.x;c.height=size.y;L.DomUtil.setPosition(c,origin);}
-      cols=Math.ceil(size.x/28)+1;rows=Math.ceil(size.y/28)+1;grid=[];
-      for(let y=0;y<rows;y++)for(let x=0;x<cols;x++){
-        const ll=map.containerPointToLatLng([x*28,y*28]),v=sample(weights(ll.lat,ll.lng));grid.push(v);
-        if(v){ctx.fillStyle=colour(Math.hypot(v.u,v.v)*1.943844);ctx.fillRect(x*28-14,y*28-14,29,29);}
+    function gridVector(x,y){
+      const ix=Math.round(x/28),iy=Math.round(y/28);
+      return ix<0||ix>=cols||iy<0||iy>=rows?null:grid[iy*cols+ix];
+    }
+    function seed(p,x=Math.random()*width,y=Math.random()*height){
+      p.x=x;p.y=y;p.age=Math.random()*80;p.trail=[];
+      const v=gridVector(x,y),speed=v?Math.hypot(v.u,v.v):0;
+      if(speed>.01)p.trail=[[x-v.u/speed*18,y+v.v/speed*18],[x,y]];
+      return p;
+    }
+    function paintArrows(advance=false){
+      pc.clearRect(0,0,width,height);arrowCount=0;barbs=[];
+      for(const p of swarm){
+        const v=gridVector(p.x,p.y);
+        if(!v||p.age>100||p.x<0||p.x>width||p.y<0||p.y>height){seed(p);continue;}
+        if(advance){p.x+=v.u*.14;p.y-=v.v*.14;p.age++;p.trail.push([p.x,p.y]);if(p.trail.length>12)p.trail.shift();}
+        if(Math.hypot(v.u,v.v)>.01&&glyphs.arrow(pc,p.trail))arrowCount++;
       }
-      // Canvas CSS softens cell transitions without suggesting finer weather data.
-      canvas.style.filter='blur(8px)';swarm=Array.from({length:450},()=>({x:Math.random()*size.x,y:Math.random()*size.y,age:Math.random()*90}));
+      drawFrames++;
+    }
+    function paintBarbs(){
+      pc.clearRect(0,0,width,height);barbs=[];arrowCount=0;
+      const maxSpeed=grid.reduce((m,v)=>v?Math.max(m,Math.hypot(v.u,v.v)*1.943844492):m,0);
+      const extent=glyphs.barbParts(maxSpeed).shaft;
+      spacing=Math.max(92+Math.min(6,Math.max(0,map.getZoom()-5))*8,extent*2+44);
+      for(let y=spacing/2;y<height-spacing/4;y+=spacing)for(let x=spacing/2;x<width-spacing/4;x+=spacing){
+        const ll=map.containerPointToLatLng([x,y]),v=sample(weights(ll.lat,ll.lng));if(!v)continue;
+        const barb=glyphs.barb(pc,x,y,v.u,v.v);if(barb)barbs.push({...barb,lat:ll.lat,lon:ll.lng});
+      }
+      drawFrames++;
     }
     function animate(now){
-      if(!alive)return;animation=requestAnimationFrame(animate);if(now-last<35)return;last=now;
-      pc.globalCompositeOperation='destination-in';pc.fillStyle='rgba(0,0,0,.91)';pc.fillRect(0,0,particles.width,particles.height);pc.globalCompositeOperation='source-over';pc.strokeStyle='rgba(255,255,255,.8)';pc.lineWidth=1.1;pc.beginPath();
-      for(const p of swarm){const ix=Math.round(p.x/28),iy=Math.round(p.y/28),v=grid[iy*cols+ix];
-        if(!v||p.age++>90||ix<0||ix>=cols||iy<0||iy>=rows){p.x=Math.random()*particles.width;p.y=Math.random()*particles.height;p.age=0;continue;}
-        pc.moveTo(p.x,p.y);p.x+=v.u*.14;p.y-=v.v*.14;pc.lineTo(p.x,p.y);
-      }pc.stroke();
+      animation=0;if(!alive||display!=='arrows'||motion.matches)return;
+      if(now-last>=35){last=now;paintArrows(true);}
+      animation=requestAnimationFrame(animate);
     }
+    function renderDisplay(){
+      cancelAnimationFrame(animation);animation=0;
+      displayButton.textContent='Wind Display: '+(display==='arrows'?'Streaming Arrows':'Wind Barbs');
+      displayButton.setAttribute('aria-pressed',String(display==='barbs'));
+      if(display==='barbs')paintBarbs();else{paintArrows();if(!motion.matches)animation=requestAnimationFrame(animate);}
+    }
+    function rebuild(){
+      if(!alive)return;hideLegacyRaster();const size=map.getSize(),origin=map.containerPointToLayerPoint([0,0]);
+      width=size.x;height=size.y;ratio=Math.min(2,window.devicePixelRatio||1);
+      particles.width=Math.round(width*ratio);particles.height=Math.round(height*ratio);
+      particles.style.width=width+'px';particles.style.height=height+'px';L.DomUtil.setPosition(particles,origin);
+      pc.setTransform(ratio,0,0,ratio,0,0);pc.imageSmoothingEnabled=false;
+      cols=Math.ceil(width/28)+1;rows=Math.ceil(height/28)+1;grid=[];
+      for(let y=0;y<rows;y++)for(let x=0;x<cols;x++){
+        const ll=map.containerPointToLatLng([x*28,y*28]);grid.push(sample(weights(ll.lat,ll.lng)));
+      }
+      // Stratified seeding gives every part of the viewport equal coverage.
+      swarm=[];const nx=Math.max(1,Math.ceil(width/85)),ny=Math.max(1,Math.ceil(height/85));
+      for(let y=0;y<ny;y++)for(let x=0;x<nx;x++)swarm.push(seed({},(x+.2+Math.random()*.6)*width/nx,(y+.2+Math.random()*.6)*height/ny));
+      renderDisplay();
+    }
+    displayButton.onclick=()=>{
+      display=display==='arrows'?'barbs':'arrows';
+      try{sessionStorage.setItem('duo-wind-display',display);}catch(e){}
+      renderDisplay();
+    };
     function update(){save();altitude.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(Number(b.dataset.level)===level)));timeline.querySelector('label').textContent=w.labels[index];timeline.querySelector('input').value=index;rebuild();if(lastClick)windClick(lastClick);}
     altitude.querySelectorAll('button').forEach(button=>button.onclick=()=>{level=Number(button.dataset.level);update();});
     timeline.querySelector('input').oninput=e=>{index=Number(e.target.value);update();};
@@ -172,9 +221,11 @@ function installDuoModes(map, data) {
       const bars=series.map((p,i)=>'<i style="height:'+(p?Math.min(72,Math.hypot(p.u,p.v)*1.943844*1.3):1)+'px;'+(!p?'background:#555;':'')+'" title="'+esc(w.labels[i]+': '+windText(p))+'"></i>').join('');
       callout(ll,'<b>Wind: '+windText(v)+'</b><br>'+esc(w.labels[index])+'<br>'+ll.lat.toFixed(4)+', '+ll.lng.toFixed(4)+'<details><summary>Vertical wind profile</summary><table>'+vertical+'</table></details><details><summary>Five-day wind timeline</summary><div class="duo-bars">'+bars+'</div><small>Hover a bar for time and wind. Grey = unavailable.</small></details><small>Regular-grid model interpolation at this coordinate. Pressure heights are approximate. Surface fallback is identified above where the requested pressure lies at or below the lowest near-surface sample; unavailable hours are not extrapolated.</small>');
     };
-    map._duoWind={sampleAt:(lat,lon,t=index,l=level)=>sample(weights(lat,lon),t,l),bounds:w.grid,coverage:w.coverage,get swarm(){return swarm;},get raster(){return grid;}};
-    map.on('moveend resize',rebuild);rebuild();if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)animation=requestAnimationFrame(animate);
-    layers.push({remove:()=>{map.off('moveend resize',rebuild);canvas.remove();particles.remove();}});
+    map._duoWind={sampleAt:(lat,lon,t=index,l=level)=>sample(weights(lat,lon),t,l),bounds:w.grid,coverage:w.coverage,
+      get swarm(){return swarm;},get raster(){return grid;},get display(){return display;},get barbs(){return barbs;},
+      get renderStats(){return {drawFrames,arrowCount,barbCount:barbs.length,spacing,animationRunning:!!animation,style:glyphs.style};}};
+    map.on('zoomstart zoomend',hideLegacyRaster);map.on('moveend resize',rebuild);motion.addEventListener('change',renderDisplay);rebuild();
+    layers.push({remove:()=>{map.off('zoomstart zoomend',hideLegacyRaster);map.off('moveend resize',rebuild);motion.removeEventListener('change',renderDisplay);particles.remove();delete map._duoWind;}});
   }
   function click(e){
     if(data.mode==='wind'&&windClick)windClick(e.latlng);

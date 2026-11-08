@@ -1176,3 +1176,38 @@ protocol and reconnection were verified with simulated sockets; **live APRS
 was not verified here**. The live integration exercised HTTPS fallback. On a
 direct-TCP deployment, the persistent receiver uses the randomized receive-only
 login and `r/54.2/-3.5/750`, with glidern1–4 fallbacks. No notifications were sent.
+
+## Clear wind canvas and meteorological barbs — 8 November 2026
+
+The full automated suite passed: **323 tests in 86.714 seconds**. New drawing
+tests execute the production JavaScript and verify 2.4 px charcoal arrow shafts,
+0.8 px white halos, 8 × 5 px filled arrowheads, 2.0 px barb shafts, calm circles,
+and 5/10/50 kt symbols including combined pennants. Direction checks distinguish
+arrows following the flow from barbs pointing into the wind. Hot-deployment API
+checks require the new canvas installer before the map consumer binds it.
+
+`scripts/verify_wind_display.py --terrain` passed in headless Chromium at 2×
+device pixel ratio, using synthetic forecast vectors and real Esri base tiles.
+It checked 3,600 UK/Ireland location/hour/altitude combinations, including repaired
+northern and western gaps. Actual canvas pixel reads found **no coloured fill**;
+98.55% of pixels remained fully transparent. Canvas draw calls confirmed the
+requested black strokes and white outlines, with no raster fill or blur.
+
+The display button switched in **1.4–2.8 ms** in this run. Barbs stopped the
+animation, displayed knot labels, and used 104/108/124 px grid spacing at zoom
+5/7/9. Real pointer clicks returned identical six-height profiles in both
+displays; altitude and hour changes updated the values and retained the 120-hour
+timeline. Tests also checked hiding an injected legacy heat canvas at zoom 7,
+reduced-motion rendering, cleanup, zero server events and zero browser errors.
+These timings describe this local Chromium run, not a guarantee for every device.
+
+`scripts/verify_wind_ogn.py` also passed its 3,600 wind samples and OGN protocol
+fixtures: five targets, category/airborne filters, default-hidden reference
+markers, and no fabricated traffic on an empty feed. The fresh Streamlit startup
+browser check retained ICON-EU by default, five supported day cards with 8/8
+covered hours, and the explicit UKMO fallback, with no unavailable-state flashes
+or errors. Weather and traffic inputs in these regression checks are fixtures;
+the providers and forecast algorithms were not changed by this display update.
+
+Local screenshots and JSON results are in `var/wind-display-browser/`,
+`var/wind-ogn-browser/` and `var/fresh-forecast-browser/` (ignored by Git).

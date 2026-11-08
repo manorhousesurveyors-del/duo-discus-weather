@@ -15,6 +15,17 @@ def script(map_view, filename, call, payload=None):
     element.add_to(map_view)
 
 
+def wind_canvas_options():
+    """Display-only settings; forecast vectors and inspection remain untouched."""
+    return {'colour':'#111827','arrowWidth':2.4,'barbWidth':2.0,
+            'haloWidth':.8,'halo':'rgba(255, 255, 255, 0.55)',
+            'headLength':8,'headWidth':5}
+
+
+def install_wind_canvas(map_view):
+    script(map_view,'wind_glyphs.js','installDuoWindCanvas',wind_canvas_options())
+
+
 def add_shared_task(map_view,points,when,*,editable=False):
     from planning_ui import task_payload
     payload=task_payload()

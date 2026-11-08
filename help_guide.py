@@ -15,7 +15,7 @@ TOPICS = (
         ('Step 3 · Check before you plan', 'Read the day estimate. Check cloud height, wind and rain. Missing weather means unknown.'))),
     ('🎨 What the Colours Mean', (
         ('Step 1 · Thermals and distance', 'Purple and blue mean less lift or distance. Green, yellow and red mean more. Clear areas may mean poor weather or missing data.'),
-        ('Step 2 · Wind', 'Blue means lighter wind. Yellow, red and purple mean stronger wind. White trails move with the air.'),
+        ('Step 2 · Wind', 'Black arrows move with the air. Wind Display switches to barbs pointing into the wind. Half feathers mean 5 knots; full feathers mean 10. Triangles mean 50 knots. Click for speeds at each height.'),
         ('Step 3 · Radar', 'The blue radar picture shows recent rain. Click for a model’s hourly rain estimate. The coloured bar marks this estimate. It uses your chosen forecast hour.'))),
     ('📍 How to Build a Glider Task on the Map', (
         ('Step 1 · Start your route', 'Open Route Forecast Planner. Zoom in. Click a BGA marker for your start.'),

@@ -124,6 +124,14 @@ A completely unavailable hour/level stays unknown. All six altitude frames are c
 wind/wave altitude changes, panning and zooming stay in the browser.
 Initial live downloads still depend on provider latency and quotas.
 
+Wind draws charcoal arrows with white outlines over the clear terrain map;
+there is no coloured wind haze at any zoom. **Wind Display** switches instantly
+to static meteorological barbs with knot labels. Arrows follow the flow; barbs
+point into the wind (half feather = 5 kt, full = 10 kt, pennant = 50 kt).
+Barb spacing adapts to zoom and symbol size. Both displays retain the same
+click inspection, six altitude choices and five-day timeline. Reduced-motion
+preferences stop the arrow animation while keeping its direction visible.
+
 The **1,098-entry UK airfield layer** includes the named gliding clubs and
 130 distinct NOAA reporting stations. Hover for current model wind and surface
 weather; click for runway information, latest METAR, full TAF and a six-hour

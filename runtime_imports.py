@@ -10,7 +10,7 @@ import sys
 from threading import RLock
 
 # Bump when new compatibility contracts must reach an already-running app.
-API_REVISION = 10
+API_REVISION = 11
 
 _lock = RLock()
 _log = logging.getLogger(__name__)
@@ -37,9 +37,9 @@ LAZY_APIS = {
     'help_guide': {'render_help': ('model_key', 'bucket', 'recorded')},
     'planning_ui': {'task_payload': (), 'set_task': ('client_version',)},
     'uk_airfields': {'add_airfields': ('show',)},
-    'client_map': {'add_shared_task': (), 'task_soaring_layers': ()},
+    'client_map': {'add_shared_task': (), 'task_soaring_layers': (), 'install_wind_canvas': ()},
     'wave_map': {'cached_wave_payload': ()},
-    'map_modes': {'add_map_modes': ('wind_product',)},
+    'map_modes': {'add_map_modes': ('wind_product',), 'install_wind_canvas': ()},
     'map_component': {'compressed_document': (), 'render_document': ('browser_cache',), 'document_version': (), 'cached_document': ()},
     'route_tools': {'screening_forecasts': ()},
     'route_analysis': {'planner_panel': ('document_cache',)},
