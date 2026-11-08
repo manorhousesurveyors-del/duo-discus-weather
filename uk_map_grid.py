@@ -15,7 +15,7 @@ from forecast_coverage import COVERAGE_REVISION, complete_regional_forecasts
 from map_weather import national_grid, wind_payload
 from weather_engine import ForecastHttpClient
 
-WIND_GRID_REVISION=3
+WIND_GRID_REVISION=4
 
 
 def grid_variables():
@@ -83,9 +83,10 @@ class UKGridBundle:
         if existing is not None:return existing
         batch=fetch_forecasts(national_grid(),model_key,self.cycle,product='wind')
         result=_completed(make_snapshot(batch.forecasts,batch.failures,self.anchor))
-        # Failed attempts must not become a pinned 30-minute grid. A subsequent
-        # user interaction may try again; no timer retries this request.
-        if batch.forecasts and not batch.failures:self._models[model_key]=result
+        # Cache the labelled display snapshot, including stored/demo products.
+        # This is separate from the successful HTTP cache; explicit Refresh
+        # clears this bundle and always attempts live providers again.
+        if batch.forecasts:self._models[model_key]=result
         return result
 
     def completed(self,model_key):
@@ -107,7 +108,7 @@ def _completed(value):
 
 
 @st.cache_resource(ttl=1800,max_entries=2,show_spinner=False)
-def load_uk_map_grid(forecast_cycle_30min_bucket,coverage_revision=3,wind_grid_revision=3):
+def load_uk_map_grid(forecast_cycle_30min_bucket,coverage_revision=3,wind_grid_revision=4):
     return UKGridBundle(forecast_cycle_30min_bucket)
 
 

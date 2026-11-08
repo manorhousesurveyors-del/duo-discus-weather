@@ -13,7 +13,7 @@ def catalog_resource(version):
     return bga_turnpoints.active_catalog()
 
 
-def forecast_run_id(forecasts, physics_revision=5):
+def forecast_run_id(forecasts, physics_revision=6):
     # Retrieval identity changes on refresh; location/model prevent cross-grid reuse.
     return (physics_revision,)+tuple((f.location.key,f.location.latitude,f.location.longitude,f.model,
                   f.fetched_at.isoformat(),len(f.times),f.supplemental_sources,f.source_runs) for f in forecasts)
@@ -27,12 +27,12 @@ def covered_forecasts(run_id,model_key,_forecasts,coverage_revision=3):
 
 
 @st.cache_data(ttl=1800,show_spinner=False,max_entries=48)
-def day_summary(run_id,origin,first_day,loading,model,_forecasts):
+def day_summary(run_id,origin,first_day,loading,model,_forecasts,preview=False):
     from datetime import timedelta
     from day_rating import rate_day
     from task_planning import classify_day
-    ratings=tuple(rate_day(_forecasts,origin,first_day+timedelta(days=i),loading,preference=(model,)) for i in range(5))
-    classes=tuple(classify_day(_forecasts,origin,first_day+timedelta(days=i),loading,preference=(model,)) for i in range(5))
+    ratings=tuple(rate_day(_forecasts,origin,first_day+timedelta(days=i),loading,preference=(model,),preview=preview) for i in range(5))
+    classes=tuple(classify_day(_forecasts,origin,first_day+timedelta(days=i),loading,preference=(model,),preview=preview) for i in range(5))
     return ratings,classes
 
 

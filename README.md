@@ -42,14 +42,16 @@ forecast heuristics, with missing evidence hatched. The header explicitly shows
 **Wing loading: 34 kg/m² · no water ballast** or the 43 kg/m² ballasted option;
 the loading choice does not disable clouds.
 
-Public weather APIs need no credentials. The dashboard fetches five days in one
-synchronous request per product, with a four-second socket timeout and no retry
-sleeps. Successful results are cached for 30 minutes. There is no weather polling
-or automatic page refresh. A failed request uses timestamped real stored data
-when available; a cold outage is reported honestly without fabricated flying
-conditions. Use **Refresh weather** to request another attempt. See the
-[architecture diagnostic and cache contracts](docs/architecture.md). Allow about
-2 GB RAM for the dashboard and land mask; the mask alone expands to about 1 GB.
+Public weather APIs need no credentials. The dashboard fetches nine UK/Ireland
+anchors, then interpolates the maps without more grid requests. Open-Meteo
+failures switch directly to MET Norway; successful live forecasts are cached for
+30 minutes and saved to `/tmp/duo_weather_cache.json`. There is no dashboard
+provider cooldown or automatic page refresh. Use **Refresh weather** for an
+immediate new attempt. If both providers and stored data fail, a clearly labelled
+**DEMONSTRATION ONLY** dataset keeps the controls usable. MET upper-air estimates
+and demonstration data are excluded from operational ratings, task verdicts and
+alerts. See the [architecture and source contracts](docs/architecture.md).
+Allow about 2 GB RAM for the dashboard and land mask.
 Dependencies are pinned in [requirements.txt](requirements.txt).
 
 ## BGA tasks, thermal map and briefing assistant

@@ -155,6 +155,11 @@ def add_wave_map(map_view,forecasts,when,*,prepared=None):
     from app_cache import forecast_run_id
     sources=tuple(f for f in forecasts if f.location.key.startswith(('region:','ridge:')))
     payload=prepared if prepared is not None else cached_wave_payload(forecast_run_id(sources),when,_forecasts=sources)
+    from forecast_quality import is_demo,is_surface_estimate
+    if any(is_demo(f) for f in sources):
+        payload={**payload,'source':'DEMONSTRATION ONLY · illustrative wave field, not a flying forecast'}
+    elif any(is_surface_estimate(f) for f in sources):
+        payload={**payload,'source':'MET Norway surface forecast · assumed upper profile; wave not verified'}
     script(map_view,'wave_map.js','installDuoWave',payload)
     body=load_airspace(when.astimezone(LOCAL_TIMEZONE).date())
     if body:

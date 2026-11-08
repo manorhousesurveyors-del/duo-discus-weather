@@ -6,13 +6,15 @@ from urllib.request import urlopen
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'var'/'architecture-browser';OUT.mkdir(parents=True,exist_ok=True)
 parser=argparse.ArgumentParser()
-parser.add_argument('--scenario',choices=('healthy','429','timeout'),action='append')
+parser.add_argument('--scenario',choices=('healthy','429','timeout','offline'),action='append')
 args=parser.parse_args()
-for scenario in args.scenario or ('healthy','429','timeout'):
+failures=[]
+for scenario in args.scenario or ('healthy','429','timeout','offline'):
     with tempfile.TemporaryDirectory(prefix='duo-browser-') as tasks:
         with socket.socket() as sock:
             sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
-        env={**os.environ,'DUO_TEST_SCENARIO':scenario,'DUO_TASK_STORE':tasks,'DUO_OGN_ENABLED':'0','GEMINI_API_KEY':''}
+        env={**os.environ,'DUO_TEST_SCENARIO':scenario,'DUO_TASK_STORE':tasks,'DUO_OGN_ENABLED':'0',
+            'DUO_WEATHER_CACHE_PATH':str(Path(tasks)/'weather-cache.json'),'GEMINI_API_KEY':''}
         with (OUT/(scenario+'-server.log')).open('w') as log:
             server=subprocess.Popen([sys.executable,'-m','streamlit','run','scripts/architecture_fixture.py',
                 '--server.headless=true','--server.port='+str(port),'--server.fileWatcherType=none',
@@ -27,8 +29,10 @@ for scenario in args.scenario or ('healthy','429','timeout'):
                     except OSError:pass
                     if server.poll() is not None or time.monotonic()>deadline:raise RuntimeError('Fixture did not start: '+scenario)
                     time.sleep(.1)
-                subprocess.run([sys.executable,'scripts/verify_architecture.py','--scenario',scenario,'--url',url],cwd=ROOT,env=env,check=True,timeout=240)
+                check=subprocess.run([sys.executable,'scripts/verify_architecture.py','--scenario',scenario,'--url',url],cwd=ROOT,env=env,check=False,timeout=240)
+                if check.returncode:failures.append((scenario,check.returncode))
             finally:
                 server.terminate()
                 try:server.wait(timeout=10)
                 except subprocess.TimeoutExpired:server.kill();server.wait()
+if failures:raise SystemExit('Browser scenarios failed: '+repr(failures))

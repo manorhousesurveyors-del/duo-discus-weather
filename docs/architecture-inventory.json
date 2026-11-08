@@ -29,7 +29,7 @@
   },
   {
     "path": "alerts.py",
-    "lines": 669,
+    "lines": 677,
     "imports": [
       "__future__",
       "argparse",
@@ -43,6 +43,7 @@
       "day_rating",
       "email.message",
       "forecast_coverage",
+      "forecast_quality",
       "global_land_mask",
       "hashlib",
       "html",
@@ -73,13 +74,14 @@
   },
   {
     "path": "app.py",
-    "lines": 149,
+    "lines": 156,
     "imports": [
       "__future__",
       "app_cache",
       "config",
       "data_ingestion",
       "datetime",
+      "forecast_quality",
       "importlib",
       "map_modes",
       "os",
@@ -376,7 +378,7 @@
   },
   {
     "path": "data_ingestion.py",
-    "lines": 988,
+    "lines": 1010,
     "imports": [
       "__future__",
       "argparse",
@@ -419,7 +421,7 @@
       483,
       544,
       827,
-      967
+      989
     ]
   },
   {
@@ -444,11 +446,12 @@
   },
   {
     "path": "day_rating.py",
-    "lines": 71,
+    "lines": 77,
     "imports": [
       "config",
       "dataclasses",
       "datetime",
+      "forecast_quality",
       "math",
       "soaring_physics",
       "statistics",
@@ -489,6 +492,16 @@
       "datetime",
       "forecast_sanitizer",
       "soaring_physics"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "forecast_quality.py",
+    "lines": 48,
+    "imports": [
+      "urllib.parse"
     ],
     "cache_decorators": [],
     "session_keys": [],
@@ -661,12 +674,13 @@
   },
   {
     "path": "map_weather.py",
-    "lines": 221,
+    "lines": 231,
     "imports": [
       "__future__",
       "config",
       "contourpy",
       "datetime",
+      "forecast_quality",
       "global_land_mask",
       "math",
       "numpy",
@@ -678,6 +692,26 @@
     "cache_decorators": [],
     "session_keys": [],
     "network_lines": []
+  },
+  {
+    "path": "met_norway.py",
+    "lines": 255,
+    "imports": [
+      "atmospheric_moisture",
+      "bisect",
+      "concurrent.futures",
+      "config",
+      "data_ingestion",
+      "dataclasses",
+      "datetime",
+      "forecast_sanitizer",
+      "math"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      239
+    ]
   },
   {
     "path": "ogn_live.py",
@@ -828,11 +862,12 @@
   },
   {
     "path": "pages/wave.py",
-    "lines": 42,
+    "lines": 44,
     "imports": [
       "airspace",
       "app_cache",
       "config",
+      "forecast_quality",
       "map_component",
       "map_view",
       "pathlib",
@@ -848,13 +883,14 @@
   },
   {
     "path": "pages/weather.py",
-    "lines": 218,
+    "lines": 250,
     "imports": [
       "alerts",
       "app_cache",
       "config",
       "data_ingestion",
       "datetime",
+      "forecast_quality",
       "importlib",
       "logging",
       "map_component",
@@ -973,13 +1009,14 @@
   },
   {
     "path": "point_forecast_meteogram.py",
-    "lines": 151,
+    "lines": 155,
     "imports": [
       "app_cache",
       "atmospheric_moisture",
       "client_map",
       "config",
       "datetime",
+      "forecast_quality",
       "math",
       "soaring_physics",
       "streamlit"
@@ -1099,7 +1136,7 @@
   },
   {
     "path": "runtime_imports.py",
-    "lines": 109,
+    "lines": 111,
     "imports": [
       "importlib",
       "inspect",
@@ -1113,7 +1150,7 @@
   },
   {
     "path": "scripts/architecture_fixture.py",
-    "lines": 81,
+    "lines": 96,
     "imports": [
       "app",
       "data_ingestion",
@@ -1127,6 +1164,7 @@
       "sys",
       "tests.provider_fixture",
       "threading",
+      "time",
       "urllib.error",
       "urllib.parse",
       "urllib.request"
@@ -1134,7 +1172,7 @@
     "cache_decorators": [
       {
         "function": "install",
-        "line": 47,
+        "line": 58,
         "decorator": "st.cache_resource"
       }
     ],
@@ -1143,7 +1181,7 @@
       "_page_render_ms"
     ],
     "network_lines": [
-      31
+      37
     ]
   },
   {
@@ -1233,7 +1271,7 @@
   },
   {
     "path": "scripts/run_architecture_checks.py",
-    "lines": 34,
+    "lines": 38,
     "imports": [
       "argparse",
       "os",
@@ -1248,7 +1286,7 @@
     "cache_decorators": [],
     "session_keys": [],
     "network_lines": [
-      25
+      27
     ]
   },
   {
@@ -1327,7 +1365,7 @@
   },
   {
     "path": "scripts/verify_architecture.py",
-    "lines": 316,
+    "lines": 348,
     "imports": [
       "argparse",
       "asyncio",
@@ -1344,8 +1382,8 @@
     "cache_decorators": [],
     "session_keys": [],
     "network_lines": [
-      84,
-      292
+      88,
+      324
     ]
   },
   {
@@ -1603,39 +1641,42 @@
   },
   {
     "path": "sync_weather.py",
-    "lines": 167,
+    "lines": 186,
     "imports": [
-      "collections",
+      "app_cache",
       "config",
       "data_ingestion",
       "dataclasses",
       "datetime",
       "forecast_coverage",
       "forecast_sanitizer",
+      "met_norway",
       "streamlit",
-      "threading",
-      "weather_engine"
+      "streamlit.runtime.scriptrunner",
+      "weather_anchors",
+      "weather_demo",
+      "weather_disk_cache"
     ],
     "cache_decorators": [
       {
         "function": "transport",
-        "line": 47,
+        "line": 50,
         "decorator": "st.cache_resource(show_spinner=False)"
       },
       {
-        "function": "_last_good",
-        "line": 52,
-        "decorator": "st.cache_resource(show_spinner=False)"
+        "function": "live_anchor_bundle",
+        "line": 87,
+        "decorator": "st.cache_data(ttl=1800, show_spinner=False, max_entries=12)"
       },
       {
-        "function": "cached_forecasts",
-        "line": 96,
+        "function": "_samples",
+        "line": 156,
         "decorator": "st.cache_data(ttl=1800, show_spinner=False, max_entries=48)"
       }
     ],
     "session_keys": [],
     "network_lines": [
-      65
+      56
     ]
   },
   {
@@ -1655,7 +1696,7 @@
   },
   {
     "path": "task_planning.py",
-    "lines": 463,
+    "lines": 476,
     "imports": [
       "__future__",
       "bga_turnpoints",
@@ -1664,6 +1705,7 @@
       "data_ingestion",
       "dataclasses",
       "datetime",
+      "forecast_quality",
       "hashlib",
       "io",
       "json",
@@ -1769,11 +1811,12 @@
   },
   {
     "path": "tests/provider_fixture.py",
-    "lines": 38,
+    "lines": 97,
     "imports": [
       "config",
       "datetime",
       "json",
+      "math",
       "tests.fixtures",
       "tests.test_ingestion",
       "threading",
@@ -2032,7 +2075,7 @@
   },
   {
     "path": "tests/test_fresh_forecast.py",
-    "lines": 145,
+    "lines": 206,
     "imports": [
       "app",
       "config",
@@ -2041,11 +2084,14 @@
       "datetime",
       "day_rating",
       "forecast_coverage",
+      "forecast_quality",
       "os",
+      "pathlib",
       "streamlit.testing.v1",
       "sync_weather",
       "tempfile",
       "tests.fixtures",
+      "tests.test_met_norway",
       "uk_map_grid",
       "unittest",
       "unittest.mock"
@@ -2270,6 +2316,27 @@
     "network_lines": []
   },
   {
+    "path": "tests/test_met_norway.py",
+    "lines": 128,
+    "imports": [
+      "config",
+      "copy",
+      "data_ingestion",
+      "datetime",
+      "json",
+      "map_weather",
+      "met_norway",
+      "tests.test_ingestion",
+      "threading",
+      "time",
+      "unittest",
+      "unittest.mock"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
     "path": "tests/test_ogn_live.py",
     "lines": 112,
     "imports": [
@@ -2466,20 +2533,26 @@
   },
   {
     "path": "tests/test_sync_weather.py",
-    "lines": 149,
+    "lines": 170,
     "imports": [
       "config",
-      "data_ingestion",
-      "datetime",
       "forecast_coverage",
+      "forecast_quality",
       "json",
       "map_weather",
+      "met_norway",
+      "pathlib",
       "sync_weather",
+      "tempfile",
       "tests.provider_fixture",
       "tests.test_ingestion",
+      "threading",
+      "time",
       "unittest",
       "unittest.mock",
-      "urllib.parse"
+      "urllib.parse",
+      "weather_anchors",
+      "weather_disk_cache"
     ],
     "cache_decorators": [],
     "session_keys": [],
@@ -2651,6 +2724,61 @@
     "network_lines": []
   },
   {
+    "path": "tests/test_weather_demo.py",
+    "lines": 168,
+    "imports": [
+      "alerts",
+      "app_cache",
+      "config",
+      "data_ingestion",
+      "dataclasses",
+      "datetime",
+      "day_rating",
+      "forecast_quality",
+      "json",
+      "map_weather",
+      "math",
+      "met_norway",
+      "pages.weather",
+      "point_forecast_meteogram",
+      "soaring_physics",
+      "task_planning",
+      "tests.fixtures",
+      "tests.provider_fixture",
+      "tests.test_task_planning",
+      "unittest",
+      "unittest.mock",
+      "urllib.request",
+      "weather_demo"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_weather_disk_cache.py",
+    "lines": 93,
+    "imports": [
+      "data_ingestion",
+      "dataclasses",
+      "datetime",
+      "forecast_quality",
+      "importlib",
+      "json",
+      "met_norway",
+      "pathlib",
+      "tempfile",
+      "tests.fixtures",
+      "tests.test_met_norway",
+      "unittest",
+      "unittest.mock",
+      "weather_disk_cache"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
     "path": "tests/test_weather_engine.py",
     "lines": 195,
     "imports": [
@@ -2749,7 +2877,7 @@
   },
   {
     "path": "uk_map_grid.py",
-    "lines": 164,
+    "lines": 165,
     "imports": [
       "concurrent.futures",
       "config",
@@ -2766,7 +2894,7 @@
     "cache_decorators": [
       {
         "function": "load_uk_map_grid",
-        "line": 110,
+        "line": 111,
         "decorator": "st.cache_resource(ttl=1800, max_entries=2, show_spinner=False)"
       }
     ],
@@ -2787,7 +2915,7 @@
   },
   {
     "path": "wave_map.py",
-    "lines": 166,
+    "lines": 171,
     "imports": [
       "PIL",
       "airspace",
@@ -2796,6 +2924,7 @@
       "client_map",
       "config",
       "folium",
+      "forecast_quality",
       "html",
       "io",
       "math",
@@ -2812,6 +2941,54 @@
         "decorator": "st.cache_data(ttl=1800, show_spinner=False, max_entries=12)"
       }
     ],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "weather_anchors.py",
+    "lines": 80,
+    "imports": [
+      "config",
+      "dataclasses",
+      "numpy",
+      "scipy.interpolate"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "weather_demo.py",
+    "lines": 122,
+    "imports": [
+      "atmospheric_moisture",
+      "config",
+      "data_ingestion",
+      "dataclasses",
+      "datetime",
+      "forecast_quality",
+      "math"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "weather_disk_cache.py",
+    "lines": 143,
+    "imports": [
+      "config",
+      "data_ingestion",
+      "dataclasses",
+      "datetime",
+      "forecast_quality",
+      "json",
+      "os",
+      "pathlib",
+      "tempfile",
+      "threading"
+    ],
+    "cache_decorators": [],
     "session_keys": [],
     "network_lines": []
   },

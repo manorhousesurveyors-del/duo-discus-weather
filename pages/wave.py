@@ -16,6 +16,8 @@ def render(ctx):
     when = ctx.when
     forecasts = ctx.forecasts
     combined=forecasts
+    from forecast_quality import flight_evidence
+    preview=any(not flight_evidence(f) for f in combined)
     waves=rank_wave_sites([evaluate_wave(p,WAVE_RIDGES[key.split(':',1)[1]]) for key,p in profiles_at(combined,when).items() if key.startswith('ridge:')])
     st.subheader('Wave Watch Map')
     from app_cache import forecast_run_id,file_version
@@ -31,7 +33,7 @@ def render(ctx):
     def on_wave_click():process_map_event(st.session_state.get('wave_map',{}),catalog,day,'Inspect weather',event_key='last_wave_event',visual_override='wave')
     render_document(document,key='wave_map',on_change=on_wave_click)
     st.subheader('Terrain-forced wave lift and sink')
-    weather_table([{'Site':WAVE_RIDGES[w.site].point.name,'Score':w.score,'Evidence':'Complete' if w.complete else 'Provisional',
+    weather_table([{'Site':WAVE_RIDGES[w.site].point.name,'Score':w.score,'Evidence':'Illustrative' if preview else ('Complete' if w.complete else 'Provisional'),
                     '850 hPa ascent kt':w.uplift_850_knots,'700 hPa ascent kt':w.uplift_700_knots,'N² s⁻²':w.brunt_vaisala_n2} for w in waves],
         {'Site':'Approximate named ridge anchor; it is not a surveyed wave entry point.','Score':'Heuristic score from flow alignment, shear, stability, Scorer decrease and model ascent.',
          'Evidence':'Only complete evidence can trigger a wave alert. Missing vertical motion remains provisional.',

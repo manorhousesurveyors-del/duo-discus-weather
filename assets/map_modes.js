@@ -131,7 +131,7 @@ function installDuoModes(map, data) {
     const w={...raw,times,grid:raw.grid||{},stations:Array.isArray(raw.stations)?raw.stations:[],
       levels:Array.isArray(raw.levels)&&raw.levels.length?raw.levels:['Surface · 10 m','950 hPa','850 hPa','800 hPa','700 hPa','500 hPa'],
       labels:Array.isArray(raw.labels)&&raw.labels.length===times.length?raw.labels:times,
-      source:raw.source||'Awaiting verified weather'};
+      source:raw.source||'No source metadata'};
     const signature=w.times[0];let level=0,index=0;
     try{const saved=JSON.parse(sessionStorage.getItem('duo-wind')||'null');if(saved&&saved.signature===signature){level=saved.level;index=saved.index;}else{index=Math.max(0,w.times.findIndex(t=>new Date(t)>=new Date(data.when)));}}catch(e){}
     if(!Number.isInteger(level)||level<0||level>=w.levels.length)level=0;
@@ -231,12 +231,12 @@ function installDuoModes(map, data) {
     timeline.querySelector('input').oninput=e=>{index=Number(e.target.value);update();};
     timeline.querySelector('.duo-play').onclick=e=>{if(playing){clearInterval(playing);playing=0;e.target.textContent='▶ Play timeline';}else{e.target.textContent='Ⅱ Pause timeline';playing=setInterval(()=>{index=(index+1)%w.times.length;update();},1200);}};
     let lastClick=null;
-    function windText(v){if(!v)return 'Unavailable';const speed=Math.hypot(v.u,v.v)*1.943844,direction=(Math.atan2(-v.u,-v.v)*180/Math.PI+360)%360;const cardinal=['N','NE','E','SE','S','SW','W','NW'][Math.round(direction/45)%8];return val(speed,0)+' kt · from '+cardinal+' ('+val(direction,0)+'°)'+(v.terrain?' · surface fallback near terrain':(v.interpolated?' · log-pressure interpolation':''))+(v.spatial?' · spatial gap estimate':'');}
+    function windText(v){if(!v)return 'Outside source coverage';const speed=Math.hypot(v.u,v.v)*1.943844,direction=(Math.atan2(-v.u,-v.v)*180/Math.PI+360)%360;const cardinal=['N','NE','E','SE','S','SW','W','NW'][Math.round(direction/45)%8];return val(speed,0)+' kt · from '+cardinal+' ('+val(direction,0)+'°)'+(v.terrain?' · surface fallback near terrain':(v.interpolated?' · log-pressure interpolation':''))+(v.spatial?' · spatial gap estimate':'');}
     windClick=ll=>{lastClick=ll;const weight=weights(ll.lat,ll.lng),v=sample(weight);
       const vertical=w.levels.map((label,l)=>'<tr><td>'+esc(label)+'</td><td>'+windText(sample(weight,index,l))+'</td></tr>').join('');
       const series=w.times.map((_,t)=>sample(weight,t,level));
       const bars=series.map((p,i)=>'<i style="height:'+(p?Math.min(72,Math.hypot(p.u,p.v)*1.943844*1.3):1)+'px;'+(!p?'background:#555;':'')+'" title="'+esc(w.labels[i]+': '+windText(p))+'"></i>').join('');
-      callout(ll,'<b>Wind: '+windText(v)+'</b><br>'+esc(w.labels[index])+'<br>'+ll.lat.toFixed(4)+', '+ll.lng.toFixed(4)+'<details><summary>Vertical wind profile</summary><table>'+vertical+'</table></details><details><summary>Five-day wind timeline</summary><div class="duo-bars">'+bars+'</div><small>Hover a bar for time and wind. Grey = unavailable.</small></details><small>Regular-grid model interpolation at this coordinate. Pressure heights are approximate. Surface fallback is identified above where the requested pressure lies at or below the lowest near-surface sample; unavailable hours are not extrapolated.</small>');
+      callout(ll,'<b>Wind: '+windText(v)+'</b><br><strong>'+esc(w.source)+'</strong><br>'+esc(w.labels[index])+'<br>'+ll.lat.toFixed(4)+', '+ll.lng.toFixed(4)+'<details><summary>Vertical wind profile</summary><table>'+vertical+'</table></details><details><summary>Five-day wind timeline</summary><div class="duo-bars">'+bars+'</div><small>Hover a bar for time and wind. Grey = unavailable.</small></details><small>Regular-grid model interpolation at this coordinate. Pressure heights are approximate. Surface fallback is identified above where the requested pressure lies at or below the lowest near-surface sample; unavailable hours are not extrapolated.</small>');
     };
     map._duoWind={sampleAt:(lat,lon,t=index,l=level)=>sample(weights(lat,lon),t,l),bounds:w.grid,coverage:w.coverage,
       get swarm(){return swarm;},get raster(){return grid;},get display(){return display;},get barbs(){return barbs;},

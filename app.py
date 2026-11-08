@@ -12,9 +12,10 @@ from pathlib import Path
 import streamlit as st
 import runtime_imports
 
-if getattr(runtime_imports,'API_REVISION',0)<13:
+_runtime_changed=getattr(runtime_imports,'API_REVISION',0)<14
+if _runtime_changed:
     importlib.reload(runtime_imports)
-runtime_imports.refresh_cached_modules()
+runtime_imports.refresh_cached_modules(deployment_changed=_runtime_changed)
 optional_module=runtime_imports.optional_module
 
 from config import LOCAL_TIMEZONE,default_forecast_model
@@ -133,6 +134,12 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
         errors=tuple(f.message for f in batch.failures)
     if forecasts:
         st.session_state['forecast_bundle:'+model_key]=forecasts
+    if active_page!='Weather map' and forecasts:
+        from forecast_quality import is_demo,is_surface_estimate
+        if any(is_demo(f) for f in forecasts):
+            st.warning('DEMONSTRATION ONLY · illustrative weather, excluded from flight assessments and alerts.')
+        elif any(is_surface_estimate(f) for f in forecasts):
+            st.info('MET Norway surface forecast · upper-air profiles are estimates. Flight assessments need verified upper-air evidence.')
     context=PageContext(catalog,recorded,model_key,points,day,day_index,when,loading,bucket,now,anchor,visual_mode,layers,mode,show_airfields,forecasts,errors)
     dispatch(active_page,context)
 

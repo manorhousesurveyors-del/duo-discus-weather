@@ -1,23 +1,18 @@
-"""One-pass dashboard forecasts, with no workers, polling or scheduled reruns.
+"""Nine-anchor synchronous forecasts with live failover and explicit provenance.
 
-Only successful parsed datasets enter Streamlit's 30-minute cache. Optional
-model fields do not determine whether the map can render. A failed refresh can
-reuse real, timestamped data; it never manufactures a flying forecast.
+No provider gate, cooldown state, background worker or scheduled rerun exists
+in the dashboard transport. HTTP errors leave the live cache immediately.
 """
-from collections import OrderedDict
 from dataclasses import replace
 from datetime import UTC, datetime
-from threading import RLock
-
 import streamlit as st
-
-from config import FORECAST_MODELS, forecast_locations
-from data_ingestion import (OPEN_METEO_URL, FetchFailure, ForecastBatch,
-                            IngestionError, JsonResponse, SchemaError, parse_forecast)
+from config import FORECAST_MODELS, Settings, forecast_locations
+from data_ingestion import (OPEN_METEO_URL, FetchFailure, ForecastBatch, IngestionError,
+                            JsonHttpClient, JsonResponse, SchemaError, parse_forecast)
 from forecast_sanitizer import sanitize
-from weather_engine import ForecastHttpClient
+from weather_anchors import ANCHORS, sample_anchors
 
-API_REVISION = 2
+API_REVISION = 3
 SURFACE_VARIABLES = (
     'temperature_2m','dew_point_2m','wind_speed_10m','wind_direction_10m',
     'wind_gusts_10m','shortwave_radiation','cloud_cover','cloud_cover_low',
@@ -36,28 +31,24 @@ WIND_VARIABLES = ('temperature_2m','pressure_msl','wind_speed_10m',
     for v in ('wind_speed','wind_direction'))
 
 
-class SyncHttpClient(ForecastHttpClient):
-    """Four-second socket timeout, one attempt, zero retry/pacing sleeps."""
+class SyncHttpClient(JsonHttpClient):
+    """One small request; no sleep, retry loop or provider cooldown gate."""
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.settings = replace(self.settings, http_timeout_seconds=4.0)
+        super().__init__(replace(Settings.from_env(), http_timeout_seconds=1.25,
+                                 http_max_attempts=1), **kwargs)
+        original=self.opener
+        def identified(request, **options):
+            request.add_header('User-Agent', 'DuoDiscusSoaringWeather/1.0 github.com/manorhousesurveyors-del/duo-discus-weather')
+            return original(request, **options)
+        self.opener=identified
+
+    def _pace(self, host, cost=1.):
+        return None
 
 
 @st.cache_resource(show_spinner=False)
 def transport():
     return SyncHttpClient()
-
-
-@st.cache_resource(show_spinner=False)
-def _last_good():
-    return OrderedDict(), RLock()
-
-
-class IncompleteForecast(IngestionError):
-    """Carry usable primary data out of cache_data without caching a failure."""
-    def __init__(self, forecasts, model, message):
-        super().__init__(message)
-        self.batch = ForecastBatch(tuple(forecasts), (FetchFailure('weather', model, message),))
 
 
 def _request(points, model, fields):
@@ -92,76 +83,104 @@ ESSENTIAL_REGIONAL_FIELDS = ('temperature_2m','dew_point_2m','shortwave_radiatio
                             'pressure_msl','cloud_cover_low')
 
 
-@st.cache_data(ttl=1800, show_spinner=False, max_entries=48)
-def cached_forecasts(points, model_key, refresh_bucket, product='regional'):
-    """Five-day batch, with at most one selective synchronous donor request.
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=12)
+def live_anchor_bundle(model_key, refresh_bucket):
+    """Try the nine-coordinate primary, then one bounded MET Norway batch.
 
-    A healthy primary uses one GET. Model-specific essential-column gaps (for
-    example UKMO shortwave beyond 72 hours) request only those columns at the
-    affected coordinates, plus the parser's temperature field. Failed support
-    returns usable primary data outside this cache; no retries or timers run.
+    Only real provider data is cached here. A failed primary never delays or
+    disables the alternate provider or a later explicit Refresh action.
     """
-    model = replace(FORECAST_MODELS[model_key], horizon_hours=119)
-    fields = WIND_VARIABLES if product == 'wind' else REGIONAL_VARIABLES
-    forecasts = _request(points, model, fields)
-    if product == 'wind':
-        return ForecastBatch(forecasts, ())
-    missing = {f.location:tuple(key for key in ESSENTIAL_REGIONAL_FIELDS
-                               if any(v is None for v in f.hourly.get(key, (None,))))
-               for f in forecasts}
-    affected = tuple(point for point in points if missing[point])
-    if not affected:
-        return ForecastBatch(forecasts, ())
-    donor_fields = tuple(dict.fromkeys(('temperature_2m', *(
-        key for point in affected for key in missing[point]))))
-    donor = replace(FORECAST_MODELS['icon_eu' if model_key=='ifs025' else 'ifs025'], horizon_hours=119)
+    model=replace(FORECAST_MODELS[model_key],horizon_hours=119)
+    anchor=datetime.fromtimestamp(refresh_bucket*1800,UTC)
     try:
-        support = _request(affected, donor, donor_fields)
-    except (IngestionError, OSError) as exc:
-        raise IncompleteForecast(forecasts, model.api_name,
-                                 'Some forecast fields remain missing; donor request failed: '+str(exc)) from exc
-    from forecast_coverage import complete_forecasts
-    completed = complete_forecasts((*forecasts, *support), model)
-    if any(any(v is None for v in f.hourly.get(key, (None,)))
-           for f in completed for key in ESSENTIAL_REGIONAL_FIELDS):
-        raise IncompleteForecast(completed, model.api_name,
-                                 'Some essential forecast fields remain missing after one donor request.')
-    return ForecastBatch(completed, ())
+        forecasts=_request(ANCHORS,model,REGIONAL_VARIABLES)
+        missing={f.location:tuple(key for key in ESSENTIAL_REGIONAL_FIELDS
+                 if any(v is None for v in f.hourly.get(key,(None,)))) for f in forecasts}
+        affected=tuple(point for point in ANCHORS if missing[point])
+        if affected:
+            fields=tuple(dict.fromkeys(('temperature_2m',*(key for p in affected for key in missing[p]))))
+            donor=replace(FORECAST_MODELS['icon_eu' if model_key=='ifs025' else 'ifs025'],horizon_hours=119)
+            support=_request(affected,donor,fields)
+            from forecast_coverage import complete_forecasts
+            forecasts=complete_forecasts((*forecasts,*support),model)
+        # Missing optional upper fields do not discard a usable surface map.
+        if any(any(v is None for v in f.hourly.get(key,(None,)))
+               for f in forecasts for key in ESSENTIAL_REGIONAL_FIELDS):
+            raise IngestionError('Primary essential surface fields are incomplete')
+    except (IngestionError,OSError) as primary_error:
+        from met_norway import fetch_met_forecasts
+        met=fetch_met_forecasts(ANCHORS,http=transport(),anchor=anchor)
+        if not met.forecasts:
+            raise IngestionError('Both live weather services could not be reached. '
+                                 +str(primary_error)) from primary_error
+        forecasts=met.forecasts
+    from weather_disk_cache import save_live
+    save_live(forecasts,model_key)
+    return ForecastBatch(tuple(forecasts),())
 
 
-def fetch_forecasts(points, model_key, refresh_bucket, product='regional'):
-    """Resolve now, or return stored real data with an explicit failure note."""
-    points = tuple(sorted(points, key=lambda p: p.key))
-    if not points:
-        return ForecastBatch((), ())
-    key = (points, model_key, product)
-    previous, lock = _last_good()
+def _resolve_bundle(model_key,refresh_bucket):
     try:
-        batch = cached_forecasts(points, model_key, refresh_bucket, product)
-    except IncompleteForecast as exc:
-        return exc.batch
-    except (IngestionError, OSError) as exc:
-        with lock:
-            saved = previous.get(key)
-        # Do not extend the stored forecast's valid times into a new day.
-        stored = tuple(f for f in (saved.forecasts if saved else ())
-                       if f.times[-1] >= datetime.fromtimestamp(refresh_bucket*1800, UTC))
-        note = ('Using stored forecast with its original retrieval time. ' if stored else
-                'Weather request failed; no stored forecast covers this period. ')
-        return ForecastBatch(stored, (FetchFailure('weather', FORECAST_MODELS[model_key].api_name,
-                                                   note + str(exc)),))
-    with lock:
-        previous[key] = batch
-        previous.move_to_end(key)
-        while len(previous) > 48:
-            previous.popitem(last=False)
-    return batch
+        return live_anchor_bundle(model_key,refresh_bucket)
+    except (IngestionError,OSError) as exc:
+        from weather_disk_cache import load_live
+        anchor=datetime.fromtimestamp(refresh_bucket*1800,UTC)
+        stored=load_live(model_key,anchor)
+        if stored:
+            return ForecastBatch(stored,(FetchFailure('weather','stored',
+                'Using stored live forecast with its original retrieval time; live services did not respond.'),))
+        from weather_demo import demo_forecasts
+        return ForecastBatch(demo_forecasts(ANCHORS,anchor,model_key),
+            (FetchFailure('weather','demonstration','Both live weather services could not be reached.'),))
 
 
-def regional_forecasts(model_key, refresh_bucket):
-    return fetch_forecasts(forecast_locations(), model_key, refresh_bucket)
+def display_bundle(model_key,refresh_bucket):
+    """Reuse the displayed snapshot until explicit Refresh or a new cycle.
+
+    A demonstration is a labelled UI product, never a cached HTTP success. This
+    prevents day/hour/mode changes from spending another request. Refresh always
+    discards the display product and retries the live providers without a gate.
+    """
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+    if get_script_run_ctx(suppress_warning=True) is None:
+        return _resolve_bundle(model_key,refresh_bucket)
+    key='display_weather_bundle:'+model_key
+    value=st.session_state.get(key)
+    if value is None or value[0]!=refresh_bucket:
+        value=(refresh_bucket,_resolve_bundle(model_key,refresh_bucket))
+        st.session_state[key]=value
+    return value[1]
+
+
+@st.cache_data(ttl=1800,show_spinner=False,max_entries=48)
+def _samples(run_id,points,product,_forecasts):
+    return sample_anchors(_forecasts,points,wind_only=product=='wind')
+
+
+def fetch_forecasts(points,model_key,refresh_bucket,product='regional'):
+    points=tuple(sorted(points,key=lambda p:p.key))
+    if not points:return ForecastBatch((),())
+    bundle=display_bundle(model_key,refresh_bucket)
+    from app_cache import forecast_run_id
+    forecasts=_samples(forecast_run_id(bundle.forecasts),points,product,bundle.forecasts)
+    return ForecastBatch(forecasts,bundle.failures)
+
+
+def cached_forecasts(points,model_key,refresh_bucket,product='regional'):
+    """Compatibility boundary; live bundle and spatial products own their caches."""
+    return fetch_forecasts(points,model_key,refresh_bucket,product)
+
+
+def regional_forecasts(model_key,refresh_bucket):
+    return fetch_forecasts(forecast_locations(),model_key,refresh_bucket)
 
 
 def clear():
-    """Explicit user refresh: invalidate successes, retain honest outage backup."""
-    cached_forecasts.clear()
+    live_anchor_bundle.clear()
+    _samples.clear()
+    for key in list(st.session_state):
+        if key.startswith('display_weather_bundle:'):
+            st.session_state.pop(key,None)
+
+
+cached_forecasts.clear=clear

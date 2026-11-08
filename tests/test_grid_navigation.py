@@ -125,7 +125,7 @@ class PageNavigationTests(unittest.TestCase):
         snapshot=grid.assemble((data,),(tuple(f.location for f in forecasts),),FORECAST_MODELS['ifs025'],start)
         # The first pass receives the entire completed national product.
         completed=Future();completed.set_result(snapshot)
-        bundle=Mock(cycle=int(fixed_now.timestamp()//1800),coverage_revision=3,wind_grid_revision=3);bundle.request.return_value=completed
+        bundle=Mock(cycle=int(fixed_now.timestamp()//1800),coverage_revision=3,wind_grid_revision=grid.WIND_GRID_REVISION);bundle.request.return_value=completed
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict('os.environ',{'DUO_DASHBOARD_SNAPSHOT':'','DUO_TASK_STORE':tmp,'GEMINI_API_KEY':''}), \
              patch.object(app,'datetime',FrozenClock), \

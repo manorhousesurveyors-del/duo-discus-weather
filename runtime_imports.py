@@ -10,7 +10,7 @@ import sys
 from threading import RLock
 
 # Bump when new compatibility contracts must reach an already-running app.
-API_REVISION = 13
+API_REVISION = 14
 
 _lock = RLock()
 _log = logging.getLogger(__name__)
@@ -28,7 +28,9 @@ LAZY_APIS = {
     'day_rating': {'rate_day': ()},
     'alerts': {'load_bundle': ()},
     'forecast_sanitizer': {'sanitize': (), 'COMPLETION_API': ()},
-    'sync_weather': {'fetch_forecasts': ('product',)},
+    'met_norway': {'fetch_met_forecasts': ()},
+    'weather_disk_cache': {'save_live': (), 'load_live': ()},
+    'sync_weather': {'fetch_forecasts': ('product',), 'display_bundle': ()},
     'weather_ui': {'source_value': ()},
     'session_state': {'migrate': ('synchronous',)},
     'uk_map_grid': {'grid_variables': (), 'transform': (), 'synchronous_snapshot': (), 'load_uk_map_grid': ('wind_grid_revision',)},
@@ -67,7 +69,7 @@ def _supports(module, api):
     return True
 
 
-def refresh_cached_modules():
+def refresh_cached_modules(*, deployment_changed=False):
     """Repair old sys.modules entries before app.py binds any local functions."""
     refreshed = []
     with _lock:
@@ -75,7 +77,7 @@ def refresh_cached_modules():
             module = sys.modules.get(name)
             # Consumers must rebind functions after the physics/config update.
             changed_physics=bool({'config','data_ingestion','soaring_physics','forecast_sanitizer','weather_ui','uk_map_grid'} & set(refreshed))
-            if module is not None and (not _supports(module, api) or changed_physics):
+            if module is not None and (deployment_changed or not _supports(module, api) or changed_physics):
                 importlib.invalidate_caches()
                 module = importlib.reload(module)
                 if not _supports(module, api):

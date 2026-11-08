@@ -1,5 +1,5 @@
 """Owned session-state migration; saved tasks/preferences are never swept away."""
-SCHEMA_VERSION=2
+SCHEMA_VERSION=3
 OBSOLETE_KEYS={'_uk_grid_hour','_weather_map_state','forecast_coverage_revision'}
 
 

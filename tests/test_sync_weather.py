@@ -1,149 +1,170 @@
-"""Regressions for the synchronous first-render weather boundary."""
-from datetime import timedelta
+"""Nine-anchor requests, live MET failover and honest offline display data."""
+import json
+from pathlib import Path
+import tempfile
+from threading import Lock
+from time import perf_counter
+from urllib.parse import parse_qs, urlsplit
 import unittest
 from unittest.mock import patch
 
 from config import FORECAST_MODELS, forecast_locations
-from data_ingestion import ServiceError
 from forecast_coverage import soaring_coverage
+from forecast_quality import flight_evidence, is_demo, is_surface_estimate
 from map_weather import national_grid, wind_payload
-from sync_weather import SyncHttpClient
+from met_norway import MET_URL, USER_AGENT
+from tests.provider_fixture import FailoverProvider, NOW
+from tests.test_ingestion import Response
+from weather_anchors import ANCHORS, sample_anchors
+from weather_disk_cache import load_live
 import sync_weather as weather
-from tests.provider_fixture import Provider, NOW
 
-CYCLE = int(NOW.timestamp()//1800)
+CYCLE=int(NOW.timestamp()//1800)
 
 
 class SynchronousWeatherTests(unittest.TestCase):
     def setUp(self):
-        weather.cached_forecasts.clear()
-        weather._last_good.clear()
-        self.addCleanup(weather.cached_forecasts.clear)
-        self.addCleanup(weather._last_good.clear)
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+        self.disk=Path(self.tmp.name)/'weather.json'
+        owner=patch.dict('os.environ',{'DUO_WEATHER_CACHE_PATH':str(self.disk)})
+        owner.start();self.addCleanup(owner.stop)
+        weather.clear();self.addCleanup(weather.clear)
 
-    def client(self, scenario='healthy', *, ukmo_solar_gap=False, donor_error=False):
-        provider = Provider(scenario)
-        provider.hourly['pressure_msl'] = [1012.] * len(provider.hourly['time'])
-        # Return precisely the variables requested, including true null UKMO
-        # fields. A broad fixture must not conceal an incomplete request schema.
-        import json
-        from urllib.parse import urlsplit, parse_qs
-        from tests.test_ingestion import Response
+    def client(self, scenario='healthy', *, ukmo_solar_gap=False, delay=0):
+        provider=FailoverProvider(scenario,delay=delay)
+        provider.hourly['pressure_msl']=[1012.]*len(provider.hourly['time'])
+        active={'count':0,'maximum':0};lock=Lock()
         def open_request(request, **kwargs):
-            self.assertEqual(kwargs['timeout'], 4.0)
-            query = parse_qs(urlsplit(request.full_url).query)
-            if donor_error and query['models']==['ecmwf_ifs025']:
-                raise TimeoutError('Synthetic donor timeout')
-            with provider(request, **kwargs) as response:
-                body = json.loads(response.read())
-            fields = {'time', *query['hourly'][0].split(',')}
-            for row in body:
-                if ukmo_solar_gap and query['models']==['ukmo_seamless'] and 'shortwave_radiation' in fields:
-                    row['hourly']['shortwave_radiation'][72:] = [None] * (len(row['hourly']['time'])-72)
-                row['hourly'] = {k:v for k,v in row['hourly'].items() if k in fields}
-                row['hourly_units'] = {k:v for k,v in row['hourly_units'].items() if k in fields}
+            self.assertEqual(kwargs['timeout'],1.25)
+            self.assertEqual(request.get_header('User-agent'),USER_AGENT)
+            parsed=urlsplit(request.full_url);query=parse_qs(parsed.query)
+            if parsed.hostname=='api.met.no':
+                with lock:
+                    active['count']+=1
+                    active['maximum']=max(active['maximum'],active['count'])
+            try:
+                with provider(request,**kwargs) as response:body=json.loads(response.read())
+            finally:
+                if parsed.hostname=='api.met.no':
+                    with lock:active['count']-=1
+            if parsed.hostname=='api.open-meteo.com':
+                fields={'time',*query['hourly'][0].split(',')}
+                for row in body:
+                    if ukmo_solar_gap and query['models']==['ukmo_seamless'] and 'shortwave_radiation' in fields:
+                        row['hourly']['shortwave_radiation'][72:]=[None]*(len(row['hourly']['time'])-72)
+                    row['hourly']={k:v for k,v in row['hourly'].items() if k in fields}
+                    row['hourly_units']={k:v for k,v in row['hourly_units'].items() if k in fields}
             return Response(json.dumps(body).encode())
-        client = SyncHttpClient(opener=open_request, clock=lambda:NOW,
-                                sleep=lambda _:self.fail('No weather retry sleeps allowed'))
-        return provider, client
+        client=weather.SyncHttpClient(opener=open_request,clock=lambda:NOW,
+            sleep=lambda _:self.fail('No retry sleeps or cooldown waits allowed'))
+        self.assertFalse(hasattr(client,'gate'))
+        return provider,client,active
 
-    def test_first_pass_all_models_complete_without_donor_or_pending_state(self):
-        point = next(p for p in forecast_locations() if p.key == 'region:shropshire')
+    def test_first_pass_all_models_use_one_nine_anchor_request_and_complete_days(self):
+        point=next(p for p in forecast_locations() if p.key=='region:shropshire')
         for key in FORECAST_MODELS:
-            provider, client = self.client()
-            with self.subTest(model=key), patch.object(weather, 'transport', return_value=client):
-                batch = weather.fetch_forecasts((point,), key, CYCLE)
+            provider,client,_=self.client()
+            with self.subTest(model=key),patch.object(weather,'transport',return_value=client):
+                batch=weather.fetch_forecasts((point,),key,CYCLE)
                 self.assertFalse(batch.failures)
-                self.assertEqual(soaring_coverage(batch.forecasts[0], NOW.date()), (8,)*5)
-                self.assertEqual(len(provider.calls), 1)
-                self.assertEqual(len(provider.calls[0][1]['hourly'][0].split(',')), 30)
+                self.assertEqual(soaring_coverage(batch.forecasts[0],NOW.date()),(8,)*5)
+                self.assertTrue(flight_evidence(batch.forecasts[0]))
+                self.assertEqual(len(provider.calls),1)
+                request=provider.calls[0][1]
+                self.assertEqual(len(request['latitude'][0].split(',')),9)
+                self.assertEqual(len(request['hourly'][0].split(',')),30)
 
-    def test_regional_and_entire_wind_grid_fit_real_default_budget_in_two_gets(self):
-        provider, client = self.client()
-        with patch.object(weather, 'transport', return_value=client):
-            regional = weather.regional_forecasts('icon_eu', CYCLE)
-            grid = weather.fetch_forecasts(national_grid(), 'icon_eu', CYCLE, 'wind')
-            self.assertEqual(len(regional.forecasts), 23)
-            self.assertEqual(len(grid.forecasts), 168)
+    def test_regional_and_168_wind_points_share_nine_anchor_network_response(self):
+        provider,client,_=self.client()
+        with patch.object(weather,'transport',return_value=client):
+            regional=weather.regional_forecasts('icon_eu',CYCLE)
+            grid=weather.fetch_forecasts(national_grid(),'icon_eu',CYCLE,'wind')
+            self.assertEqual(len(regional.forecasts),23)
+            self.assertEqual(len(grid.forecasts),168)
             self.assertFalse(regional.failures or grid.failures)
-            self.assertEqual(client.gate.budget, 300)
-            self.assertLessEqual(sum(cost for _,cost in client.gate.costs), 300)
-            self.assertEqual(len(provider.calls), 2)
             for _ in range(3):
-                weather.regional_forecasts('icon_eu', CYCLE)
-                weather.fetch_forecasts(national_grid(), 'icon_eu', CYCLE, 'wind')
-            self.assertEqual(len(provider.calls), 2)
+                weather.regional_forecasts('icon_eu',CYCLE)
+                weather.fetch_forecasts(national_grid(),'icon_eu',CYCLE,'wind')
+            self.assertEqual(len(provider.calls),1)
+            self.assertEqual(len(provider.calls[0][1]['latitude'][0].split(',')),9)
             self.assertTrue(all(f.times[0].date()==NOW.date() for f in grid.forecasts))
 
-    def test_rate_limit_and_timeout_have_no_retries_no_negative_weather_cache(self):
-        point = forecast_locations()[0]
-        for scenario in ('429', 'timeout'):
+    def test_429_and_timeout_fail_over_to_nine_concurrent_met_calls_within_two_seconds(self):
+        for scenario in ('429','timeout'):
             with self.subTest(scenario=scenario):
-                provider, client = self.client(scenario)
-                with patch.object(weather, 'transport', return_value=client):
-                    failed = weather.fetch_forecasts((point,), 'icon_eu', CYCLE)
-                self.assertFalse(failed.forecasts)
-                self.assertIn('no stored forecast', failed.failures[0].message)
-                self.assertEqual(len(provider.calls), 1)
-                # A later explicit attempt after recovery must not see a cached
-                # failure. The fresh transport represents expiry of cooldown.
-                healthy, client = self.client()
-                with patch.object(weather, 'transport', return_value=client):
-                    ready = weather.fetch_forecasts((point,), 'icon_eu', CYCLE)
-                self.assertTrue(ready.forecasts)
-                self.assertEqual(len(healthy.calls), 1)
-                weather.cached_forecasts.clear(); weather._last_good.clear()
+                weather.clear()
+                provider,client,active=self.client(scenario,delay=.04)
+                with patch.object(weather,'transport',return_value=client):
+                    start=perf_counter()
+                    batch=weather.fetch_forecasts(ANCHORS,'icon_eu',CYCLE)
+                    self.assertLess(perf_counter()-start,2.)
+                    self.assertEqual(len(batch.forecasts),9)
+                    self.assertFalse(batch.failures)
+                    self.assertTrue(all(f.source==MET_URL and is_surface_estimate(f) for f in batch.forecasts))
+                    self.assertTrue(all(not flight_evidence(f) for f in batch.forecasts))
+                    self.assertEqual(active['maximum'],9)
+                    self.assertEqual([host for host,_ in provider.calls].count('api.open-meteo.com'),1)
+                    self.assertEqual([host for host,_ in provider.calls].count('api.met.no'),9)
+                    weather.fetch_forecasts(national_grid(),'icon_eu',CYCLE,'wind')
+                    self.assertEqual(len(provider.calls),10)
+                self.assertTrue(self.disk.exists())
 
-    def test_failed_explicit_refresh_retains_real_data_and_original_timestamp(self):
-        point = forecast_locations()[0]
-        _, client = self.client()
-        with patch.object(weather, 'transport', return_value=client):
-            good = weather.fetch_forecasts((point,), 'icon_eu', CYCLE)
+    def test_both_services_offline_produce_numeric_demo_without_persisting_or_flight_claims(self):
+        provider,client,_=self.client('offline')
+        with patch.object(weather,'transport',return_value=client):
+            batch=weather.fetch_forecasts(ANCHORS,'icon_eu',CYCLE)
+        self.assertEqual(len(batch.forecasts),9)
+        self.assertTrue(all(is_demo(f) and not flight_evidence(f) for f in batch.forecasts))
+        self.assertFalse(self.disk.exists())
+        self.assertEqual(len(provider.calls),10)
+        self.assertEqual(batch.failures[0].provider,'demonstration')
+        grid=sample_anchors(batch.forecasts,national_grid(),wind_only=True)
+        self.assertEqual(len(grid),168)
+        wind=wind_payload(grid,NOW)
+        self.assertTrue(all(all(station['values'][12]) for station in wind['stations']))
+        self.assertTrue(all(is_demo(f) for f in grid))
+
+    def test_explicit_refresh_retries_immediately_after_failure_without_cooldown(self):
+        provider,client,_=self.client('offline')
+        with patch.object(weather,'transport',return_value=client):
+            failed=weather.fetch_forecasts(ANCHORS,'icon_eu',CYCLE)
+            self.assertTrue(all(is_demo(f) for f in failed.forecasts))
+            provider.scenario='healthy'
+            weather.clear()
+            recovered=weather.fetch_forecasts(ANCHORS,'icon_eu',CYCLE)
+        self.assertFalse(recovered.failures)
+        self.assertTrue(all(flight_evidence(f) for f in recovered.forecasts))
+        self.assertEqual(len(provider.calls),11)
+
+    def test_disk_survives_memory_cache_clear_and_preserves_real_original_timestamp(self):
+        _,client,_=self.client()
+        with patch.object(weather,'transport',return_value=client):
+            good=weather.fetch_forecasts(ANCHORS,'icon_eu',CYCLE)
+        self.assertEqual(len(load_live('icon_eu',NOW,self.disk)),9)
         weather.clear()
-        _, broken = self.client('429')
-        with patch.object(weather, 'transport', return_value=broken):
-            stored = weather.fetch_forecasts((point,), 'icon_eu', CYCLE+1)
-        self.assertEqual(stored.forecasts, good.forecasts)
-        self.assertEqual(stored.forecasts[0].fetched_at, NOW)
-        self.assertIn('Using stored forecast', stored.failures[0].message)
+        _,broken,_=self.client('offline')
+        with patch.object(weather,'transport',return_value=broken):
+            stored=weather.fetch_forecasts(ANCHORS,'icon_eu',CYCLE+1)
+        self.assertEqual(stored.forecasts[0].fetched_at,NOW)
+        self.assertEqual(stored.forecasts[0].hourly['temperature_2m'],good.forecasts[0].hourly['temperature_2m'])
+        self.assertEqual(stored.failures[0].provider,'stored')
+        self.assertTrue(all(flight_evidence(f) for f in stored.forecasts))
 
-    def test_ukmo_late_solar_gap_uses_one_selective_donor_and_fits_full_grid_budget(self):
-        provider, client = self.client(ukmo_solar_gap=True)
-        with patch.object(weather, 'transport', return_value=client):
-            regional = weather.regional_forecasts('ukmo', CYCLE)
-            grid = weather.fetch_forecasts(national_grid(), 'ukmo', CYCLE, 'wind')
-            self.assertFalse(regional.failures or grid.failures)
-            self.assertEqual(len(provider.calls), 3)
-            support = provider.calls[1][1]
-            self.assertEqual(support['models'], ['ecmwf_ifs025'])
-            self.assertEqual(set(support['hourly'][0].split(',')), {'temperature_2m','shortwave_radiation'})
-            self.assertEqual(len(support['latitude'][0].split(',')), 23)
-            self.assertAlmostEqual(sum(cost for _,cost in client.gate.costs), 293.6)
-            for forecast in regional.forecasts:
-                self.assertEqual(soaring_coverage(forecast, NOW.date()), (8,)*5)
-                self.assertEqual(forecast.field_sources['shortwave_radiation'][80], 'ecmwf_ifs025')
-                self.assertIsNone(forecast.field_sources['shortwave_radiation'][60])
-            weather.regional_forecasts('ukmo', CYCLE)
-            self.assertEqual(len(provider.calls), 3)
-
-    def test_failed_selective_donor_retains_primary_without_caching_partial_weather(self):
-        point = forecast_locations()[0]
-        _, client = self.client(ukmo_solar_gap=True, donor_error=True)
-        with patch.object(weather, 'transport', return_value=client):
-            partial = weather.fetch_forecasts((point,), 'ukmo', CYCLE)
-        self.assertEqual(len(partial.forecasts), 1)
-        self.assertIn('donor request failed', partial.failures[0].message)
-        self.assertIsNotNone(partial.forecasts[0].hourly['shortwave_radiation'][60])
-        self.assertIsNone(partial.forecasts[0].hourly['shortwave_radiation'][80])
-        self.assertFalse(weather._last_good()[0])
-        # The exact same cache key can recover on the next explicit interaction.
-        provider, client = self.client(ukmo_solar_gap=True)
-        with patch.object(weather, 'transport', return_value=client):
-            ready = weather.fetch_forecasts((point,), 'ukmo', CYCLE)
-        self.assertFalse(ready.failures)
-        self.assertEqual(len(provider.calls), 2)
-        self.assertEqual(soaring_coverage(ready.forecasts[0], NOW.date()), (8,)*5)
+    def test_ukmo_solar_gap_keeps_selective_two_column_donor_to_nine_points(self):
+        provider,client,_=self.client(ukmo_solar_gap=True)
+        with patch.object(weather,'transport',return_value=client):
+            batch=weather.fetch_forecasts(ANCHORS,'ukmo',CYCLE)
+            weather.fetch_forecasts(national_grid(),'ukmo',CYCLE,'wind')
+        self.assertFalse(batch.failures)
+        self.assertEqual(len(provider.calls),2)
+        donor=provider.calls[1][1]
+        self.assertEqual(donor['models'],['ecmwf_ifs025'])
+        self.assertEqual(set(donor['hourly'][0].split(',')),{'temperature_2m','shortwave_radiation'})
+        self.assertEqual(len(donor['latitude'][0].split(',')),9)
+        for forecast in batch.forecasts:
+            self.assertEqual(soaring_coverage(forecast,NOW.date()),(8,)*5)
+            self.assertEqual(forecast.field_sources['shortwave_radiation'][80],'ecmwf_ifs025')
+            self.assertIsNone(forecast.field_sources['shortwave_radiation'][60])
 
 
-if __name__ == '__main__':
-    unittest.main()
+if __name__=='__main__':unittest.main()

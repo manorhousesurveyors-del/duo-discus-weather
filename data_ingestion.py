@@ -914,8 +914,18 @@ def forecast_from_snapshot(record: Mapping[str, Any]) -> Forecast:
     model = next((m for m in FORECAST_MODELS.values() if m.api_name == record.get('model')), None)
     if model is None and record.get('model')=='ukmo_uk_deterministic_2km':
         model=replace(FORECAST_MODELS['ukmo'],api_name='ukmo_uk_deterministic_2km',horizon_hours=48)
+    if model is None and record.get('model')=='met_norway':
+        model=replace(FORECAST_MODELS['ifs025'],api_name='met_norway',horizon_hours=119)
     if model is None:
         raise SchemaError('Snapshot has an unknown forecast model')
+    horizon=record.get('requested_horizon_hours',model.horizon_hours)
+    if record.get('model')=='ukmo_uk_deterministic_2km' and isinstance(horizon,int) and not isinstance(horizon,bool):
+        # Archived exports sometimes retain the replacement seamless request's
+        # horizon, although their actual deterministic data covers only48hours.
+        horizon=min(horizon,model.horizon_hours)
+    if isinstance(horizon,bool) or not isinstance(horizon,int) or not 1<=horizon<=model.horizon_hours:
+        raise SchemaError('Snapshot has an invalid requested horizon')
+    model=replace(model,horizon_hours=horizon)
     location = GeoPoint(**record['location'])
     hourly = {name: list(values) for name, values in record['hourly'].items()}
     hourly['time'] = [_timestamp(value, 'snapshot forecast').timestamp() for value in record['times']]
@@ -934,8 +944,20 @@ def forecast_from_snapshot(record: Mapping[str, Any]) -> Forecast:
     if not isinstance(runs, (list,tuple)) or any(not isinstance(r, (list,tuple)) or len(r)!=2
         or not all(isinstance(v,str) for v in r) for r in runs):
         raise SchemaError('Invalid source-run provenance in snapshot')
+    source=record.get('source',OPEN_METEO_URL)
+    if not isinstance(source,str):raise SchemaError('Invalid forecast source in snapshot')
+    try:
+        parsed_source=urlsplit(source)
+        valid_source=bool(parsed_source.hostname and parsed_source.scheme in ('https','demo')
+                          and not parsed_source.username and not parsed_source.password)
+    except ValueError:valid_source=False
+    if not valid_source:raise SchemaError('Invalid forecast source in snapshot')
+    warnings=record.get('warnings',())
+    if not isinstance(warnings,(list,tuple)) or any(not isinstance(note,str) for note in warnings):
+        raise SchemaError('Invalid forecast warnings in snapshot')
     return replace(forecast, field_sources={**forecast.field_sources,**{k: tuple(v) for k, v in sources.items()}},
-                   source_runs=tuple(tuple(r) for r in runs))
+                   source_runs=tuple(tuple(r) for r in runs),source=source,
+                   warnings=tuple(dict.fromkeys((*forecast.warnings,*warnings))))
 
 
 def main(argv: list[str] | None = None) -> int:

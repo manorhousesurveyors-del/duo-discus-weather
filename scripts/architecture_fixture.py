@@ -5,7 +5,8 @@ this fixture. Use verify_architecture.py; never deploy this file as the app.
 """
 import json,os,sys
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
-from threading import Thread
+from threading import Lock,Thread
+from time import perf_counter
 from pathlib import Path
 from datetime import datetime
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -14,21 +15,28 @@ os.environ['DUO_DASHBOARD_SNAPSHOT']=''
 import streamlit as st
 import app,sync_weather
 from data_ingestion import JsonResponse,ServiceError
-from tests.provider_fixture import Provider,NOW
+from tests.provider_fixture import FailoverProvider,NOW
 from urllib.error import HTTPError
-from urllib.parse import urlencode
+from urllib.parse import urlencode,urlsplit
 from urllib.request import Request
 
 class Clock(datetime):
     @classmethod
     def now(cls,tz=None):return NOW.astimezone(tz) if tz else NOW.replace(tzinfo=None)
+    @classmethod
+    def fromtimestamp(cls,value,tz=None):return datetime.fromtimestamp(value,tz)
+    @classmethod
+    def combine(cls,day,hour,tzinfo=None):return datetime.combine(day,hour,tzinfo)
 
 
 class FixtureTransport:
     """Respect the exact requested variables; extra fixture fields cannot help."""
-    def __init__(self,provider):self.provider=provider
+    def __init__(self,provider):
+        self.provider=provider;self.lock=Lock();self.started=None;self.completed=None
 
     def get_json(self,url,params,*,ttl_seconds=0):
+        with self.lock:
+            if self.started is None:self.started=perf_counter()
         request=Request(url+'?'+urlencode(params))
         try:
             with self.provider(request,timeout=4.0) as response:
@@ -37,6 +45,9 @@ class FixtureTransport:
             raise ServiceError('Synthetic provider HTTP '+str(exc.code),status=exc.code) from exc
         except TimeoutError as exc:
             raise ServiceError('Synthetic provider timeout') from exc
+        finally:
+            with self.lock:self.completed=perf_counter()
+        if urlsplit(url).hostname=='api.met.no':return JsonResponse(rows,NOW)
         wanted={'time',*str(params.get('hourly','')).split(',')}
         for row in rows:
             row['hourly']={key:value for key,value in row['hourly'].items() if key in wanted}
@@ -46,28 +57,32 @@ class FixtureTransport:
 @st.cache_resource
 def install():
     scenario=os.environ.get('DUO_TEST_SCENARIO','healthy')
-    provider=Provider(scenario,2.5 if scenario=='timeout' else .1)
+    provider=FailoverProvider(scenario,.05)
     # The older broad fixture used native surface_pressure only. The compact
     # production query requests the provider's standard MSL pressure instead.
     provider.hourly['pressure_msl']=[1013.25]*len(provider.hourly['time'])
+    transport=FixtureTransport(provider)
     class Statistics(BaseHTTPRequestHandler):
         def do_GET(self):
-            body=json.dumps({'requests':len(provider.calls)}).encode()
+            with provider.lock:calls=list(provider.calls)
+            with transport.lock:
+                span=(transport.completed-transport.started)*1000 if transport.completed else None
+            body=json.dumps({'requests':len(calls),'calls':calls,'provider_span_ms':span}).encode()
             self.send_response(200)
             self.send_header('Content-Type','application/json')
             self.send_header('Content-Length',str(len(body)))
             self.end_headers();self.wfile.write(body)
         def do_POST(self):
             scenario=self.rfile.read(int(self.headers.get('Content-Length','0'))).decode()
-            if scenario not in ('healthy','429','timeout'):
+            if scenario not in ('healthy','429','timeout','offline'):
                 self.send_error(400);return
             provider.scenario=scenario
-            provider.delay=2.5 if scenario=='timeout' else .1
+            provider.delay=.05
             self.send_response(204);self.end_headers()
         def log_message(self,*args):pass
     statistics=ThreadingHTTPServer(('127.0.0.1',0),Statistics)
     Thread(target=statistics.serve_forever,daemon=True).start()
-    return provider,FixtureTransport(provider),statistics.server_address[1]
+    return provider,transport,statistics.server_address[1]
 
 provider,transport,statistics_port=install()
 sync_weather.transport=lambda:transport

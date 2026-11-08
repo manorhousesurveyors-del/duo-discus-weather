@@ -14,6 +14,19 @@ from weather_ui import profiles_at,load_uk_aviation,load_radar,load_calibrated_r
 from alerts import ForecastBundle,evaluate_convergence
 from page_router import MODEL_LABELS
 
+def remaining_surface_temperature(forecasts,day):
+    """Use actual remaining-hour surface data when the soaring window is past.
+
+    MET compact starts near the current hour. A late-day card can show its real
+    surface forecast without inventing the missing morning's thermal history.
+    """
+    source=next((f for f in forecasts if f.location.key=='region:shropshire'),None)
+    if source is None:return 'Beyond source coverage'
+    values=[value for when,value in zip(source.times,source.hourly.get('temperature_2m',()))
+            if when.astimezone(LOCAL_TIMEZONE).date().isoformat()==day and value is not None]
+    return f'{sum(values)/len(values):.1f} °C' if values else 'Beyond source coverage'
+
+
 def render(ctx):
     errors=ctx.errors
     catalog = ctx.catalog
@@ -34,6 +47,15 @@ def render(ctx):
     forecasts = ctx.forecasts
     combined=map_forecasts=forecasts
     aviation=radar=convergence=rate_grid=radar_point=None
+    from forecast_quality import is_demo,is_surface_estimate
+    demonstration=any(is_demo(f) for f in combined)
+    estimated=any(is_surface_estimate(f) for f in combined)
+    preview=demonstration or estimated
+    if demonstration:
+        st.warning('DEMONSTRATION ONLY — both live weather services could not be reached. Illustrative numbers are not a flying forecast.')
+    elif estimated:
+        st.info('MET Norway live surface forecast · upper winds, solar heating and mixing depth are estimates, not verified flight evidence.')
+    st.caption('Nine UK/Ireland forecast anchors · maps use labelled radial-basis spatial interpolation between them.')
     # All other pages have returned. Only Weather can request the national grid.
     support=sorted({s for f in combined for s in f.supplemental_sources})
     if support:
@@ -46,8 +68,9 @@ def render(ctx):
         wind_product=snapshot.wind if snapshot.batch.forecasts else None
         errors+=tuple(f.message for f in snapshot.batch.failures)
         st.caption('UK and Ireland grid · five days stored for 30 minutes. Hour and altitude changes use these samples.')
-    for error in dict.fromkeys(errors):
-        st.warning(error+' Use Refresh weather to try again.')
+    if not demonstration:
+        for error in dict.fromkeys(errors):
+            st.warning(error+' Use Refresh weather to try again.')
     # Airfield popups fetch reports in the browser on demand. Only the explicit
     # METAR overlay needs the server-wide report batch.
     if visual_mode=='extras' and 'METAR' in layers and not recorded:
@@ -75,7 +98,7 @@ def render(ctx):
     if combined:
         oldest=min(f.fetched_at for f in combined)
         age=max(0,(now-oldest).total_seconds()/60)
-        st.caption(f'Weather retrieved {oldest.astimezone(LOCAL_TIMEZONE):%d %b %H:%M %Z} · {age:.0f} minutes old'+
+        st.caption(('Illustration generated ' if demonstration else 'Weather retrieved ')+f'{oldest.astimezone(LOCAL_TIMEZONE):%d %b %H:%M %Z} · {age:.0f} minutes old'+
                    (' · Stored forecast; check the retrieval age before flight planning.' if age>60 else ''))
     local=profiles.get('region:shropshire'); thermal=evaluate_thermals(local,loading) if local else None
     metrics=st.columns(4)
@@ -92,21 +115,30 @@ def render(ctx):
                     (evaluate_wave(p,WAVE_RIDGES[key.split(':',1)[1]]).score or 0)>=75
                     for key,p in profiles.items() if key.startswith('ridge:') and distance_bearing(origin,p.forecast.location)[0]<150)
     from app_cache import day_summary,forecast_run_id
-    day_ratings,classifications=day_summary(forecast_run_id(combined),origin,anchor.astimezone(LOCAL_TIMEZONE).date(),loading,FORECAST_MODELS[model_key].api_name,_forecasts=combined)
+    actual_model=combined[0].model if combined else FORECAST_MODELS[model_key].api_name
+    day_ratings,classifications=day_summary(forecast_run_id(combined),origin,anchor.astimezone(LOCAL_TIMEZONE).date(),loading,actual_model,_forecasts=combined,preview=preview)
     classification=classifications[day_index];rating=day_ratings[day_index]
-    st.metric('Cross-country day estimate',classification.label if rating.stars is not None else 'No flight assessment',
+    st.metric('Cross-country day estimate',('Illustrative conditions' if demonstration else 'Surface forecast · estimates') if preview else (classification.label if rating.stars is not None else 'More forecast evidence needed'),
         help='Local weather capacity from conservative thermal climb, usable height and worst-direction wind with a 10% reserve. Check a complete route separately.')
-    if rating.stars is not None:st.caption(f'{classification.scope} · '+classification.explanation)
-    st.subheader(f'{rating.symbols} · {rating.label}' if rating.stars is not None else 'Five-day outlook',help='Local PFD distance band capped by conservative thermal climb, usable height, sustained window and spread-out risk. Missing evidence stays unknown; wave does not inflate the thermal rating.')
+    if rating.stars is not None and not preview:st.caption(f'{classification.scope} · '+classification.explanation)
+    st.subheader(('Five-day illustration' if demonstration else 'Five-day surface forecast') if preview else (f'{rating.symbols} · {rating.label}' if rating.stars is not None else 'Five-day outlook'),help='Local PFD distance band capped by conservative thermal climb, usable height, sustained window and spread-out risk. Missing evidence stays unknown; wave does not inflate the thermal rating.')
     st.caption('UK RASP-style local day rating · '+origin.name+' · Independent distance bands with weather quality caps. '+
         (' '.join(rating.reasons) if rating.stars is not None else 'A flight assessment needs sufficient forecast evidence.')+(' Wave potential is shown separately.' if wave_signal else ''))
     cards=st.columns(5)
     for i,r in enumerate(day_ratings):
         with cards[i]:
-            st.metric(datetime.fromisoformat(r.day).strftime('%a %d %b'),r.symbols if r.stars is not None else '—',
-                help='Independent UK RASP-style rating at the task start / Long Mynd. Distances are local weather capacity; check your full route separately. '+' '.join(r.reasons))
-            st.caption((r.label if r.stars is not None else 'No flight assessment')+(' · '+str(round(r.distance_km))+' km' if r.distance_km is not None else ''))
-            if r.covered_hours:st.caption(f'{r.covered_hours}/8 local hours covered · Window '+('pending' if r.window_hours is None else f'{r.window_hours:g} h'))
+            if preview:
+                prefix='Demo' if demonstration else 'Estimated'
+                st.metric(datetime.fromisoformat(r.day).strftime('%a %d %b'),
+                    f'{r.climb_knots:.1f} kt' if r.climb_knots is not None else remaining_surface_temperature(combined,r.day),
+                    help='Display preview only. Surface-derived upper air does not establish a safe flight window or task verdict.')
+                st.caption(prefix+' · '+(f'{r.base_agl_ft:,.0f} ft estimated usable height' if r.base_agl_ft is not None else 'Remaining-hour surface forecast; earlier thermals are not inferred'))
+                st.caption(f'{r.covered_hours}/8 local hours in preview · not an operational star rating')
+            else:
+                st.metric(datetime.fromisoformat(r.day).strftime('%a %d %b'),r.symbols if r.stars is not None else 'More evidence needed',
+                    help='Independent UK RASP-style rating at Long Mynd. Check your full route separately. '+' '.join(r.reasons))
+                st.caption((r.label if r.stars is not None else 'More forecast evidence needed')+(' · '+str(round(r.distance_km))+' km' if r.distance_km is not None else ''))
+                if r.covered_hours:st.caption(f'{r.covered_hours}/8 local hours covered · Window '+('unknown' if r.window_hours is None else f'{r.window_hours:g} h'))
     probe_enabled=st.toggle('Enable Point Forecast Probe',key='point_probe_enabled',
         help='Weather map only. Enable to inspect a two-day vertical meteogram using cached model samples. Disable to restore normal map clicks; no point forecasts are prepared while off.')
     if probe_enabled:
@@ -122,7 +154,7 @@ def render(ctx):
     if probe_enabled:
         try:
             probe=importlib.import_module('point_forecast_meteogram')
-            if getattr(probe,'PROBE_API_REVISION',0)<6:probe=importlib.reload(probe)
+            if getattr(probe,'PROBE_API_REVISION',0)<7:probe=importlib.reload(probe)
             prepared=probe.prepare_bundle(forecast_run_id(probe_forecasts),day,loading,_forecasts=tuple(probe_forecasts))
             probe_ready=True
         except Exception:

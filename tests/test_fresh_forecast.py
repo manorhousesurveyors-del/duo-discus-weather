@@ -2,6 +2,7 @@
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import os
+from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -24,10 +25,15 @@ class FreshForecastTests(unittest.TestCase):
         import uk_map_grid as grid
         import sync_weather
         self.app,self.grid,self.sync=app,grid,sync_weather
-        sync_weather.clear();sync_weather._last_good()[0].clear()
+        self.storage=tempfile.TemporaryDirectory()
+        self.addCleanup(self.storage.cleanup)
+        self.cache_path=Path(self.storage.name)/'weather.json'
+        env=patch.dict(os.environ,{'DUO_WEATHER_CACHE_PATH':str(self.cache_path),'DUO_OGN_ENABLED':'0'})
+        env.start();self.addCleanup(env.stop)
+        sync_weather.clear()
         grid.load_uk_map_grid.clear()
         self.addCleanup(sync_weather.clear)
-        self.addCleanup(sync_weather._last_good()[0].clear)
+        self.addCleanup(grid.load_uk_map_grid.clear)
         self.http=Mock()
         self.http.get_json.side_effect=AssertionError('Unexpected network')
         owner=patch.object(sync_weather,'transport',return_value=self.http)
@@ -35,6 +41,8 @@ class FreshForecastTests(unittest.TestCase):
 
     def healthy_response(self, endpoint, params, **kwargs):
         """Return only fields requested by production, with absent model BLH."""
+        self.assertEqual(endpoint,'https://api.open-meteo.com/v1/forecast')
+        self.assertEqual(len(params['latitude'].split(',')),9)
         f=forecast(POINT,start=START,hours=144,model=params['models'],
                    changes={'pressure_msl':1012.,'boundary_layer_height':None,'cape':None})
         fields=params['hourly'].split(',')
@@ -80,25 +88,69 @@ class FreshForecastTests(unittest.TestCase):
             self.assert_ready(at)
             self.assertEqual(self.http.get_json.call_count,3)
 
-    def test_failed_cold_start_keeps_help_usable_without_waiting_or_loading_grid(self):
+    def test_failed_cold_start_is_numeric_labelled_demo_and_keeps_help_usable(self):
         from streamlit.testing.v1 import AppTest
         self.http.get_json.side_effect=ServiceError('HTTP 429',status=429)
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ,{'DUO_DASHBOARD_SNAPSHOT':'','DUO_TASK_STORE':tmp,'GEMINI_API_KEY':''}), \
+             patch.object(self.app,'datetime',wraps=datetime) as clock, \
              patch.object(self.grid,'load_uk_map_grid',side_effect=AssertionError('Clean mode needs no national grid')):
+            clock.now.return_value=NOW
             at=AppTest.from_string('import app\napp._main()',default_timeout=30).run()
             self.assertFalse(at.exception)
             self.assertEqual(len(at.metric),10)
             self.assertTrue(at.get('component_instance'))
-            self.assertTrue(any('no stored forecast' in w.value for w in at.warning))
+            self.assertTrue(any('DEMONSTRATION ONLY' in w.value for w in at.warning))
             self.assertFalse(any('★' in m.value for m in at.metric))
+            self.assertEqual(sum('8/8 local hours in preview' in c.value for c in at.caption),5)
+            self.assertEqual(sum(c.value.startswith('Demo ·') for c in at.caption),5)
+            for metric in (*at.metric[:3],*at.metric[-5:]):
+                self.assertGreaterEqual(float(metric.value.split()[0].replace(',','')),0)
+            self.assertFalse(self.cache_path.exists(),'Demonstration must not become stored live weather')
             text=' '.join(str(x.value) for group in (at.info,at.caption,at.metric) for x in group)
-            for message in ('Weather updating','Awaiting live weather','waiting for verified weather','background'):
+            for message in ('Weather updating','Awaiting live weather','waiting for verified weather','background','No flight assessment'):
                 self.assertNotIn(message,text)
             calls=self.http.get_json.call_count
+            at.selectbox(key='forecast_day').select(4).run()
+            at.slider(key='forecast_hour').set_value(14).run()
+            self.assertFalse(at.exception)
+            self.assertEqual(self.http.get_json.call_count,calls,'Controls reuse the displayed demo until Refresh')
             at.radio(key='active_page').set_value('Help Guide').run()
             self.assertFalse(at.exception);self.assertFalse(at.get('component_instance'))
             self.assertEqual(self.http.get_json.call_count,calls)
+
+    def test_rate_limited_first_pass_uses_live_met_with_surface_estimate_labels(self):
+        from streamlit.testing.v1 import AppTest
+        from tests.test_met_norway import met_body,START as MET_START
+        from forecast_quality import is_surface_estimate,flight_evidence
+        def response(endpoint,params,**kwargs):
+            if endpoint=='https://api.open-meteo.com/v1/forecast':
+                raise ServiceError('HTTP 429',status=429)
+            self.assertEqual(endpoint,'https://api.met.no/weatherapi/locationforecast/2.0/compact')
+            body=met_body()
+            for row in body['properties']['timeseries']:
+                stamp=datetime.fromisoformat(row['time'].replace('Z','+00:00'))+(START-MET_START)
+                row['time']=stamp.isoformat()
+            body['properties']['meta']['updated_at']=NOW.isoformat()
+            body['geometry']['coordinates']=[float(params['lon']),float(params['lat']),100.]
+            return JsonResponse(body,NOW)
+        self.http.get_json.side_effect=response
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.dict(os.environ,{'DUO_DASHBOARD_SNAPSHOT':'','DUO_TASK_STORE':tmp,'GEMINI_API_KEY':''}), \
+             patch.object(self.app,'datetime',wraps=datetime) as clock:
+            clock.now.return_value=NOW
+            at=AppTest.from_string('import app\napp._main()',default_timeout=30).run()
+            self.assertFalse(at.exception)
+            self.assertTrue(any('MET Norway live surface forecast' in item.value for item in at.info))
+            self.assertFalse(any('DEMONSTRATION' in item.value for item in at.warning))
+            self.assertEqual(sum('8/8 local hours in preview' in c.value for c in at.caption),5)
+            self.assertEqual(sum(c.value.startswith('Estimated ·') for c in at.caption),5)
+            self.assertFalse(any('★' in m.value for m in at.metric))
+            for metric in (*at.metric[:3],*at.metric[-5:]):
+                self.assertGreaterEqual(float(metric.value.split()[0].replace(',','')),0)
+            self.assertTrue(self.cache_path.exists())
+            stored=self.sync.regional_forecasts('icon_eu',CYCLE)
+            self.assertTrue(all(is_surface_estimate(f) and not flight_evidence(f) for f in stored.forecasts))
 
     def test_incomplete_primary_sounding_falls_back_before_day_validation(self):
         # Non-null but unusable surface pressure defeats a simple null merge.
@@ -136,10 +188,19 @@ class FreshForecastTests(unittest.TestCase):
             self.sync.clear()
             self.http.get_json.side_effect=ServiceError('HTTP timeout')
             stored=self.sync.regional_forecasts('icon_eu',CYCLE)
-            self.assertEqual(stored.forecasts,first.forecasts)
+            self.assertEqual(len(stored.forecasts),len(first.forecasts))
+            for restored,original in zip(stored.forecasts,first.forecasts):
+                for attribute in ('location','model','source','fetched_at','times','hourly','units','field_sources','source_runs'):
+                    self.assertEqual(getattr(restored,attribute),getattr(original,attribute),attribute)
+                # Snapshot revalidation may add current-schema quality notes;
+                # it must preserve the original evidence and caution labels.
+                self.assertTrue(set(original.warnings).issubset(restored.warnings))
             self.assertEqual(stored.forecasts[0].fetched_at,NOW)
-            self.assertIn('Using stored forecast',stored.failures[0].message)
-            self.assertEqual(self.http.get_json.call_count,2)
+            self.assertIn('Using stored live forecast',stored.failures[0].message)
+            native=[c for c in self.http.get_json.call_args_list if c.args[0]=='https://api.open-meteo.com/v1/forecast']
+            met=[c for c in self.http.get_json.call_args_list if c.args[0]=='https://api.met.no/weatherapi/locationforecast/2.0/compact']
+            self.assertEqual(len(native),2)
+            self.assertEqual(len(met),9)
 
 
 if __name__=='__main__':unittest.main()

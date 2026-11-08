@@ -46,8 +46,12 @@ def calibrated_stars(pfd,climb,base_agl,window,overdevelopment=0):
     return stars,tuple(dict.fromkeys(reasons))
 
 
-def rate_day(forecasts,origin,day,loading='dry',*,preference=FORECAST_PREFERENCE,wave=False):
-    forecasts=tuple(forecasts);classification=classify_day(forecasts,origin,day,loading,preference=preference,wave_available=wave)
+def rate_day(forecasts,origin,day,loading='dry',*,preference=FORECAST_PREFERENCE,wave=False,preview=False):
+    from forecast_quality import flight_evidence,EXCLUDED_NOTE
+    supplied=tuple(forecasts)
+    estimates=any(not flight_evidence(f) for f in supplied)
+    forecasts=supplied if preview else tuple(f for f in supplied if flight_evidence(f))
+    classification=classify_day(forecasts,origin,day,loading,preference=preference,wave_available=wave,preview=preview)
     climbs=[];bases=[];risks=[];run=longest=0;known=0
     for hour in range(10,18):
         when=datetime.combine(day,time(hour),LOCAL_TIMEZONE)
@@ -63,6 +67,8 @@ def rate_day(forecasts,origin,day,loading='dry',*,preference=FORECAST_PREFERENCE
     climb=median(climbs) if climbs else 0.;base=median(bases) if bases else 0.
     stars,reasons=calibrated_stars(classification.distance_km,climb,base,longest,sum(risks)/len(risks) if risks else 0)
     if known<8:stars=None;reasons=(f'Only {known}/8 hours include climb, height, rain and spread-out evidence.',)
+    if estimates:
+        reasons+=(('DISPLAY PREVIEW ONLY: demonstration or assumed upper-air data; not a flight assessment.' if preview else EXCLUDED_NOTE),)
     if wave:reasons+=('Wave potential is separate; it does not raise the thermal XC rating.',)
     return DayRating(day.isoformat(),origin.name,stars,classification.distance_km,climb if known else None,
         base if known else None,longest if known else None,wave,reasons,known)

@@ -104,12 +104,14 @@ def land_mask_for_grid(grid):
 
 def evaluate_convergence(bundle: ForecastBundle, when: datetime, *,
                          preference: tuple[str, ...] = ('icon_eu', 'ecmwf_ifs025')) -> ConvergenceResult | None:
-    if not bundle.grid_forecasts:
+    from forecast_quality import flight_evidence
+    grid_forecasts=tuple(f for f in bundle.grid_forecasts if flight_evidence(f))
+    if not grid_forecasts:
         return None
     grid = convergence_grid(step_degrees=bundle.grid_step, max_points=10000)
     best = None
     for model in preference:
-        result = detect_convergence(grid, bundle.grid_forecasts, when, model, land_mask=land_mask_for_grid(grid))
+        result = detect_convergence(grid, grid_forecasts, when, model, land_mask=land_mask_for_grid(grid))
         if best is None or result.valid_surface_cells > best.valid_surface_cells:
             best = result
         if result.valid_surface_cells >= .8 * result.total_cells:
@@ -167,6 +169,12 @@ class Briefing:
 def build_briefing(bundle: ForecastBundle, horizon_days: int, *, now: datetime | None = None) -> Briefing:
     if horizon_days not in (2,5):
         raise ValueError('Only 2-day and 5-day horizons are supported')
+    from forecast_quality import flight_evidence,EXCLUDED_NOTE
+    forecasts=tuple(f for f in bundle.forecasts if flight_evidence(f))
+    grid=tuple(f for f in bundle.grid_forecasts if flight_evidence(f))
+    excluded=len(forecasts)!=len(bundle.forecasts) or len(grid)!=len(bundle.grid_forecasts)
+    bundle=replace(bundle,forecasts=forecasts,grid_forecasts=grid,
+                   errors=bundle.errors+((EXCLUDED_NOTE,) if excluded else ()))
     now = utc_datetime(now or datetime.now(UTC))
     # Hourly providers cannot represent cron minute 17: compare the enclosing UTC
     # forecast hour at +48/+120 h, explicitly retained in the briefing.

@@ -185,7 +185,11 @@ def assess_task(points: Iterable[Turnpoint], forecasts: Iterable[Forecast], day:
     points=validate_task(points)
     if not 0 < minimum_depth_m < 3000:
         raise ValueError('Minimum usable height must be between 0 and 3000 m AGL')
-    legs=sampled_legs(points); forecasts=tuple(forecasts); polar=DUO_DISCUS_POLARS[loading]
+    from forecast_quality import flight_evidence,EXCLUDED_NOTE
+    supplied=tuple(forecasts)
+    forecasts=tuple(f for f in supplied if flight_evidence(f))
+    excluded=len(forecasts)!=len(supplied)
+    legs=sampled_legs(points); polar=DUO_DISCUS_POLARS[loading]
     start=utc_datetime(datetime.combine(day,time(10),LOCAL_TIMEZONE))
     end=utc_datetime(datetime.combine(day,time(18),LOCAL_TIMEZONE))
     unique={p.key:p for leg in legs for p in leg}
@@ -293,6 +297,7 @@ def assess_task(points: Iterable[Turnpoint], forecasts: Iterable[Forecast], day:
     warnings=['Modelled capacity only: no airspace, terrain clearance, landing options or flight-envelope approval.',
               f'Weather sampled every ≤{SAMPLE_SPACING_KM:g} km; minimum usable thermal depth {minimum_depth_m:.0f} m AGL.',
               'Launches checked every 15 minutes, 10:00–18:00 Europe/London; hourly weather held within each interval.']
+    if excluded:warnings.append(EXCLUDED_NOTE)
     approximated=any(any('Spatial approximation:' in w for w in f.warnings) for f in forecasts)
     if approximated: warnings.append('Some weather uses explicitly labelled nearby stored samples; confirm fresh corridor forecasts.')
     if best:
@@ -322,9 +327,15 @@ class DayClassification:
 
 
 def classify_day(forecasts: Iterable[Forecast], origin: GeoPoint, day: date, loading='dry',
-                 *, preference=FORECAST_PREFERENCE, wave_available=False) -> DayClassification:
+                 *, preference=FORECAST_PREFERENCE, wave_available=False, preview=False) -> DayClassification:
     """Conservative local-day screening, not proof of a remote 500 km corridor."""
-    forecasts=tuple(forecasts); capacity=run=0.; known=0
+    from forecast_quality import flight_evidence,EXCLUDED_NOTE
+    supplied=tuple(forecasts)
+    estimates=any(not flight_evidence(f) for f in supplied)
+    forecasts=supplied if preview else tuple(f for f in supplied if flight_evidence(f))
+    if supplied and not forecasts:
+        return DayClassification('Display-only weather',None,origin.name,EXCLUDED_NOTE)
+    capacity=run=0.; known=0
     for hour in range(10,18):
         when=utc_datetime(datetime.combine(day,time(hour),LOCAL_TIMEZONE))
         forecast=select_forecast(forecasts,origin.key,when,preference)
@@ -348,8 +359,10 @@ def classify_day(forecasts: Iterable[Forecast], origin: GeoPoint, day: date, loa
     elif capacity>=250: label='250 km Day'
     elif capacity>=100: label='100 km Local Task Day'
     else: label='Non-Cross-Country / Wave Only Day' if wave_available else 'Non-Cross-Country Day'
-    return DayClassification(label,capacity,origin.name,
-        'Local weather capacity with worst-cardinal-direction wind and 10% reserve; remote tasks need their own corridor assessment.')
+    explanation='Local weather capacity with worst-cardinal-direction wind and 10% reserve; remote tasks need their own corridor assessment.'
+    if preview and estimates:
+        explanation='DISPLAY PREVIEW ONLY: calculated from demonstration or assumed upper-air data; not a flight assessment. '+explanation
+    return DayClassification(label,capacity,origin.name,explanation)
 
 
 def candidate_tasks(catalog: Iterable[Turnpoint], origin: Turnpoint, target_km: int, *, limit=24) -> tuple[tuple[Turnpoint, ...], ...]:

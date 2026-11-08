@@ -152,9 +152,19 @@ def wind_payload(forecasts, anchor, *, days=5):
             'grid':{'latitudes':WIND_LATITUDES,'longitudes':WIND_LONGITUDES,'indices':grid,
                     'latMin':49.5,'latMax':61.,'lonMin':-11.,'lonMax':2.5,'ny':12,'nx':14,'rowOrder':'south-to-north'},
             'coverage':coverage,
-            'source': 'Open-Meteo '+(', '.join(sorted({f.model for f in forecasts})) or 'unavailable')+' · regular UK grid'+
-                (' · gap support: '+', '.join(sorted({s for f in forecasts for s in f.supplemental_sources})) if any(f.supplemental_sources for f in forecasts) else ''),
-            'notes':'Bilinear vectors; missing nodes use labelled nearest-neighbour spatial estimates. Terrain fallback uses surface wind. Entire missing hours/levels stay unavailable.'}
+            'source': wind_source(forecasts),
+            'notes':'Nine-anchor spatial interpolation. Pressure heights are approximate; source and assumed upper profiles are explicitly identified.'}
+
+
+def wind_source(forecasts):
+    from forecast_quality import is_demo,is_surface_estimate
+    if any(is_demo(f) for f in forecasts):
+        return 'DEMONSTRATION ONLY · illustrative UK/Ireland wind; not a flying forecast'
+    if any(is_surface_estimate(f) for f in forecasts):
+        return 'MET Norway live surface forecast · Assumed upper-wind profile · nine-anchor spatial estimates'
+    models=', '.join(sorted({f.model for f in forecasts}))
+    return ('Open-Meteo '+models if models else 'No wind samples')+' · nine-anchor spatial estimates'
+
 
 
 def soaring_samples(forecasts, when, loading):

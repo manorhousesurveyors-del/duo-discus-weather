@@ -31,6 +31,10 @@ FORBIDDEN = (
     'Weather updating',
     'waiting for verified weather',
     'Awaiting live weather',
+    'Weather provider cooling down',
+    'background recovery is scheduled',
+    'No flight assessment',
+    'Open-Meteo unavailable',
 )
 METRICS = ('LONG MYND · NET CLIMB', 'POTENTIAL CLOUD BASE', 'USABLE MIXING TOP')
 DATES = ('Sun 08 Nov', 'Mon 09 Nov', 'Tue 10 Nov', 'Wed 11 Nov', 'Thu 12 Nov')
@@ -77,12 +81,15 @@ async def main(args):
             value = await page.get_by_text(label, exact=False).inner_text()
             return float(value.rsplit(':', 1)[-1])
 
-        async def live_request_count():
+        async def provider_statistics():
             # The footer is deliberately static. A separate fixture-only
             # counter catches HTTP calls even without a Streamlit rerender.
             text = await page.get_by_text('Fixture statistics URL:', exact=False).inner_text()
             with urlopen(text.split(': ', 1)[1], timeout=2) as response:
-                return json.load(response)['requests']
+                return json.load(response)
+
+        async def live_request_count():
+            return (await provider_statistics())['requests']
 
         async def settle():
             # Streamlit may receive the widget event just after click() returns.
@@ -90,7 +97,8 @@ async def main(args):
             await page.wait_for_timeout(150)
             await expect(page.get_by_test_id('stApp')).not_to_have_attribute(
                 'data-test-script-state', 'running', timeout=60000)
-            await page.get_by_text('Fixture full renders:', exact=False).wait_for(timeout=60000)
+            await page.get_by_text('Fixture full renders:', exact=False).or_(
+                page.get_by_test_id('stException')).first.wait_for(timeout=60000)
             # Allow the component's single document-cache acknowledgement to
             # finish. It may rerun its fragment, but never the full application.
             await page.wait_for_timeout(150)
@@ -119,6 +127,7 @@ async def main(args):
         async def idle_check(name):
             """Catch reruns even if Streamlit reuses the iframe element itself."""
             await completed_map()
+            await page.screenshot(path=str(out / (name + '.png')), full_page=True)
             await page.evaluate("""() => {
                 window.__idleFrames = {added: 0, removed: 0};
                 window.__idleObserver?.disconnect();
@@ -182,22 +191,36 @@ async def main(args):
         for label in METRICS:
             card = page.get_by_test_id('stMetric').filter(has_text=label)
             first_metrics[label] = await card.get_by_test_id('stMetricValue').inner_text()
+        assert all(re.search(r'\d', value) and '—' not in value for value in first_metrics.values()), first_metrics
+        first_text = await page.locator('body').inner_text()
         if args.scenario == 'healthy':
-            assert all(re.search(r'\d', value) and '—' not in value for value in first_metrics.values()), first_metrics
             assert await page.get_by_text('8/8 local hours covered', exact=False).count() == 5
-            for day in DATES:
-                value = await page.get_by_test_id('stMetric').filter(
-                    has=page.get_by_test_id('stMetricLabel').filter(has_text=day)
-                ).get_by_test_id('stMetricValue').inner_text()
-                assert '★' in value and '—' not in value, (day, value)
+        elif args.scenario in ('429', 'timeout'):
+            assert re.search(r'MET Norway', first_text, re.I), first_text
+            assert re.search(r'assum|estimat\w*.*upper|upper.*estimat', first_text, re.I), first_text
         else:
-            assert await page.get_by_text('8/8 local hours covered', exact=False).count() == 0
-            text = await page.locator('body').inner_text()
-            assert re.search(r'could not|not available|no weather|no forecast|no verified|unavailable|not received|couldn.t|request failed|weather.*failed|forecast.*failed', text, re.I), text
+            assert 'DEMONSTRATION' in first_text, first_text
+            assert 'FULLY ACHIEVABLE' not in first_text
+        for day in DATES:
+            label = page.get_by_test_id('stMetricLabel').filter(has_text=day)
+            value = await page.get_by_test_id('stMetric').filter(has=label).get_by_test_id('stMetricValue').inner_text()
+            assert ('★' in value or re.search(r'\d', value)) and '—' not in value, (day, value)
+            if args.scenario != 'healthy':
+                card = await page.get_by_test_id('stColumn').filter(has=label).inner_text()
+                assert ('Demo' if args.scenario == 'offline' else 'Estimated') in card, card
+                assert '★' not in value, (day, value)
         result['first_pass_metrics'] = first_metrics
         result['first_pass_full_renders'] = 1
         result['first_pass_weather_requests'] = await counter('Fixture HTTP requests:')
-        assert result['first_pass_weather_requests'] == 1, result
+        first_requests = await provider_statistics()
+        meteo = [query for host, query in first_requests['calls'] if host == 'api.open-meteo.com']
+        met = [query for host, query in first_requests['calls'] if host == 'api.met.no']
+        assert len(meteo) == 1, first_requests
+        assert len(meteo[0]['latitude'][0].split(',')) == 9, first_requests
+        assert len(met) == (0 if args.scenario == 'healthy' else 9), first_requests
+        assert len({(item['lat'][0], item['lon'][0]) for item in met}) == len(met), first_requests
+        assert first_requests['provider_span_ms'] < 2000, first_requests
+        result['first_provider_span_ms'] = round(first_requests['provider_span_ms'], 2)
         await idle_check('clean_weather')
 
         await page.get_by_role('combobox', name='Map mode', exact=True).click()
@@ -206,21 +229,23 @@ async def main(args):
         await frame().locator('[data-wind-view=arrows]').wait_for()
         assert not await frame().locator('.duo-wind-heat,.duo-wind-raster').count()
         await expect(frame().locator('[data-reference=bga]')).not_to_be_checked()
-        if args.scenario == 'healthy':
-            domain = await map_root().evaluate('() => window.map_div._duoWind.bounds')
-            assert (domain['latMin'], domain['latMax'], domain['lonMin'], domain['lonMax']) == (49.5, 61, -11, 2.5), domain
-            coverage = await map_root().evaluate("""() =>
-                [[50.5,-3.5],[52.5,-2.9],[54.5,-2],[57.2,-3.8],[53.3,-7.5]].map(
-                    ([lat,lon]) => window.map_div._duoWind.sampleAt(lat,lon))""")
-            assert all(sample and all(isinstance(sample.get(key), (int, float)) for key in ('u', 'v')) for sample in coverage), coverage
-            stats = await map_root().evaluate('() => window.map_div._duoWind.renderStats')
-            assert stats['style']['colour'] == '#111827', stats
-            assert stats['style']['arrowWidth'] >= 2.2, stats
-            assert 7 <= stats['style']['headLength'] <= 9, stats
-            assert stats['style']['headWidth'] >= 5, stats
-            assert stats['arrowCount'] > 0 and stats['animationRunning'], stats
-            assert await live_request_count() == 2
-            result['wind_initial'] = stats
+        domain = await map_root().evaluate('() => window.map_div._duoWind.bounds')
+        assert (domain['latMin'], domain['latMax'], domain['lonMin'], domain['lonMax']) == (49.5, 61, -11, 2.5), domain
+        coverage = await map_root().evaluate("""() =>
+            [[50.5,-3.5],[52.5,-2.9],[54.5,-2],[57.2,-3.8],[53.3,-7.5]].map(
+                ([lat,lon]) => window.map_div._duoWind.sampleAt(lat,lon))""")
+        assert all(sample and all(isinstance(sample.get(key), (int, float)) for key in ('u', 'v')) for sample in coverage), coverage
+        levels = await map_root().evaluate("""() => [0,1,2,3,4,5].map(
+            level => window.map_div._duoWind.sampleAt(52.5,-2.9,undefined,level))""")
+        assert all(sample and all(isinstance(sample.get(key), (int, float)) for key in ('u', 'v')) for sample in levels), levels
+        stats = await map_root().evaluate('() => window.map_div._duoWind.renderStats')
+        assert stats['style']['colour'] == '#111827', stats
+        assert stats['style']['arrowWidth'] >= 2.2, stats
+        assert 7 <= stats['style']['headLength'] <= 9, stats
+        assert stats['style']['headWidth'] >= 5, stats
+        assert stats['arrowCount'] > 0 and stats['animationRunning'], stats
+        assert await live_request_count() == first_requests['requests']
+        result['wind_initial'] = stats
         controls = []
         before_controls = await counter('Fixture full renders:')
         for mode in ('barbs', 'off', 'arrows'):
@@ -231,7 +256,7 @@ async def main(args):
             }""", mode)
             assert await map_root().evaluate('() => window.map_div._duoWind.display') == mode
             assert duration < 100, (mode, duration)
-            if args.scenario == 'healthy' and mode == 'barbs':
+            if mode == 'barbs':
                 stats = await map_root().evaluate('() => window.map_div._duoWind.renderStats')
                 assert stats['barbCount'] > 0 and not stats['animationRunning'], stats
             controls.append(round(duration, 2))
@@ -241,6 +266,16 @@ async def main(args):
         xy = await map_root().evaluate('() => {const p=window.map_div.latLngToContainerPoint([53.2,-4.5]);return [p.x,p.y];}')
         await page.mouse.click(box['x'] + xy[0], box['y'] + xy[1])
         await expect(frame().locator('.duo-callout').last).to_contain_text('Wind')
+        callout_text = await frame().locator('.duo-callout').last.text_content()
+        assert 'Unavailable' not in callout_text, callout_text
+        cells = await frame().locator('.duo-callout').last.locator('td').all_text_contents()
+        assert cells and not any(cell.strip() == '—' for cell in cells), cells
+        if args.scenario in ('429', 'timeout'):
+            assert 'MET Norway' in callout_text, callout_text
+            assert re.search(r'assum|estimated', callout_text, re.I), callout_text
+        elif args.scenario == 'offline':
+            assert 'DEMONSTRATION' in callout_text, callout_text
+            assert 'Open-Meteo' not in callout_text, callout_text
         await frame().locator('[data-level="3"]').click()
         result['wind_controls_ms'] = controls
         await idle_check('wind_weather')
@@ -261,9 +296,8 @@ async def main(args):
                 if iteration:
                     ms = await counter('Fixture server render ms:')
                     result['pages'][name] = {'server_ms': ms, 'browser_ready_ms': round((time.perf_counter() - started) * 1000, 1)}
-                    if args.scenario == 'healthy' or name in ('Help Guide', 'Help & Briefing Bot', 'Live OGN Glider Radar', 'Data quality'):
-                        if ms >= 500:
-                            result['slow_pages'].append({'page': name, 'server_ms': ms})
+                    if ms >= 500:
+                        result['slow_pages'].append({'page': name, 'server_ms': ms})
         await nav.get_by_text('Weather map', exact=True).click()
         await settle()
         # Day/hour changes slice the same successful 120-hour data bundle.
@@ -272,8 +306,7 @@ async def main(args):
         await page.get_by_role('option', name=re.compile('Day 2 ·')).click()
         await settle()
         after = await counter('Fixture HTTP requests:')
-        if args.scenario == 'healthy':
-            assert before == after, (before, after)
+        assert before == after, (before, after)
         result['day_change_request_count'] = after
         await page.get_by_text('Enable Point Forecast Probe', exact=True).click()
         await completed_map()
@@ -282,8 +315,7 @@ async def main(args):
         await frame().locator('.duo-point-panel').wait_for()
         probe = await map_root().evaluate('() => ({ms:window.map_div._duoProbe.lastRenderMs,paint:window.map_div._duoProbe.lastPaintMs,rows:window.map_div._duoProbe.last.rows.length})')
         assert probe['ms'] < 100, probe
-        if args.scenario == 'healthy':
-            assert probe['rows'] > 0, probe
+        assert probe['rows'] > 0, probe
         result['probe'] = probe
         if args.scenario != 'healthy':
             # Restore the provider, then use the actual user refresh control.
@@ -311,6 +343,6 @@ async def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--scenario', choices=['healthy', '429', 'timeout'], default='healthy')
+    parser.add_argument('--scenario', choices=['healthy', '429', 'timeout', 'offline'], default='healthy')
     parser.add_argument('--url', default='http://127.0.0.1:8508')
     asyncio.run(main(parser.parse_args()))

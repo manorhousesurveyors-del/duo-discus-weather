@@ -11,7 +11,7 @@ from config import LOCAL_TIMEZONE, METRES_TO_FEET, MPS_TO_KNOTS
 from soaring_physics import Profile, evaluate_thermals, wind_components
 from atmospheric_moisture import dewpoint, relative_humidity, ice_relative_humidity
 
-PROBE_API_REVISION = 6
+PROBE_API_REVISION = 7
 LEVELS = (950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200)
 PRESSURE_FIELDS = ('height_ft','rh','u','v','cloud_cover','temperature','dewpoint','rh_ice')
 FIELDS = ('temperature', 'dewpoint', 'depth', 'climb', 'heat', 'solar',
@@ -119,8 +119,12 @@ def prepare_bundle(run_id,day,loading='dry',*,_forecasts):
             'retrieved':primary.fetched_at.isoformat(),
             'series':[{'model':f.model,'retrieved':f.fetched_at.isoformat(),
                        'hours':[hour_sample(f,when,loading) for when in hours]} for f in ordered]})
+    from forecast_quality import is_demo,is_surface_estimate
+    source_label='UKMO seamless → ECMWF fallback' if len(models)>1 else next(iter(models),'No samples')
+    if any(is_demo(f) for f in _forecasts):source_label='DEMONSTRATION ONLY · illustrative weather'
+    elif any(is_surface_estimate(f) for f in _forecasts):source_label='MET Norway surface forecast · assumed upper profile'
     return {'columns':columns,'stations':stations,'fields':FIELDS,'levels':LEVELS,'pressure_fields':PRESSURE_FIELDS,
-            'model':'UKMO seamless → ECMWF fallback' if len(models)>1 else next(iter(models),'Unavailable'),
+            'model':source_label,
             'loading':loading,'loading_label':'Wing loading: '+('43 kg/m² · water ballast' if loading=='ballasted' else '34 kg/m² · no water ballast'),
             'max_distance_km':120,
             'cycle_note':'Model run time is not supplied by this API. Retrieval time is shown.',
