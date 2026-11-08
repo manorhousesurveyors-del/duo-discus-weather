@@ -34,9 +34,9 @@ TOPICS = (
         ('Step 2 · Read both colours', 'Blue means sinking air. Yellow, orange and red mean rising air. Clear areas may be neutral or unknown.'),
         ('Step 3 · Look through the wave', 'Click a hill for a side view. Use Draw Wave X-Section to drag your own line. The model cannot locate safe wave entry or rotor.'))),
     ('✈ Watch Live Gliders', (
-        ('Step 1 · Open glider traffic', 'Open Live OGN Glider Radar. Or choose Live OGN Gliders in a map’s Layers menu.'),
-        ('Step 2 · Read a glider', 'Hover for height, speed and climb. Yellow outlines mark G-CKML. Choose a 15, 20 or 30 second refresh.'),
-        ('Step 3 · Check Live or Demo', 'Demo shows pretend gliders for practice. Live hides old reports. Coverage has gaps. Never use this map to avoid other aircraft.'))),
+        ('Step 1 · Open glider traffic', 'Open Live OGN Glider Radar. Turnpoints and airfields start hidden. Use the map switches to show them.'),
+        ('Step 2 · Read a glider', 'Hover for height, speed and climb. A pink border marks G-CKML. Choose a 15, 20 or 30 second refresh.'),
+        ('Step 3 · Check Live or Demo', 'Demo shows pretend gliders for practice. Live positions fade after two minutes. They disappear after 15 minutes. Check their age. Never use this map to avoid other aircraft.'))),
     ('💧 What Wing Loading to Pick', (
         ('Step 1 · Dry means no water ballast', 'Dry uses 34 kilograms per square metre. This is the lighter glider setting.'),
         ('Step 2 · Water makes the glider heavier', 'Ballasted uses 43 kilograms per square metre. Strong lift may support faster cruising.'),

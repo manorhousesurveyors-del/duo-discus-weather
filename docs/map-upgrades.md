@@ -9,14 +9,19 @@ browser session storage. A click bridge preserves the selected waypoint or
 command inside the click object. Expensive wind frames, contour geometry and
 wave images are cached in `st.session_state`. Each map is built when its tab opens.
 
-Wind uses a complete 13 × 15 grid (195 nodes), 49.8–59°N and −8.5–2°E. There is
+Wind uses a complete 12 × 14 grid (168 nodes), 49.5–61°N and −11–2.5°E. There is
 no coastline or distance-cutoff mask. Each pixel reads four enclosing nodes.
 Missing 950/800 hPa winds use vector interpolation in log pressure, including
 supported near-surface levels. A pressure level at or below the lowest near-surface sample uses an explicitly
-labelled surface fallback. Missing source data and time horizons remain missing;
-UKV's shorter forecast cannot establish a five-day upper-air forecast.
+labelled surface fallback. Missing nodes are filled from up to four nearest
+valid vectors at the same hour and level, with spatial-estimate flags. This
+includes edge extrapolation, which becomes less reliable over large gaps; the
+legend reports the maximum nearest-source distance. Whole missing hours or
+levels remain unknown. Donor-model coverage retains its source attribution.
 
-The first national request can take minutes due to the free API's quota.
+Four workers fetch 45-coordinate batches, six-second socket timeouts and no
+retries. All chunks of the selected model precede donor requests, so a quota
+limit cannot favour southern chunks simply because they were submitted first.
 Once available, frames are reused locally; fast interaction does not imply
 instant downloads. Soaring contour modes retain their separate land grid and
 support limits, because they must not imply thermal flight over water.
@@ -135,16 +140,25 @@ OGN/SpotTheGlider's HTTPS UK snapshot every 20 seconds and publishes a same-orig
 static JSON file. Browser timers poll at 15, 20 or 30 seconds without rerunning
 Streamlit. Public device metadata supplies registration/CN and highlights G-CKML.
 
-Reports must be type 1 gliders, inside the UK bounds, at most 120 seconds old and
-moving at least 25 km/h. Movement is only an airborne proxy. Device registration
-privacy flags are respected; unverified identities are anonymous. Headings rotate
-canvas icons; popups convert altitude to feet and speed/vario to knots. Vario is
-GNSS-derived, not a total-energy/netto instrument measurement.
+`ogn_live.py` merges the two HTTPS snapshot variants with a persistent,
+receive-only APRS listener where public TCP is permitted. It uses the radius
+filter `r/54.0/-2.5/650` and the same UK/Ireland rectangle as the wind field.
+The DDB registry refreshes every 12 hours and resolves CN, registration and type.
+Tracking/identification opt-outs apply to both transports. Unknown aircraft use
+`?<short_id>`. Unclassified ADS-B traffic is excluded unless the registry or
+APRS sender identifies a FLARM/OGN device.
 
-Snapshots older than 60 seconds and reports older than two minutes are hidden,
-even with refresh paused. No reports or a provider failure never substitutes
-fake live aircraft. **Demo** explicitly shows seven fictional gliders and can
-be switched back to Live. Recorded weather disables live traffic requests.
+Glider, tug and powered/motor-glider reports remain for 15 minutes, including
+stationary and sinking aircraft. The Airborne filter uses ≥25 km/h groundspeed,
+which does not prove flight. BGA turnpoints and airfields start off on Radar;
+prominent on-map switches toggle them without a server rerun. Rectangular
+callsign badges have heading pointers and feet/knots/age popups. GNSS-derived
+vario is not a total-energy/netto instrument measurement.
+
+Positions older than two minutes fade, and expire after 15 minutes even when
+refresh is paused. Feed failures retain unexpired reports with a delayed-feed
+notice. They never substitute fake traffic. **Demo** explicitly shows fictional
+gliders and can be switched back to Live. Recorded weather disables live traffic.
 OGN reception is incomplete and unsuitable for collision avoidance.
 
 ## Optional Point Forecast Probe

@@ -221,8 +221,9 @@ limiter. Lower `DUO_OPEN_METEO_CALLS_PER_MINUTE` when necessary.
 
 The expanded watchdog costs roughly 1,200 weighted calls/run, around 4,800/day,
 before retries/dashboard usage. Consult [Open-Meteo pricing](https://open-meteo.com/en/pricing)
-for the free tier's usage/license terms. The unified 195-node, 96-variable UK map
-bundle costs about 1,872 weighted calls per cold model/cycle. Its cache is shared
+for the free tier's usage/license terms. The 168-node UK/Ireland map
+bundle uses three source models and the current profile-variable schema. Its
+weighted quota cost depends on fields, coordinates and requested forecast length. Its cache is shared
 across sessions for 30 minutes. The dashboard grid makes one concurrent attempt
 per chunk; a 429 stays missing until the next cycle, with no retry sleep. This
 can exceed a free provider's minute quota; the app remains usable while missing
@@ -234,7 +235,11 @@ Map HTTPS hosts: `api.rainviewer.com`, `tilecache.rainviewer.com`,
 `tile.openstreetmap.org`, `a.tile.opentopomap.org`, `cdn.jsdelivr.net`,
 `server.arcgisonline.com`. Terrain refresh uses `s3.amazonaws.com`.
 OGN uses `live.glidernet.org` and `ddb.glidernet.org` over verified HTTPS;
-no APRS TCP port, API key or new GitHub secret is required.
+neither an API key nor a new GitHub secret is required. Optional receive-only
+APRS uses `aprs.glidernet.org:14580`, with `glidern1.glidernet.org` and
+`glidern2.glidernet.org` fallbacks. It defaults off when an HTTP proxy is
+configured. `DUO_OGN_APRS=1` is for deployments with permitted direct TCP;
+a domain allowlist alone cannot enable that port. HTTPS continues if TCP fails.
 Notification HTTPS hosts: `ntfy.sh`, plus optional `api.callmebot.com` or `api.twilio.com`.
 Email uses `smtp.gmail.com` **TCP 465**, not HTTPS. Keep certificate verification
 enabled; an HTTPS credential proxy cannot inject SMTP passwords. Credentials
@@ -274,7 +279,8 @@ uses `Priority: high`. The existing per-day/horizon delivery ledger still
 suppresses duplicates. A later rating upgrade does not resend an accepted alert.
 
 OGN uses one daemon worker per Streamlit process, with a 20-second feed cadence
-and a 24-hour device registry cache. It writes `static/ogn/uk.json` atomically;
+and a 12-hour device registry cache. A separate APRS daemon feeds the same
+15-minute rolling cache when TCP is enabled. It writes `static/ogn/uk.json` atomically;
 `server.enableStaticServing = true` must remain enabled. Browser requests use
 the app's own `/app/static/ogn/uk.json` path, including a configured URL prefix.
 The static file contains only the filtered current public reports, not a flight
@@ -340,11 +346,12 @@ changing model never relabels another model's forecast. Day, hour, active page,
 wing loading and task edits cannot start a second fetch within the same cycle.
 A new cycle or explicit Refresh starts new work when Weather needs it.
 
-Each cold grid uses twelve concurrent multi-coordinate requests covering 195
-points, 120 forecast hours and 24 past hours. Each request has a 3.5-second socket
+Each cold grid covers 168 points, 120 forecast hours and 24 past hours in
+45-coordinate chunks. Four concurrent workers request every geographic chunk
+of the selected model before donors. Each request has a six-second socket
 timeout, one attempt and no pacing/retry sleeps. Wind frames and the read-only
 hour-indexed NumPy cube are prepared by the worker. This is not a guaranteed
-3.5-second total transfer deadline or a promised two-second provider response.
+six-second total transfer deadline or a promised two-second provider response.
 Regional forecasts also update in the background. The watchdog now uses its own
 bounded single-attempt transport, described at the start of this guide.
 

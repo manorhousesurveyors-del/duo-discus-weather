@@ -125,7 +125,7 @@ function installDuoModes(map, data) {
     try{const saved=JSON.parse(sessionStorage.getItem('duo-wind')||'null');if(saved&&saved.signature===signature){level=saved.level;index=saved.index;}else{index=Math.max(0,w.times.findIndex(t=>new Date(t)>=new Date(data.when)));}}catch(e){}
     const save=()=>{try{sessionStorage.setItem('duo-wind',JSON.stringify({signature,level,index}));}catch(e){}};
     const altitude=control('topleft','duo-altitude',w.levels.map((label,i)=>'<button data-level="'+i+'" aria-pressed="'+(i===level)+'" title="Pressure-level height is approximate. Missing levels use log-pressure vector interpolation; underground levels show labelled surface wind.">'+esc(label)+'</button>').join(''));
-    const timeline=control('bottomleft','duo-timeline','<label for="duo-wind-time">'+esc(w.labels[index])+'</label><input id="duo-wind-time" aria-label="Five-day hourly wind timeline" title="Move through five days. Grey or empty coverage means this model has no data for that hour." type="range" min="0" max="'+(w.times.length-1)+'" value="'+index+'"><button class="duo-play" title="Play or pause the wind forecast timeline.">▶ Play timeline</button><small>Model forecast · '+esc(w.source)+'. White particles show motion towards the wind destination.</small>');
+    const timeline=control('bottomleft','duo-timeline','<label for="duo-wind-time">'+esc(w.labels[index])+'</label><input id="duo-wind-time" aria-label="Five-day hourly wind timeline" title="Move through five days. Grey or empty coverage means this model has no data for that hour." type="range" min="0" max="'+(w.times.length-1)+'" value="'+index+'"><button class="duo-play" title="Play or pause the wind forecast timeline.">▶ Play timeline</button><small>Model forecast · '+esc(w.source)+'. White particles show motion towards the wind destination. Spatial gap estimates: '+(w.coverage?.spatial_estimates||0)+'; furthest nearest source '+(w.coverage?.max_nearest_source_km||0)+' km. Estimates get less reliable across large gaps.</small>');
     control('bottomright','duo-legend','<b>Wind speed · kt</b><div class="duo-ramp" style="background:linear-gradient(90deg,#2558ad,#25aabc,#60b860,#f1dd49,#ed653b,#d2356f,#be49c9)"></div><div class="duo-labels"><span>0</span><span>10</span><span>20</span><span>30</span><span>40</span><span>60+</span></div>');
     const canvas=L.DomUtil.create('canvas','duo-wind-heat',map.getPanes().overlayPane),particles=L.DomUtil.create('canvas','duo-wind-particles',map.getPanes().overlayPane);
     for(const c of [canvas,particles]){c.style.position='absolute';c.style.pointerEvents='none';c.style.zIndex='300';}
@@ -140,7 +140,7 @@ function installDuoModes(map, data) {
       const fy=(lat-ys[row])/(ys[row+1]-ys[row]),fx=(lon-xs[col])/(xs[col+1]-xs[col]);
       return [[(1-fx)*(1-fy),g.indices[row][col]],[fx*(1-fy),g.indices[row][col+1]],[(1-fx)*fy,g.indices[row+1][col]],[fx*fy,g.indices[row+1][col+1]]].filter(p=>p[1]!==null&&p[0]>0);
     }
-    function sample(weight,t=index,l=level){let u=0,v=0,total=0,interpolated=false,terrain=false,count=0;for(const [f,i] of weight){const a=w.stations[i].values[t]?.[l];if(!a)continue;u+=a[0]*f;v+=a[1]*f;total+=f;count++;interpolated||=a[2]===1;terrain||=a[2]===2;}return total?{u:u/total,v:v/total,interpolated,terrain,count}:null;}
+    function sample(weight,t=index,l=level){let u=0,v=0,total=0,interpolated=false,terrain=false,spatial=false,count=0;for(const [f,i] of weight){const a=w.stations[i].values[t]?.[l];if(!a)continue;u+=a[0]*f;v+=a[1]*f;total+=f;count++;interpolated||=!!(a[2]&1);terrain||=!!(a[2]&2);spatial||=!!(a[2]&4);}return total?{u:u/total,v:v/total,interpolated,terrain,spatial,count}:null;}
     function rebuild(){
       if(!alive)return;const size=map.getSize(),origin=map.containerPointToLayerPoint([0,0]);
       for(const c of [canvas,particles]){c.width=size.x;c.height=size.y;L.DomUtil.setPosition(c,origin);}
@@ -165,13 +165,14 @@ function installDuoModes(map, data) {
     timeline.querySelector('input').oninput=e=>{index=Number(e.target.value);update();};
     timeline.querySelector('.duo-play').onclick=e=>{if(playing){clearInterval(playing);playing=0;e.target.textContent='▶ Play timeline';}else{e.target.textContent='Ⅱ Pause timeline';playing=setInterval(()=>{index=(index+1)%w.times.length;update();},1200);}};
     let lastClick=null;
-    function windText(v){if(!v)return 'Unavailable';const speed=Math.hypot(v.u,v.v)*1.943844,direction=(Math.atan2(-v.u,-v.v)*180/Math.PI+360)%360;const cardinal=['N','NE','E','SE','S','SW','W','NW'][Math.round(direction/45)%8];return val(speed,0)+' kt · from '+cardinal+' ('+val(direction,0)+'°)'+(v.terrain?' · surface fallback near terrain':(v.interpolated?' · log-pressure interpolation':''));}
+    function windText(v){if(!v)return 'Unavailable';const speed=Math.hypot(v.u,v.v)*1.943844,direction=(Math.atan2(-v.u,-v.v)*180/Math.PI+360)%360;const cardinal=['N','NE','E','SE','S','SW','W','NW'][Math.round(direction/45)%8];return val(speed,0)+' kt · from '+cardinal+' ('+val(direction,0)+'°)'+(v.terrain?' · surface fallback near terrain':(v.interpolated?' · log-pressure interpolation':''))+(v.spatial?' · spatial gap estimate':'');}
     windClick=ll=>{lastClick=ll;const weight=weights(ll.lat,ll.lng),v=sample(weight);
       const vertical=w.levels.map((label,l)=>'<tr><td>'+esc(label)+'</td><td>'+windText(sample(weight,index,l))+'</td></tr>').join('');
       const series=w.times.map((_,t)=>sample(weight,t,level));
       const bars=series.map((p,i)=>'<i style="height:'+(p?Math.min(72,Math.hypot(p.u,p.v)*1.943844*1.3):1)+'px;'+(!p?'background:#555;':'')+'" title="'+esc(w.labels[i]+': '+windText(p))+'"></i>').join('');
       callout(ll,'<b>Wind: '+windText(v)+'</b><br>'+esc(w.labels[index])+'<br>'+ll.lat.toFixed(4)+', '+ll.lng.toFixed(4)+'<details><summary>Vertical wind profile</summary><table>'+vertical+'</table></details><details><summary>Five-day wind timeline</summary><div class="duo-bars">'+bars+'</div><small>Hover a bar for time and wind. Grey = unavailable.</small></details><small>Regular-grid model interpolation at this coordinate. Pressure heights are approximate. Surface fallback is identified above where the requested pressure lies at or below the lowest near-surface sample; unavailable hours are not extrapolated.</small>');
     };
+    map._duoWind={sampleAt:(lat,lon,t=index,l=level)=>sample(weights(lat,lon),t,l),bounds:w.grid,coverage:w.coverage,get swarm(){return swarm;},get raster(){return grid;}};
     map.on('moveend resize',rebuild);rebuild();if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)animation=requestAnimationFrame(animate);
     layers.push({remove:()=>{map.off('moveend resize',rebuild);canvas.remove();particles.remove();}});
   }

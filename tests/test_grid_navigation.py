@@ -45,14 +45,16 @@ class UKGridTests(unittest.TestCase):
         self.assertIsNone(result[0].at(source.times[-1])['temperature_2m'])
         self.assertEqual(result[0].model,FORECAST_MODELS['ukmo'].api_name)
 
-    def test_twelve_concurrent_chunks_schedule_once_and_keep_model_isolation(self):
+    def test_four_concurrent_chunks_schedule_once_and_keep_model_isolation(self):
         entered=Event();release=Event();lock=Lock();count=0
         points=grid.national_grid()
         def fetch(chunk,model,http):
             nonlocal count
+            self.assertLessEqual(len(chunk),45)
+            self.assertEqual(http.settings.http_timeout_seconds,6.)
             with lock:
                 count+=1
-                if count==12:entered.set()
+                if count==4:entered.set()
             if not release.wait(5):raise AssertionError('Test did not release transport')
             raise IngestionError('Deterministic missing coverage')
         with patch.object(grid,'fetch_chunk',side_effect=fetch) as request:
@@ -60,9 +62,11 @@ class UKGridTests(unittest.TestCase):
             try:
                 start=perf_counter();pending=bundle.request('ifs025')
                 self.assertLess(perf_counter()-start,.3)
-                self.assertTrue(entered.wait(2),'All twelve requests must start concurrently')
+                self.assertTrue(entered.wait(2),'All four requests must start concurrently')
                 for _ in range(120):self.assertIs(bundle.request('ifs025'),pending)
-                self.assertEqual(request.call_count,12)
+                self.assertEqual(request.call_count,4)
+                self.assertTrue(all(call.args[1]==FORECAST_MODELS['ifs025'] for call in request.call_args_list))
+                self.assertEqual({p.key for call in request.call_args_list for p in call.args[0]},{p.key for p in points})
                 self.assertFalse(pending.done())
             finally:release.set()
             result=pending.result(timeout=10)
@@ -71,7 +75,7 @@ class UKGridTests(unittest.TestCase):
             self.assertIs(bundle.request('ifs025'),pending)  # no retries on failure
             other=bundle.request('ukmo');self.assertIsNot(other,pending)
             self.assertEqual(other.result(timeout=10).batch.failures,result.batch.failures)
-            self.assertEqual(request.call_count,36)  # Same raw data across model switches.
+            self.assertEqual(request.call_count,12)  # Same raw data across model switches.
 
     def test_task_optimizer_can_only_read_an_already_finished_grid(self):
         from route_tools import screening_forecasts
@@ -120,7 +124,7 @@ class PageNavigationTests(unittest.TestCase):
         data=Future();data.set_result(forecasts)
         snapshot=grid.assemble((data,),(tuple(f.location for f in forecasts),),FORECAST_MODELS['ifs025'],start)
         # National transport remains pending while we navigate away, then finishes.
-        pending=Future();bundle=Mock(cycle=int(datetime.now(UTC).timestamp()//1800),coverage_revision=3);bundle.request.return_value=pending
+        pending=Future();bundle=Mock(cycle=int(datetime.now(UTC).timestamp()//1800),coverage_revision=3,wind_grid_revision=1);bundle.request.return_value=pending
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict('os.environ',{'DUO_DASHBOARD_SNAPSHOT':'','DUO_TASK_STORE':tmp,'GEMINI_API_KEY':''}), \
              patch.object(grid,'regional_future',return_value=regional), \

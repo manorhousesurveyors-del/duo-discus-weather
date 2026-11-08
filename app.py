@@ -26,7 +26,7 @@ import importlib
 import runtime_imports
 
 # The compatibility registry itself may also predate this deployment.
-if getattr(runtime_imports,'API_REVISION',0)<8:
+if getattr(runtime_imports,'API_REVISION',0)<9:
     importlib.reload(runtime_imports)
 optional_module=runtime_imports.optional_module
 
@@ -404,8 +404,8 @@ def build_map(forecasts, when, *, layers, aviation=None, radar=None, convergence
                 fill_color=cloud_colour(value),tooltip=folium.Tooltip(f'Potential cloud base {value:.0f} ft AMSL. Compare with the mixing top; blue thermals may stop below this height.')).add_to(cloud_group)
         add_colour_legend(map_view,'Potential cloud base · ft AMSL',['#e6f5f6','#77bdc8','#2b82a3','#344781'],1500,8000)
     cloud_group.add_to(map_view); wave_group.add_to(map_view)
-    if turnpoints and ('BGA turnpoints' in layers or map_identity=='wave'):
-        add_waypoints(map_view,turnpoints,show=map_identity!='wave')
+    if turnpoints and ('BGA turnpoints' in layers or map_identity in ('wave','traffic') or visual_mode=='wind'):
+        add_waypoints(map_view,turnpoints,show=map_identity not in ('wave','traffic') and visual_mode!='wind')
     if map_identity in ('weather','planner'):
         add_shared_task(map_view,task,when,editable=visual_mode=='route')
     if visual_mode=='route':add_task_editor(map_view,task,when,forecasts,loading)
@@ -441,7 +441,10 @@ def build_map(forecasts, when, *, layers, aviation=None, radar=None, convergence
         add_map_modes(map_view,forecasts,when,anchor or when,loading,mode=visual_mode,radar=radar,task=task,rate_grid=rate_grid,radar_point=radar_point,hide_menu=map_identity!="weather",wind_product=wind_product)
     if show_airfields:
         from uk_airfields import add_airfields
-        add_airfields(map_view,aviation,live=live_airfields,route=map_identity=="planner" or visual_mode=="route",selected=selected_airfield)
+        add_airfields(map_view,aviation,live=live_airfields,route=map_identity=="planner" or visual_mode=="route",selected=selected_airfield,show=map_identity!='traffic')
+    if map_identity=='traffic' or visual_mode=='wind':
+        from client_map import script
+        script(map_view,'reference_layers.js','installDuoReferenceControls',{'traffic':map_identity=='traffic'})
     ogn_traffic=optional_module('ogn_traffic')
     # A legacy OGN module has no activity lease. Leave its worker untouched and
     # omit its overlay until the current module is available.
@@ -672,7 +675,7 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
         elif not recorded:
             getattr(ogn_traffic,'traffic_heartbeat',lambda *_args,**_kwargs:None)()
         st.subheader('Live OGN Glider Radar')
-        st.caption('Current glider reports refresh independently of the forecast. Stale reports disappear after two minutes. Use the map’s Demo button for clearly labelled playback.')
+        st.caption('Current glider reports refresh independently of the forecast. Recent reports remain for 15 minutes, with their position age shown. BGA turnpoints and airfields start off; use the switches at the top of the map. Use the map’s Demo button for clearly labelled playback.')
         from map_component import document_version
         def traffic_document():
             return build_map(combined,when,layers=[],visual_mode='clean',include_modes=False,map_identity='traffic',

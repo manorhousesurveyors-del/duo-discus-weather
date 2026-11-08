@@ -3,92 +3,58 @@
 A shared worker publishes only current UK glider reports through Streamlit's
 same-origin static server. Map timers poll that JSON without Python reruns.
 """
-from datetime import UTC,datetime,timedelta
+from datetime import UTC,datetime
 from pathlib import Path
 from threading import Thread,Event,Lock
-from urllib.request import Request,urlopen
-import hashlib,json,math,time
+import json,time
 import xml.etree.ElementTree as ET
+from ogn_live import (MAX_AGE_SECONDS, DDB, FEEDS, fetch, parse_devices,
+                      parse_spot_xml, TrafficCache, AprsReceiver)
 
 ROOT=Path(__file__).resolve().parent
-FEED='https://live.glidernet.org/lxml.php?a=0&b=61.2&c=49.7&d=2.2&e=-8.7&z=0&x=2'
-DDB='https://ddb.glidernet.org/download/?j=1'
+FEED=FEEDS[0]  # Backwards-compatible public constant.
 SNAPSHOT=ROOT/'static'/'ogn'/'uk.json'
 CACHE=ROOT/'var'/'ogn-devices.json'
-MAX_AGE_SECONDS=120
-
-
-def fetch(url,limit):
-    with urlopen(Request(url,headers={'User-Agent':'DuoDiscusWeather/1.0 (UK glider weather overlay)'}),timeout=12) as response:
-        raw=response.read(limit+1)
-    if len(raw)>limit:raise ValueError('OGN response exceeds size limit')
-    return raw
-
-
-def parse_devices(raw):
-    body=json.loads(raw)
-    if not isinstance(body,dict) or not isinstance(body.get('devices'),list) or len(body['devices'])>200000:raise ValueError('Invalid OGN device registry')
-    devices={}
-    for d in body['devices']:
-        if not isinstance(d,dict):raise ValueError('Invalid OGN device record')
-        key=str(d.get('device_id','')).upper()
-        if len(key)!=6 or any(c not in '0123456789ABCDEF' for c in key):continue
-        devices.setdefault(key,[]).append({k:str(d.get(k,''))[:80] for k in ('registration','cn','tracked','identified','device_type')})
-    return devices
-
-
-def parse_spot_xml(raw,*,now=None,devices=None):
-    now=now or datetime.now(UTC);devices=devices or {}
-    if len(raw)>8_000_000 or b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():raise ValueError('Unsupported OGN XML')
-    root=ET.fromstring(raw)
-    if root.tag!='markers':raise ValueError('Unexpected OGN response')
-    reports={};rejected=0
-    for marker in root.findall('m'):
-        try:
-            r=marker.attrib['a'].split(',')
-            if len(r)!=14:raise ValueError('Unknown OGN record layout')
-            lat,lon,alt,age,heading,speed,vario=map(float,(r[0],r[1],r[4],r[6],r[7],r[8],r[9]))
-            if not all(math.isfinite(x) for x in (lat,lon,alt,age,heading,speed,vario)):raise ValueError('Nonfinite report')
-            if r[10]!='1' or not (49.7<=lat<=61.2 and -8.7<=lon<=2.2):continue
-            if not (0<=age<=MAX_AGE_SECONDS and -100<=alt<=15000 and 0<=heading<=360 and 0<=speed<=600 and abs(vario)<=50):continue
-            # OGN's table includes stationary devices. Movement is an airborne
-            # proxy, not proof that the aircraft has left the ground.
-            if speed<25:continue
-            clock=datetime.strptime(r[5],'%H:%M:%S').time()
-            observed=now.replace(hour=clock.hour,minute=clock.minute,second=clock.second,microsecond=0)
-            if observed>now+timedelta(seconds=30):observed-=timedelta(days=1)
-            if not -30<=(now-observed).total_seconds()<=MAX_AGE_SECONDS+5:continue
-            address=r[12].upper();registered=devices.get(address,[])
-            if any(d['tracked']!='Y' for d in registered):continue
-            public=[d for d in registered if d['identified']=='Y' and d['registration']==r[3]]
-            label=public[0]['registration'] if public else ('OGN '+hashlib.sha256(r[13].encode()).hexdigest()[:6].upper())
-            cn=public[0]['cn'] if public else ''
-            ident=hashlib.sha256((address+':'+r[13]).encode()).hexdigest()[:16]
-            report={'id':ident,'lat':lat,'lon':lon,'registration':label,'competition_id':cn,
-                'altitude_ft':round(alt/.3048),'groundspeed_kt':round(speed/1.852,1),'heading':heading%360,
-                'vario_kt':round(vario*1.943844492,1),'observed_at':observed.isoformat(),
-                'highlight':label.replace('-','').upper()=='GCKML','receiver':r[11][:40]}
-            if ident not in reports or report['observed_at']>reports[ident]['observed_at']:reports[ident]=report
-        except (ValueError,KeyError,IndexError):rejected+=1
-    if rejected and rejected==len(root.findall('m')):raise ValueError('OGN record layout changed')
-    return {'schema':1,'status':'live','fetched_at':now.isoformat(),'aircraft':list(reports.values()),
-        'rejected':rejected,'source':'OGN / SpotTheGlider · live.glidernet.org',
-        'note':'Moving glider reports ≤120 seconds old. Ground movement can be included. Coverage is incomplete; not collision avoidance.'}
 
 
 class TrafficWorker:
     def __init__(self,path=SNAPSHOT):
         self.path=Path(path);self.stop=Event();self.thread=None;self.devices={};self.registry_at=0
+        self.cache=TrafficCache()
+        self.aprs=AprsReceiver(self.cache,lambda:self.devices,lambda:time.time()<getattr(self,"active_until",0))
     def write(self,body):
         self.path.parent.mkdir(parents=True,exist_ok=True)
         temporary=self.path.with_suffix('.tmp');temporary.write_text(json.dumps(body,separators=(',',':')));temporary.replace(self.path)
     def once(self):
-        if time.time()-self.registry_at>86400:
+        if time.time()-self.registry_at>43200:
             try:
-                raw=CACHE.read_bytes() if CACHE.exists() and time.time()-CACHE.stat().st_mtime<86400 else fetch(DDB,25_000_000)
-                self.devices=parse_devices(raw);CACHE.parent.mkdir(exist_ok=True);CACHE.write_bytes(raw);self.registry_at=time.time()
-            except (ValueError,OSError):self.registry_at=time.time()-86000 # retry registry in ~7 minutes
-        return parse_spot_xml(fetch(FEED,8_000_000),devices=self.devices)
+                cached=CACHE.exists() and time.time()-CACHE.stat().st_mtime<43200
+                raw=CACHE.read_bytes() if cached else fetch(DDB,25_000_000)
+                self.devices=parse_devices(raw)
+                if not cached:
+                    CACHE.parent.mkdir(exist_ok=True);CACHE.write_bytes(raw)
+                self.registry_at=time.time()
+            except (ValueError,OSError):self.registry_at=time.time()-42800
+        rows=[];sources=[];errors=[]
+        # Both mirror variants are useful: they need not return identical sets.
+        for url in FEEDS:
+            try:
+                body=parse_spot_xml(fetch(url,8_000_000),devices=self.devices)
+                rows.extend(body['aircraft']);sources.append(url)
+            except (ValueError,OSError,ET.ParseError) as exc:errors.append(type(exc).__name__)
+        now=datetime.now(UTC)
+        aircraft=self.cache.merge(rows,now=now)
+        # Apply newly refreshed registry opt-outs to retained/APRS reports too.
+        aircraft=[p for p in aircraft if not any(d.get('tracked')!='Y' for d in self.devices.get(p['id'],[]))]
+        for p in aircraft:
+            registry=self.devices.get(p['id'],[])
+            if any(d.get('identified')!='Y' for d in registry):
+                p.update(registration='?'+p['id'][-2:],competition_id='',aircraft_model='',highlight=False)
+        return {'schema':1,'status':'live' if sources else 'degraded','fetched_at':now.isoformat(),
+                'aircraft':aircraft,'source':'OGN APRS / SpotTheGlider','sources':sources,
+                'aprs_status':self.aprs.status,'errors':errors,
+                'note':('Live feed received. ' if sources else 'HTTPS feed unavailable; retained/APRS positions shown. ')+
+                       'Reports expire after 15 minutes. Check age; not collision avoidance.'}
     def run(self):
         while not self.stop.is_set():
             if time.time()>getattr(self,'active_until',0):
@@ -104,6 +70,7 @@ class TrafficWorker:
         self.write({'schema':1,'status':'connecting','fetched_at':datetime.now(UTC).isoformat(),'aircraft':[],
                     'source':'OGN / SpotTheGlider','note':'Connecting to the live UK feed…'})
         self.active_until=time.time()+35
+        self.aprs.start()
         self.thread=Thread(target=self.run,name='duo-ogn-feed',daemon=True);self.thread.start();return self
 
 
@@ -133,4 +100,4 @@ def add_traffic(map_view,*,show=False,recorded=False):
     from client_map import script
     from streamlit.runtime.scriptrunner import get_script_run_ctx
     if show and not recorded and get_script_run_ctx(suppress_warning=True):ensure_worker();set_worker_active(True)
-    script(map_view,'ogn_traffic.js','installDuoTraffic',{'show':show,'recorded':recorded,'path':'app/static/ogn/uk.json'})
+    script(map_view,'ogn_traffic.js','installDuoTraffic',{'show':show,'recorded':recorded,'path':'app/static/ogn/uk.json','maxAgeSeconds':MAX_AGE_SECONDS})

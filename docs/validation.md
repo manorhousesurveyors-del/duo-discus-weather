@@ -1080,3 +1080,52 @@ default, five valid cards and supported UKMO selection. A DOM observer detected
 probe draw/paint **56.3/63.8 ms** and zero script errors. The synthetic fixtures
 are labelled and send no messages or live weather requests. Compilation and
 whitespace checks passed; no notifications were sent during any validation.
+
+## UK/Ireland wind and OGN receiver repair — 8 November 2026
+
+The final offline suite passes **307 tests**. Warm page changes across all seven
+pages took **39–52 ms** in this workspace. These are measured local timings,
+not network or deployment guarantees.
+
+The national grid now has 168 nodes over 49.5–61°N, −11–2.5°E. A live check
+initially reproduced Open-Meteo 429 responses and missing northern chunks.
+After prioritising all geographic chunks of the selected model before donors,
+the next live run returned **168/168 locations**, with finite vectors for all
+120 hours and six altitudes, **zero spatial fills** and zero unavailable slices.
+That complete source collection plus payload preparation took **13.34 s**;
+some donor requests still received rate limits. The app keeps this work in the
+background. Four fetch workers use 45-coordinate batches, six-second socket
+timeouts and no retry sleeps; these settings cannot guarantee provider latency.
+
+`tests/test_wind_domain.py` also reproduces missing northern/Irish chunks,
+individual nonfinite nodes, direction wrap and complete outages. Same-hour,
+same-level spatial estimates carry an explicit flag and distance diagnostic;
+whole missing hours/levels remain unknown.
+
+Chromium's `scripts/verify_wind_ogn.py` passed **3,600 point/hour/altitude
+checks**, covering Southern England, Midlands, Northern England, Scotland and
+Ireland. Particles occupied all four quadrants of the full-domain viewport.
+Both synthetic missing-chunk wind and the captured live wind product passed.
+The test checks actual canvas sampling, badge clicks, airborne filtering and
+BGA/airfield switches, which emitted **zero component events**. Base tiles are
+blocked in this isolated renderer test; the separate Streamlit map regression
+loaded its assets without failures.
+
+Both HTTPS OGN variants responded. The final receiver check at 12:05 UTC
+returned **66 recent targets**, including **46 competition IDs** and 30 moving
+reports. The browser subsequently displayed 65 unexpired captured reports,
+without changing timestamps. Unclassified ADS-B targets are excluded unless
+identified as FLARM/OGN. Tests cover APRS login/reconnect with a mock socket,
+CSV-packed and keyed XML, clock rollover, ground/sink reports, registry opt-outs,
+cross-source deduplication, expiry and retaining recent reports during outages.
+Public APRS TCP is unavailable through this managed HTTP proxy, so **live APRS
+was not verified here**. HTTPS fallback was verified live; direct APRS remains
+available on deployments permitting TCP 14580.
+
+`scripts/verify_fresh_forecast.py` confirmed default ICON-EU, five **8/8** cards,
+explicit supported UKV selection and no unavailable-state flashes, using the
+isolated synthetic live-path startup fixture. The existing full Chromium map
+regression also passed: task draw **1.6 ms**, cursor **0.5 ms**, wave height
+switches **0.6–0.9 ms**, OGN demo draw **0.8 ms**, no JavaScript errors and no failed
+assets. No notifications were sent. Captures and temporary runtime data stay
+under ignored `var/` paths.

@@ -3,7 +3,6 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from threading import Lock
-import math
 import numpy as np
 import streamlit as st
 
@@ -16,6 +15,8 @@ from forecast_coverage import (COVERAGE_REVISION, complete_forecasts,
                                complete_regional_forecasts, soaring_coverage)
 
 _pool = ThreadPoolExecutor(max_workers=12, thread_name_prefix='uk-map-grid')
+_national_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix='national-grid')
+WIND_GRID_REVISION = 1
 
 
 def grid_variables():
@@ -30,9 +31,9 @@ class GridHttpClient(JsonHttpClient):
     A cycle schedules each model once. A 429 is retained as missing coverage;
     it never triggers another request within the cycle.
     """
-    def __init__(self, **kwargs):
-        super().__init__(replace(Settings.from_env(), http_timeout_seconds=3.5,
-                                 http_max_attempts=1, http_workers=12), **kwargs)
+    def __init__(self, *, national=False, **kwargs):
+        super().__init__(replace(Settings.from_env(), http_timeout_seconds=6.0 if national else 3.5,
+                                 http_max_attempts=1, http_workers=4 if national else 12), **kwargs)
 
     def _pace(self, host, cost=1.0):
         pass
@@ -100,6 +101,7 @@ class UKGridBundle:
     """One resource per cycle, with separate lazy results for each named model."""
     def __init__(self, cycle):
         self.coverage_revision = COVERAGE_REVISION
+        self.wind_grid_revision = WIND_GRID_REVISION
         self.cycle = cycle
         self.anchor = datetime.fromtimestamp(cycle * 1800, UTC)
         self._lock = Lock()
@@ -122,7 +124,7 @@ class UKGridBundle:
             result = Future()
             self._models[model_key] = result
             if self._raw is None:
-                self._start_raw()
+                self._start_raw(model_key)
             def completed(raw):
                 def publish():
                     try:
@@ -135,19 +137,22 @@ class UKGridBundle:
             self._raw.add_done_callback(completed)
             return result
 
-    def _start_raw(self):
-        """One shared cycle of independent requests, at most 12 in flight.
+    def _start_raw(self, model_key):
+        """45-coordinate batches, at most four requests in flight, no retries.
 
         Switching the selected model reuses these raw arrays. An unavailable
         provider/chunk cannot discard a healthy fallback provider's response.
         """
         self._raw = Future()
         points = national_grid()
-        size = math.ceil(len(points) / 12)
+        size = 45
         chunks = tuple(points[i:i+size] for i in range(0, len(points), size))
-        http = GridHttpClient()
-        jobs = [(_pool.submit(fetch_chunk, chunk, model, http), chunk, model)
-                for chunk in chunks for model in FORECAST_MODELS.values()]
+        http = GridHttpClient(national=True)
+        # Cover every row/column before spending the provider quota on donors.
+        # Chunk-first ordering exhausted quotas in the south before Scotland.
+        models = (FORECAST_MODELS[model_key], *(m for k,m in FORECAST_MODELS.items() if k != model_key))
+        jobs = [(_national_pool.submit(fetch_chunk, chunk, model, http), chunk, model)
+                for model in models for chunk in chunks]
         remaining = len(jobs)
         done_lock = Lock()
         def completed(_):
@@ -168,13 +173,14 @@ class UKGridBundle:
 
 
 @st.cache_resource(ttl=1800, max_entries=2, show_spinner=False)
-def load_uk_map_grid(forecast_cycle_30min_bucket, coverage_revision=3):
+def load_uk_map_grid(forecast_cycle_30min_bucket, coverage_revision=3, wind_grid_revision=1):
     return UKGridBundle(forecast_cycle_30min_bucket)
 
 
 def session_grid(cycle):
     bundle = st.session_state.get('uk_map_grid_bundle')
-    if bundle is None or bundle.cycle != cycle or getattr(bundle,'coverage_revision',0) != COVERAGE_REVISION:
+    if (bundle is None or bundle.cycle != cycle or getattr(bundle,'coverage_revision',0) != COVERAGE_REVISION
+            or getattr(bundle,'wind_grid_revision',0) != WIND_GRID_REVISION):
         bundle = load_uk_map_grid(cycle)
         st.session_state['uk_map_grid_bundle'] = bundle
     return bundle

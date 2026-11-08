@@ -27,11 +27,11 @@ from data_ingestion import JsonResponse,IngestionError
 class WindCoverageTests(unittest.TestCase):
     def test_regular_rectangle_has_all_coastal_nodes_and_exact_requested_bounds(self):
         points=national_grid();self.assertEqual(len(points),len(WIND_LATITUDES)*len(WIND_LONGITUDES))
-        self.assertEqual((min(p.latitude for p in points),max(p.latitude for p in points)),(49.8,59.))
-        self.assertEqual((min(p.longitude for p in points),max(p.longitude for p in points)),(-8.5,2.))
+        self.assertEqual((min(p.latitude for p in points),max(p.latitude for p in points)),(49.5,61.))
+        self.assertEqual((min(p.longitude for p in points),max(p.longitude for p in points)),(-11.,2.5))
         self.assertEqual(len({(p.latitude,p.longitude) for p in points}),len(points))
         np.testing.assert_allclose(np.diff(WIND_LATITUDES),np.diff(WIND_LATITUDES).mean(),atol=1e-6)
-        np.testing.assert_allclose(np.diff(WIND_LONGITUDES),.75)
+        np.testing.assert_allclose(np.diff(WIND_LONGITUDES),13.5/13,atol=1e-6)
 
     def test_missing_950_and_800_interpolate_vectors_without_temperature_dependency(self):
         f=forecast(changes={'wind_speed_950hPa':None,'wind_direction_950hPa':None,

@@ -113,9 +113,14 @@ for source attribution, supported formats, assessment limits and operating detai
 
 ## UK wind, airfields and route analysis
 
-Wind uses a complete **195-node rectangular grid** from 49.8–59°N and
-8.5°W–2°E, including coastal water. Bilinear canvas interpolation removes the
-old distance-cutoff holes. All six wind altitude frames are cached together;
+Wind uses a complete **168-node rectangular grid** from 49.5–61°N and
+11°W–2.5°E, including coastal water. Bilinear canvas interpolation removes the
+old distance-cutoff holes. Four workers fetch 45-coordinate batches with a
+six-second timeout and no retries. All geographic chunks of the selected model
+go first, before donor-model requests. Missing vectors use same-hour, same-level
+nearest-neighbour interpolation, explicitly labelled as spatial estimates. The
+legend reports the largest nearest-source distance; broad gaps are less reliable.
+A completely unavailable hour/level stays unknown. All six altitude frames are cached together;
 wind/wave altitude changes, panning and zooming stay in the browser.
 Initial live downloads still depend on provider latency and quotas.
 
@@ -151,6 +156,18 @@ experimental terrain-forced linear estimate, not an exact SkySight forecast.
 risk; 3–5 stars qualify for high-priority email/ntfy alerts. Wave potential
 stays separate. **Live OGN Glider Radar** adds fresh public glider reports to
 Weather and Task maps, with 15–30 second polling and explicit demo playback.
+The radar starts with BGA and airfields hidden; its top-of-map switches run
+entirely in the browser. Aircraft have callsign badges, age-labelled popups,
+and All recent / Airborne filters (airborne is only a speed proxy).
+
+`ogn_live.py` merges receive-only APRS with both HTTPS mirror variants.
+Positions expire after 15 minutes and fade after two minutes. Feed failures
+retain unexpired reports, never automatic demo traffic. The OGN registry is
+cached for 12 hours; identification and tracking opt-outs are honoured.
+APRS uses `aprs.glidernet.org:14580`, then `glidern1.glidernet.org` and
+`glidern2.glidernet.org`. On HTTP-proxy hosts it defaults off and HTTPS remains
+active; `DUO_OGN_APRS=1` enables it only where direct TCP is permitted. An HTTPS
+allowlist alone does not enable APRS TCP. No keys or new dependencies are needed.
 See [map and analysis methods](docs/map-upgrades.md) for coverage and limits.
 
 ## Evaluate without sending

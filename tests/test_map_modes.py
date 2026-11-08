@@ -44,7 +44,7 @@ class WindMapTests(unittest.TestCase):
 
     def test_national_land_samples_cover_scotland_wales_and_northern_ireland(self):
         points=national_grid()
-        self.assertEqual(len(points),195);self.assertGreater(max(p.latitude for p in points),58)
+        self.assertEqual(len(points),168);self.assertGreater(max(p.latitude for p in points),58)
         self.assertTrue(any(54<p.latitude<56 and p.longitude<-5.5 for p in points))
 
     def test_layer_control_is_collapsed_and_js_payload_escapes_html(self):

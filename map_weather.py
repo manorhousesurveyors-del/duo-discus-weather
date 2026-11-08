@@ -26,8 +26,8 @@ BANDS = {'thermal': (0, .5, 1, 1.5, 2.5, 3.5, 4.5, 5.5, 20),
          'stf': (0, 50, 55, 60, 65, 70, 75, 85, 150)}
 
 
-WIND_LATITUDES = tuple(round(float(v),6) for v in np.linspace(49.8,59.,13))
-WIND_LONGITUDES = tuple(round(float(v),6) for v in np.linspace(-8.5,2.,15))
+WIND_LATITUDES = tuple(round(float(v),6) for v in np.linspace(49.5,61.,12))
+WIND_LONGITUDES = tuple(round(float(v),6) for v in np.linspace(-11.,2.5,14))
 WIND_VARIABLES = ('temperature_2m','surface_pressure','wind_speed_10m','wind_direction_10m',
                   'wind_speed_80m','wind_direction_80m','wind_speed_100m','wind_direction_100m') + tuple(
     f'{v}_{p}hPa' for p in (1000,950,925,850,800,700,500)
@@ -35,7 +35,7 @@ WIND_VARIABLES = ('temperature_2m','surface_pressure','wind_speed_10m','wind_dir
 
 
 def national_grid():
-    """Regular 195-node UK grid, including coastal water; no distance cutoff mask."""
+    """168 nodes, south-to-north rows, covering the UK, Ireland and coastal water."""
     return tuple(GeoPoint(f'map:{lat:.6f}:{lon:.6f}',f'UK grid {lat:.3f}, {lon:.3f}',lat,lon)
                  for lat in WIND_LATITUDES for lon in WIND_LONGITUDES)
 
@@ -84,8 +84,52 @@ def wind_vector(profile, pressure):
     return None
 
 
+def fill_wind_grid(stations):
+    """Fill spatial gaps at the SAME hour/level using up to four nearest vectors.
+
+    Flag bit 4 identifies spatial estimates, including edge extrapolation. Never
+    borrow another hour or altitude: a wholly unavailable slice stays unknown.
+    Distances use a UK-centred kilometre projection, not raw degrees.
+    """
+    lookup={(round(s['lat'],6),round(s['lon'],6)):i for i,s in enumerate(stations)}
+    hours=len(stations[0]['values']) if stations else 120
+    grid=[]
+    for lat in WIND_LATITUDES:
+        row=[]
+        for lon in WIND_LONGITUDES:
+            if (lat,lon) not in lookup:
+                lookup[lat,lon]=len(stations)
+                stations.append({'lat':lat,'lon':lon,'values':[[None]*len(WIND_LEVELS) for _ in range(hours)]})
+            row.append(lookup[lat,lon])
+        grid.append(row)
+    coords=np.array([[s['lon']*64.,s['lat']*111.] for s in stations])
+    filled=0;unknown=0;max_distance=0.
+    for hour in range(hours):
+        for level in range(len(WIND_LEVELS)):
+            good=[];missing=[]
+            for i,s in enumerate(stations):
+                v=s['values'][hour][level]
+                if v is not None and all(math.isfinite(x) for x in v[:2]):good.append(i)
+                else:s['values'][hour][level]=None;missing.append(i)
+            if not missing:continue
+            if not good:unknown+=1;continue
+            distances,neighbours=cKDTree(coords[good]).query(coords[missing],k=min(4,len(good)))
+            distances=np.asarray(distances).reshape(len(missing),-1)
+            neighbours=np.asarray(neighbours).reshape(len(missing),-1)
+            for target,ds,ns in zip(missing,distances,neighbours):
+                weights=1/np.maximum(ds,0.01)**2;weights/=weights.sum()
+                vectors=[stations[good[n]]['values'][hour][level] for n in ns]
+                uv=np.dot(weights,np.array(vectors)[:,:2])
+                flags=4
+                for v in vectors:flags|=v[2]
+                stations[target]['values'][hour][level]=[round(float(uv[0]),2),round(float(uv[1]),2),flags]
+                filled+=1;max_distance=max(max_distance,float(ds[0]))
+    return grid,{'spatial_estimates':filled,'unavailable_slices':unknown,
+                 'max_nearest_source_km':round(max_distance,1)}
+
+
 def wind_payload(forecasts, anchor, *, days=5):
-    """Hourly UTC timeline; missing samples remain null (including short horizons)."""
+    """Full-domain hourly wind; spatial estimates retain explicit provenance."""
     start = datetime.combine(anchor.astimezone(LOCAL_TIMEZONE).date(), time(), LOCAL_TIMEZONE)
     times = [(start.astimezone(UTC) + timedelta(hours=h)).astimezone(LOCAL_TIMEZONE) for h in range(days*24)]
     stations = []
@@ -99,14 +143,18 @@ def wind_payload(forecasts, anchor, *, days=5):
             series.append([None if (v := wind_vector(profile, pressure)) is None else
                            [round(v[0], 2), round(v[1], 2), int(v[2])] for pressure, _ in WIND_LEVELS])
         stations.append({'lat': f.location.latitude, 'lon': f.location.longitude, 'values': series})
-    lookup={(round(s['lat'],6),round(s['lon'],6)):i for i,s in enumerate(stations)}
-    grid=[[lookup.get((lat,lon)) for lon in WIND_LONGITUDES] for lat in WIND_LATITUDES]
+    # Empty products still describe the domain, without inventing wind in an outage.
+    if not stations:
+        stations=[{'lat':p.latitude,'lon':p.longitude,'values':[[None]*len(WIND_LEVELS) for _ in times]} for p in national_grid()]
+    grid,coverage=fill_wind_grid(stations)
     return {'times': [t.isoformat() for t in times], 'labels': [t.strftime('%a %d %b · %H:%M %Z') for t in times],
             'levels': [label for _, label in WIND_LEVELS], 'stations': stations,
-            'grid':{'latitudes':WIND_LATITUDES,'longitudes':WIND_LONGITUDES,'indices':grid},
+            'grid':{'latitudes':WIND_LATITUDES,'longitudes':WIND_LONGITUDES,'indices':grid,
+                    'latMin':49.5,'latMax':61.,'lonMin':-11.,'lonMax':2.5,'ny':12,'nx':14,'rowOrder':'south-to-north'},
+            'coverage':coverage,
             'source': 'Open-Meteo '+(', '.join(sorted({f.model for f in forecasts})) or 'unavailable')+' · regular UK grid'+
                 (' · gap support: '+', '.join(sorted({s for f in forecasts for s in f.supplemental_sources})) if any(f.supplemental_sources for f in forecasts) else ''),
-            'notes':'Bilinear horizontal and log-pressure vector interpolation. Terrain fallback uses surface wind; missing forecast hours stay unavailable.'}
+            'notes':'Bilinear vectors; missing nodes use labelled nearest-neighbour spatial estimates. Terrain fallback uses surface wind. Entire missing hours/levels stay unavailable.'}
 
 
 def soaring_samples(forecasts, when, loading):

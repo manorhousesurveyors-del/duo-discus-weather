@@ -10,7 +10,7 @@ import sys
 from threading import RLock
 
 # Bump when new compatibility contracts must reach an already-running app.
-API_REVISION = 8
+API_REVISION = 9
 
 _lock = RLock()
 _log = logging.getLogger(__name__)
@@ -24,10 +24,10 @@ LAZY_APIS = {
     'soaring_physics': {'evaluate_thermals': ('loading',), 'thermal_usable_depth': ()},
     'forecast_coverage': {'complete_forecasts': (), 'complete_regional_forecasts': ()},
     'task_planning': {'assess_task': ()},
-    'map_weather': {'soaring_samples': ()},
+    'map_weather': {'soaring_samples': (), 'fill_wind_grid': ()},
     'day_rating': {'rate_day': ()},
     'alerts': {'load_bundle': ()},
-    'uk_map_grid': {'grid_variables': (), 'fetch_regional_sources': ()},
+    'uk_map_grid': {'grid_variables': (), 'fetch_regional_sources': (), 'load_uk_map_grid': ('wind_grid_revision',)},
     'json_payload': {'display_coordinates': ()},
     'app_cache': {'file_version': (), 'catalog_resource': (), 'forecast_run_id': ('physics_revision',),
                   'day_summary': (), 'assessed_task': (), 'gemini_discovery': (), 'covered_forecasts': ('coverage_revision',)},
@@ -36,6 +36,7 @@ LAZY_APIS = {
     'flight_briefing': {'build_context': ('resolved',)},
     'help_guide': {'render_help': ('model_key', 'bucket', 'recorded')},
     'planning_ui': {'task_payload': (), 'set_task': ('client_version',)},
+    'uk_airfields': {'add_airfields': ('show',)},
     'client_map': {'add_shared_task': (), 'task_soaring_layers': ()},
     'wave_map': {'cached_wave_payload': ()},
     'map_modes': {'add_map_modes': ('wind_product',)},

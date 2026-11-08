@@ -61,7 +61,7 @@ class OgnTests(unittest.TestCase):
         row=self.parse()['aircraft'][0]
         self.assertEqual(row['groundspeed_kt'],60);self.assertEqual(row['altitude_ft'],3281);self.assertEqual(row['vario_kt'],3.9)
         self.assertEqual(row['heading'],90);self.assertTrue(row['highlight']);self.assertEqual(row['competition_id'],'KA')
-        for args in ({'lat':'48'},{'age':'121'},{'clock':'10:59:50'},{'type':'9'},{'speed':'4'},{'vario':'99'}):
+        for args in ({'lat':'48'},{'age':'901'},{'clock':'10:59:50'},{'type':'9'},{'vario':'99'}):
             self.assertEqual(self.parse(self.xml(**args))['aircraft'],[])
         self.assertEqual(self.parse(b'<markers/>')['aircraft'],[])
 

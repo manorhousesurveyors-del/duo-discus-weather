@@ -44,7 +44,7 @@ function installDuoAirfields(map,data) {
     onHover:(a,tip)=>{clearTimeout(hoverTimer);hoverTimer=setTimeout(()=>fetchSurface(a).then(body=>{if(group.hovered===a)tip.setContent('<b>✈ '+esc(a.label)+'</b><br>'+currentHtml(a,body));}),350);},
     onLeave:()=>clearTimeout(hoverTimer),
     onClick:a=>{if(map._duoTask)map._duoTask.add({code:a.ident,name:a.label,lat:a.latitude,lon:a.longitude,elevation_m:a.elevation_ft===null?null:a.elevation_ft*.3048});else open(a);}
-  }).addTo(map);
+  });if(data.show!==false)group.addTo(map);
   map._duoAirfields=group;duoRegisterLayer(map,'✈ UK airfields · canvas / live reports',group);
   if(data.selected){const selected=records.find(a=>a.ident===data.selected);if(selected)open(selected);}
 }
