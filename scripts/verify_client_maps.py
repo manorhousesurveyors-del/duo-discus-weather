@@ -154,15 +154,16 @@ async def verify(args):
         result['wave']['updates'] = (await event_count())-baseline
         assert result['wave']['updates']<=2
 
-        frame, root = await open_map('Live OGN Glider Radar','[data-ogn="demo"]')
+        frame, root = await open_map('Live OGN Glider Radar','[data-ogn="refresh"]')
         await page.wait_for_timeout(500)
         baseline = await event_count()
-        await frame.locator('[data-ogn="demo"]').click()
+        await frame.locator('[data-ogn="refresh"]').click()
         await frame.locator('select[aria-label="OGN auto-refresh"]').select_option('15')
         await page.wait_for_timeout(1800)
         result['traffic'] = await root.evaluate('el=>({count:window.map_div._duoTraffic.count,mode:window.map_div._duoTraffic.status,draw_ms:window.map_div._duoTraffic.layer.lastDrawMs})')
         result['traffic']['updates'] = (await event_count())-baseline
-        assert result['traffic']['count']==7 and result['traffic']['mode']=='demo'
+        assert result['traffic']['count']==0 and result['traffic']['mode']=='disabled'
+        assert await frame.locator('[data-ogn="demo"]').count()==0
         assert result['traffic']['updates']==0
         result.update(errors=errors, failed_assets=failed, websocket_frames=len(sent), component_events=await page.evaluate('window._verifiedMapEvents.length'))
         await page.locator('.st-key-active_page').get_by_text('Help & Briefing Bot',exact=True).click()
@@ -195,7 +196,7 @@ async def verify(args):
         await page.get_by_role('option',name='Met Office · UKV / seamless',exact=True).click()
 
         result['missing_forecast_maps']={}
-        for name,selector in [('Task planner','[data-action="clear"]'),('Wave watch','[data-wave-level="0"]'),('Live OGN Glider Radar','[data-ogn="demo"]')]:
+        for name,selector in [('Task planner','[data-action="clear"]'),('Wave watch','[data-wave-level="0"]'),('Live OGN Glider Radar','[data-ogn="refresh"]')]:
             frame,root=await open_map(name,selector)
             result['missing_forecast_maps'][name]=await root.bounding_box()
             canvas=root.locator('canvas').first

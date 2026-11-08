@@ -237,7 +237,7 @@ Map HTTPS hosts: `api.rainviewer.com`, `tilecache.rainviewer.com`,
 OGN uses `live.glidernet.org` and `ddb.glidernet.org` over verified HTTPS;
 neither an API key nor a new GitHub secret is required. Optional receive-only
 APRS uses `aprs.glidernet.org:14580`, with `glidern1.glidernet.org` and
-`glidern2.glidernet.org` fallbacks. It defaults off when an HTTP proxy is
+`glidern2.glidernet.org`, `glidern3.glidernet.org` and `glidern4.glidernet.org` fallbacks. It defaults off when an HTTP proxy is
 configured. `DUO_OGN_APRS=1` is for deployments with permitted direct TCP;
 a domain allowlist alone cannot enable that port. HTTPS continues if TCP fails.
 Notification HTTPS hosts: `ntfy.sh`, plus optional `api.callmebot.com` or `api.twilio.com`.
@@ -278,9 +278,9 @@ Email includes the stars in its subject/body and high-priority headers; ntfy
 uses `Priority: high`. The existing per-day/horizon delivery ledger still
 suppresses duplicates. A later rating upgrade does not resend an accepted alert.
 
-OGN uses one daemon worker per Streamlit process, with a 20-second feed cadence
+OGN uses one daemon worker per Streamlit process, with a 15-second HTTPS feed cadence
 and a 12-hour device registry cache. A separate APRS daemon feeds the same
-15-minute rolling cache when TCP is enabled. It writes `static/ogn/uk.json` atomically;
+20-minute rolling cache when TCP is enabled. It writes `static/ogn/uk.json` atomically;
 `server.enableStaticServing = true` must remain enabled. Browser requests use
 the app's own `/app/static/ogn/uk.json` path, including a configured URL prefix.
 The static file contains only the filtered current public reports, not a flight
@@ -309,11 +309,13 @@ with a custom allowlist must include that domain. BGA/airfield lookup and
 map-coordinate selection continue without geocoding. Geocoding uses UK-only results and reports
 ambiguous names instead of picking an unverified location.
 
-Only the dedicated Live OGN Glider Radar page renews the provider worker's
-35-second activity lease. Leaving that page pauses it; closing the browser lets
-the lease expire. Other maps may display the last available traffic snapshot,
-with its existing stale-report filtering. Recorded/demo sessions never start a
-live worker. Browser polling and real provider access are separate operations.
+A `@st.cache_resource` singleton starts at live app startup and acquires OGN
+continuously across every page. Receive-only APRS has its own daemon; both XML
+session fetches run concurrently, and a one-second publisher exposes newly
+arrived packets without waiting for HTTP. Source and age counts appear above
+Radar and inside its toolbar. Recorded weather and `DUO_OGN_ENABLED=0` disable
+startup acquisition; isolated test fixtures set that flag. No demo data path
+exists. Browser polling and provider acquisition are separate operations.
 
 Run `scripts/verify_lazy_pages.py`, `scripts/verify_route_drag.py` and
 `scripts/verify_client_maps.py --proxy-assets` against the recorded test server
@@ -326,13 +328,14 @@ server on port 8505 and cannot verify real Google quota or account access.
 hooks use guarded lookups, and an import failure disables traffic without
 blocking weather or tasks. The radar page explains when traffic is unavailable.
 `set_worker_active(active: bool)` remains a public, top-level function and only
-changes an existing worker's activity lease.
+acts as a compatibility no-op; navigation cannot pause the singleton.
 
 Before binding application functions, `runtime_imports.py` checks already-loaded
 modules for the APIs introduced by lazy pages and shared tasks. Missing functions
 or outdated keyword signatures trigger one reload in dependency order. Current
 modules are left alone, and unused modules are not eagerly imported. OGN is
-excluded from automatic reloads because it owns a background worker. Required
+upgraded once when an older traffic API is detected: its worker and APRS stop
+events are set before the new module is loaded. Current receivers are left alone. Required
 core APIs are validated after reloading; a genuinely incomplete checkout is not
 silently treated as a working forecast engine.
 

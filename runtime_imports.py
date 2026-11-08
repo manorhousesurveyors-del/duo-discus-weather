@@ -10,7 +10,7 @@ import sys
 from threading import RLock
 
 # Bump when new compatibility contracts must reach an already-running app.
-API_REVISION = 9
+API_REVISION = 10
 
 _lock = RLock()
 _log = logging.getLogger(__name__)
@@ -80,7 +80,22 @@ def refresh_cached_modules():
 def optional_module(name):
     """An unavailable optional integration must not prevent dashboard startup."""
     try:
-        return importlib.import_module(name)
+        module=importlib.import_module(name)
+        if name=='ogn_traffic' and getattr(module,'__file__',None) and getattr(module,'TRAFFIC_API_REVISION',0)<2:
+            # Stop the superseded worker before replacing its implementation.
+            # Never leave old and new persistent receivers running together.
+            with _lock:
+                if getattr(module,'TRAFFIC_API_REVISION',0)<2:
+                    worker=getattr(module,'_worker',None)
+                    if worker is not None:
+                        stop=getattr(worker,'stop',None)
+                        if stop is not None:stop.set()
+                        receiver=getattr(worker,'aprs',None)
+                        if getattr(receiver,'stop',None) is not None:receiver.stop.set()
+                    provider=sys.modules.get('ogn_live')
+                    if provider is not None and not hasattr(provider,'MirrorSession'):importlib.reload(provider)
+                    importlib.invalidate_caches();module=importlib.reload(module)
+        return module
     except ImportError:
         _log.warning('Optional integration %s could not be imported', name, exc_info=True)
         return None

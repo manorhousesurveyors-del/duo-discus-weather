@@ -155,19 +155,25 @@ experimental terrain-forced linear estimate, not an exact SkySight forecast.
 **Day stars** combine distance, climb, usable height, window and spread-out
 risk; 3–5 stars qualify for high-priority email/ntfy alerts. Wave potential
 stays separate. **Live OGN Glider Radar** adds fresh public glider reports to
-Weather and Task maps, with 15–30 second polling and explicit demo playback.
+Weather and Task maps, with 15–30 second polling and telemetry-only rendering.
 The radar starts with BGA and airfields hidden; its top-of-map switches run
 entirely in the browser. Aircraft have callsign badges, age-labelled popups,
-and All recent / Airborne filters (airborne is only a speed proxy).
+and ground/movement filtering (airborne is only a speed proxy).
 
 `ogn_live.py` merges receive-only APRS with both HTTPS mirror variants.
-Positions expire after 15 minutes and fade after two minutes. Feed failures
-retain unexpired reports, never automatic demo traffic. The OGN registry is
+Positions expire after 20 minutes and fade after two minutes. Feed failures
+retain unexpired reports; there is no synthetic playback or fallback. The OGN registry is
 cached for 12 hours; identification and tracking opt-outs are honoured.
 APRS uses `aprs.glidernet.org:14580`, then `glidern1.glidernet.org` and
-`glidern2.glidernet.org`. On HTTP-proxy hosts it defaults off and HTTPS remains
+`glidern2.glidernet.org`, `glidern3.glidernet.org` and `glidern4.glidernet.org`.
+A cached singleton starts at live app startup and remains active across pages.
+HTTP sessions warm the viewer headers/cookies and query `a=1` plus the alternate
+snapshot. The source banner separates positions ≤2 minutes from reports ≤20
+minutes. Yellow marks identified gliders/motor gliders; blue marks other and
+unidentified targets (`_xx`). Independent filters control both groups and
+stationary targets. On HTTP-proxy hosts it defaults off and HTTPS remains
 active; `DUO_OGN_APRS=1` enables it only where direct TCP is permitted. An HTTPS
-allowlist alone does not enable APRS TCP. No keys or new dependencies are needed.
+allowlist alone does not enable APRS TCP. No keys are needed; the HTTP client uses the pinned `requests` dependency.
 See [map and analysis methods](docs/map-upgrades.md) for coverage and limits.
 
 ## Evaluate without sending

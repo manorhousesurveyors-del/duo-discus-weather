@@ -1,4 +1,4 @@
-"""Bounded OGN receivers and a 15-minute, device-keyed traffic cache.
+"""Bounded OGN receivers and a 20-minute, device-keyed traffic cache.
 
 APRS is receive-only. HTTPS remains available on hosts that prohibit public TCP.
 Registry tracking/identification opt-outs apply equally to both transports.
@@ -16,13 +16,51 @@ import socket
 import time
 import xml.etree.ElementTree as ET
 
-MAX_AGE_SECONDS = 15 * 60
+MAX_AGE_SECONDS = 20 * 60
 DDB = 'https://ddb.glidernet.org/download/?j=1'
-FEEDS = tuple(f'https://live.glidernet.org/lxml.php?a={a}&b=61.0&c=49.5&d=2.5&e=-11.0' for a in (0, 1))
-APRS_HOSTS = ('aprs.glidernet.org', 'glidern1.glidernet.org', 'glidern2.glidernet.org')
-APRS_LOGIN = b'user DUOWX pass -1 vers duo-discus-weather 1.0 filter r/54.0/-2.5/650\r\n'
-HEADERS = {'User-Agent': 'Mozilla/5.0 (compatible; DuoDiscusWeather/1.0)',
-           'Referer': 'https://live.glidernet.org/', 'Accept': '*/*'}
+FEEDS = ('https://live.glidernet.org/lxml.php?a=1&b=60.5&c=49.5&d=2.5&e=-11.0',
+         'https://live.glidernet.org/lxml.php?a=0&b=61.0&c=49.5&d=2.5&e=-11.0')
+APRS_HOSTS = ('aprs.glidernet.org', 'glidern1.glidernet.org', 'glidern2.glidernet.org', 'glidern3.glidernet.org', 'glidern4.glidernet.org')
+HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+           'Referer': 'https://live.glidernet.org/', 'Origin': 'https://live.glidernet.org',
+           'Accept': 'text/xml,application/xml,*/*'}
+
+
+def aprs_login():
+    import secrets
+    return f'user DUO{secrets.randbelow(10000):04d} pass -1 vers duo-wx 1.0 filter r/54.2/-3.5/750\r\n'.encode('ascii')
+
+
+class MirrorSession:
+    """Cookie-preserving HTTP client, owned by one background fetch thread."""
+    def __init__(self, session=None):
+        import requests
+        self.session = session or requests.Session()
+        self.session.headers.update(HEADERS)
+        # Retain the environment proxy and trusted CA; never disable TLS checks.
+        self.session.verify = os.environ.get('SSL_CERT_FILE', True)
+        self.warmed = False
+
+    def fetch(self, url, limit):
+        import requests
+        if not self.warmed:
+            try:
+                with self.session.get('https://live.glidernet.org/', timeout=(2,2), stream=True) as response:
+                    response.raise_for_status()
+                self.warmed = True
+            except requests.RequestException:
+                pass  # A blocked landing page must not suppress a working XML feed.
+        try:
+            with self.session.get(url, timeout=(3,6), stream=True) as response:
+                response.raise_for_status()
+                chunks=[];size=0
+                for chunk in response.iter_content(65536):
+                    size+=len(chunk)
+                    if size>limit:raise ValueError('OGN response exceeds size limit')
+                    chunks.append(chunk)
+                return b''.join(chunks)
+        except requests.RequestException as exc:
+            raise OSError('OGN HTTPS '+type(exc).__name__) from exc
 
 
 def fetch(url, limit):
@@ -45,22 +83,23 @@ def parse_devices(raw):
         if not re.fullmatch('[0-9A-F]{6}', key):
             continue
         devices.setdefault(key, []).append({k: str(record.get(k, ''))[:80] for k in
-            ('registration', 'cn', 'tracked', 'identified', 'device_type', 'aircraft_model')})
+            ('registration', 'cn', 'tracked', 'identified', 'device_type', 'aircraft_model', 'aircraft_type')})
     return devices
 
 
 def report(*, address, token='', lat, lon, altitude_m, heading, speed_kmh, vario_mps,
-           observed, now, devices, aircraft_type=1, registration='', cn='', receiver='', source='HTTPS', flarm=False):
+           observed, now, devices, aircraft_type=1, registration='', cn='', receiver='', source='live.glidernet.org XML', flarm=False):
     """Normalize units, identity and age without a climb/groundspeed exclusion."""
     observed = observed.astimezone(UTC)
-    values = (lat, lon, altitude_m, heading, speed_kmh)
+    values = tuple(v for v in (lat, lon, altitude_m, heading, speed_kmh) if v is not None)
     if not all(math.isfinite(v) for v in values) or (vario_mps is not None and not math.isfinite(vario_mps)):
         raise ValueError('Nonfinite traffic report')
     if not (49.5 <= lat <= 61 and -11 <= lon <= 2.5):
         return None
-    if aircraft_type not in (0, 1, 2, 8):  # unknown FLARM, glider, tug, powered/motor glider
+    if not 0 <= aircraft_type <= 15:
         return None
-    if not (-100 <= altitude_m <= 15000 and 0 <= heading <= 360 and 0 <= speed_kmh <= 600):
+    if not ((altitude_m is None or -500 <= altitude_m <= 20000) and
+            (heading is None or 0 <= heading <= 360) and (speed_kmh is None or 0 <= speed_kmh <= 1500)):
         return None
     if vario_mps is not None and abs(vario_mps) > 50:
         return None
@@ -72,8 +111,6 @@ def report(*, address, token='', lat, lon, altitude_m, heading, speed_kmh, vario
     if not ident:
         raise ValueError('Missing device identity')
     registered = devices.get(address, []) if valid_address else []
-    if aircraft_type == 0 and not (flarm or any(d.get('device_type') in ('F','O') for d in registered)):
-        return None
     if any(d.get('tracked') != 'Y' for d in registered):
         return None
     public = [d for d in registered if d.get('identified') == 'Y']
@@ -88,13 +125,17 @@ def report(*, address, token='', lat, lon, altitude_m, heading, speed_kmh, vario
         model = ''
         if cn.startswith('_') or registration.lower() == str(token).lower():
             registration = cn = ''
-    label = registration or '?' + ident[-2:]
+    anonymous = not registration and not cn
+    label = registration or '_' + ident[-2:].lower()
+    badge = cn or (registration.replace('-', '')[-3:] if registration else label)
+    ddb_glider=any(d.get('aircraft_type','').lower() in ('1','8','glider','sailplane','motor glider') for d in public)
+    category = 'glider' if not anonymous and (aircraft_type in (1,8) or (aircraft_type==0 and ddb_glider)) else 'other'
     return {'id': ident, 'lat': lat, 'lon': lon, 'registration': label, 'competition_id': cn,
-            'aircraft_model': model, 'aircraft_type': aircraft_type,
-            'altitude_ft': round(altitude_m / .3048), 'groundspeed_kt': round(speed_kmh / 1.852, 1),
-            'heading': heading % 360, 'vario_kt': None if vario_mps is None else round(vario_mps * 1.943844492, 1),
+            'aircraft_model': model, 'aircraft_type': aircraft_type, 'badge':badge, 'category':category,
+            'altitude_ft': None if altitude_m is None else round(altitude_m / .3048), 'groundspeed_kt': None if speed_kmh is None else round(speed_kmh / 1.852, 1),
+            'heading': None if heading is None else heading % 360, 'vario_kt': None if vario_mps is None else round(vario_mps * 1.943844492, 1),
             'observed_at': observed.isoformat(), 'age_seconds': max(0, round((now-observed).total_seconds())),
-            'airborne': speed_kmh >= 25,  # movement proxy, never proof of flight
+            'airborne': None if speed_kmh is None else speed_kmh >= 25,  # movement proxy, never proof of flight
             'highlight': label.replace('-', '').upper() == 'GCKML', 'receiver': receiver[:40], 'source': source}
 
 
@@ -129,8 +170,8 @@ def parse_spot_xml(raw, *, now=None, devices=None):
                     return next((attrs[k] for k in names if k in attrs), default)
                 lat, lon = field('lat', 'latitude'), field('lon', 'lng', 'longitude')
                 cn, reg = field('cn', 'competition_id', default=''), field('reg', 'registration', default='')
-                alt, heading = field('alt', 'altitude'), field('heading', 'course', 'track', default='0')
-                speed, vario = field('speed', 'groundspeed', default='0'), field('vario', 'climb')
+                alt, heading = field('alt', 'altitude'), field('heading', 'course', 'track')
+                speed, vario = field('speed', 'groundspeed'), field('vario', 'climb')
                 kind, receiver = field('type', 'aircraft_type', default='1'), field('receiver', default='')
                 address, token = field('device_id', 'id', default=''), field('token', default='')
                 age, clock = field('age'), field('time', 'timestamp')
@@ -146,8 +187,8 @@ def parse_spot_xml(raw, *, now=None, devices=None):
                 observed = now - timedelta(seconds=float(age))
             else:
                 raise ValueError('Missing observation time')
-            row = report(address=address, token=token, lat=float(lat), lon=float(lon), altitude_m=float(alt),
-                         heading=float(heading), speed_kmh=float(speed), vario_mps=float(vario) if vario not in (None, '') else None,
+            row = report(address=address, token=token, lat=float(lat), lon=float(lon), altitude_m=float(alt) if alt not in (None,'') else None,
+                         heading=float(heading) if heading not in (None,'') else None, speed_kmh=float(speed) if speed not in (None,'') else None, vario_mps=float(vario) if vario not in (None, '') else None,
                          observed=observed, now=now, devices=devices, aircraft_type=int(kind),
                          registration=reg, cn=cn, receiver=receiver)
             if row and (row['id'] not in reports or row['observed_at'] > reports[row['id']]['observed_at']):
@@ -156,65 +197,100 @@ def parse_spot_xml(raw, *, now=None, devices=None):
             rejected += 1
     if markers and rejected == len(markers):
         raise ValueError('OGN record layout changed')
-    return {'schema': 1, 'status': 'live', 'fetched_at': now.isoformat(), 'aircraft': list(reports.values()),
+    return {'schema': 2, 'status': 'live', 'fetched_at': now.isoformat(), 'aircraft': list(reports.values()),
             'rejected': rejected, 'source': 'OGN / SpotTheGlider · live.glidernet.org',
-            'note': 'Recent reports retained for 15 minutes; check position age. Not collision avoidance.'}
+            'note': 'Recent reports retained for 20 minutes; check position age. Not collision avoidance.'}
 
 
-_POSITION = re.compile(r'(?P<lat>\d{4}\.\d{2})(?P<ns>[NS])[/\\](?P<lon>\d{5}\.\d{2})(?P<ew>[EW]).(?P<heading>\d{3})/(?P<speed>\d{3})')
+_POSITION = re.compile(r'(?P<lat>\d{4}\.\d{2})(?P<ns>[NS])[/\\A-Za-z0-9](?P<lon>\d{5}\.\d{2})(?P<ew>[EW]).')
+
+
+def base91(text):
+    value=0
+    for char in text:
+        digit=ord(char)-33
+        if not 0<=digit<=90:raise ValueError('Invalid compressed APRS coordinate')
+        value=value*91+digit
+    return value
+
+
+def packet_time(stamp, now):
+    if stamp[2]=='h':
+        return clock_time(':'.join((stamp[1][:2],stamp[1][2:4],stamp[1][4:])),now)
+    from zoneinfo import ZoneInfo
+    zone=UTC if stamp[2]=='z' else ZoneInfo('Europe/London')
+    local=now.astimezone(zone)
+    for offset in (0,-1,1):
+        month=local.month-1+offset
+        for fold in (0,1):
+            try:
+                candidate=datetime(local.year+month//12,month%12+1,int(stamp[1][:2]),
+                    int(stamp[1][2:4]),int(stamp[1][4:]),tzinfo=zone,fold=fold).astimezone(UTC)
+                if -30<=(now-candidate).total_seconds()<=MAX_AGE_SECONDS:return candidate
+            except ValueError:continue
+    return None
 
 
 def parse_aprs(line, *, now=None, devices=None):
-    """OGN APRS uncompressed positions, timestamp, feet, knots and fpm vario."""
-    now = now or datetime.now(UTC)
-    if line.startswith('#') or len(line) > 4096 or ':' not in line:
-        return None
-    header, payload = line.split(':', 1)
-    sender = header.split('>', 1)[0]
-    position = _POSITION.search(payload)
-    altitude = re.search(r'/A=(-?\d{5,6})', payload)
-    ident = re.search(r'\bid([0-9A-Fa-f]{2})([0-9A-Fa-f]{6})\b', payload)
-    if not position or not altitude or not ident:
-        return None
-    flags = int(ident[1], 16)
-    if flags & 0x80:  # no-track flag
-        return None
-    kind = (flags >> 2) & 15
-    if kind == 0 and not sender.startswith(('FLR', 'OGN')):
-        return None
-    stamp = re.match(r'[/@](\d{6})([hz/])', payload)
-    if not stamp:
-        return None  # never relabel an undated/replayed report as current
-    if stamp[2] == 'h':
-        observed = clock_time(':'.join((stamp[1][:2], stamp[1][2:4], stamp[1][4:])), now)
-    elif stamp[2] == 'z':
-        # DDHHMM UTC. Use an adjacent month only at the month boundary.
-        observed = None
-        for offset in (0, -1, 1):
-            month = now.month - 1 + offset
-            try:
-                candidate = datetime(now.year + month // 12, month % 12 + 1, int(stamp[1][:2]),
-                                     int(stamp[1][2:4]), int(stamp[1][4:]), tzinfo=UTC)
-                if abs((now-candidate).total_seconds()) <= MAX_AGE_SECONDS:observed = candidate;break
-            except ValueError:continue
-        if observed is None:return None
+    """APRS !/= and /@ positions, plain or base-91 compressed, plus OGN telemetry.
+
+    Untimestamped packets use receipt time, explicitly identified as such. A
+    local '/' timestamp is interpreted in Europe/London for this UK receiver.
+    Missing altitude/course/vario stays unknown rather than dropping a target.
+    """
+    now=now or datetime.now(UTC)
+    if line.startswith('#') or len(line)>4096 or ':' not in line:return None
+    header,payload=line.split(':',1);sender=header.split('>',1)[0]
+    if not payload or payload[0] not in '!/=@':return None
+    stamp=re.match(r'[/@](\d{6})([hz/])',payload)
+    if payload[0] in '/@' and not stamp:return None
+    observed=packet_time(stamp,now) if stamp else now
+    if observed is None:return None
+    position_text=payload[8:] if stamp else payload[1:]
+    match=_POSITION.match(position_text)
+    heading=speed=alt=None
+    if match:
+        lat,lon=float(match['lat']),float(match['lon'])
+        if lat%100>=60 or lon%100>=60:return None
+        lat=int(lat//100)+lat%100/60;lon=int(lon//100)+lon%100/60
+        if match['ns']=='S':lat=-lat
+        if match['ew']=='W':lon=-lon
+        course=re.match(r'(\d{3})/(\d{3})',position_text[match.end():])
+        if course:heading=float(course[1]);speed=float(course[2])*1.852
     else:
-        return None  # '/' is local time; receiver timezone is unknown
-    lat = float(position['lat']); lon = float(position['lon'])
-    if lat % 100 >= 60 or lon % 100 >= 60:return None
-    lat = int(lat // 100) + lat % 100 / 60; lon = int(lon // 100) + lon % 100 / 60
-    if position['ns'] == 'S':lat = -lat
-    if position['ew'] == 'W':lon = -lon
-    vario = re.search(r'([+-]\d+(?:\.\d+)?)fpm\b', payload)
-    registry = devices or {}
-    if flags & 0x40:  # stealth: preserve tracking opt-out and suppress identity
-        registry = dict(registry)
-        registry[ident[2].upper()] = [dict(d, identified='N') for d in registry.get(ident[2].upper(),
-            [{'tracked':'Y'}])]
-    return report(address=ident[2], lat=lat, lon=lon, altitude_m=int(altitude[1]) * .3048,
-                  heading=float(position['heading']), speed_kmh=float(position['speed']) * 1.852,
-                  vario_mps=float(vario[1]) * .00508 if vario else None,
-                  observed=observed, now=now, devices=registry, aircraft_type=kind, source='APRS', receiver=header[-40:], flarm=sender.startswith(('FLR','OGN')))
+        if len(position_text)<13 or position_text[0] not in '/\\0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz':return None
+        lat=90-base91(position_text[1:5])/380926
+        lon=-180+base91(position_text[5:9])/190463
+        c,s,t=(ord(v)-33 for v in position_text[10:13])
+        if not (-1<=c<=90 and -1<=s<=90 and 0<=t<=90):return None
+        if c>=0 and s>=0:
+            if t&0x18==0x10:alt=1.002**(c*91+s)*.3048
+            elif c<90:heading=c*4.;speed=(1.08**s-1)*1.852
+    explicit_alt=re.search(r'/A=(-?\d{5,6})',payload)
+    if explicit_alt:alt=int(explicit_alt[1])*.3048
+    ident=re.search(r'\bid([0-9A-Fa-f]{2})([0-9A-Fa-f]{6})\b',payload)
+    address=ident[2].upper() if ident else ''
+    flags=int(ident[1],16) if ident else 0
+    if flags&0x80:return None
+    if not address:
+        address_match=re.fullmatch(r'(?:FLR|OGN|ICA)([0-9A-Fa-f]{6})',sender)
+        address=address_match[1].upper() if address_match else ''
+        if not address and not re.fullmatch(r'[A-Z]-[A-Z0-9]{3,5}',sender):return None
+    registry=devices or {}
+    if flags&0x40:
+        registry=dict(registry)
+        registry[address]=[dict(d,identified='N') for d in registry.get(address,[{'tracked':'Y'}])]
+    vario=re.search(r'([+-]\d+(?:\.\d+)?)fpm\b',payload)
+    row=report(address=address,token=sender,lat=lat,lon=lon,altitude_m=alt,heading=heading,speed_kmh=speed,
+        vario_mps=float(vario[1])*.00508 if vario else None,observed=observed,now=now,devices=registry,
+        aircraft_type=(flags>>2)&15,source='OGN APRS-IS Live Stream',receiver=header[-40:],
+        registration=sender if not address and re.fullmatch(r'[A-Z]-[A-Z0-9]{3,5}',sender) else '')
+    if row:
+        row['timestamp_kind']='packet UTC' if stamp and stamp[2]!='/' else 'packet Europe/London' if stamp else 'received'
+        for name,pattern in (('rotation',r'([+-]?\d+(?:\.\d+)?)rot\b'),('signal_db',r'([+-]?\d+(?:\.\d+)?)dB\b')):
+            value=re.search(pattern,payload);number=float(value[1]) if value else None
+            row[name]=number if number is not None and math.isfinite(number) else None
+    return row
 
 
 class TrafficCache:
@@ -226,6 +302,13 @@ class TrafficCache:
         with self._lock:
             for row in rows:
                 if not row:continue
+                # Public full registrations can link distinct mirror/device aliases.
+                reg=row.get('registration','')
+                if reg and not reg.startswith(('_','?')):
+                    alias=next((k for k,v in self._reports.items() if v.get('registration')==reg),None)
+                    if alias and alias!=row['id']:
+                        previous=self._reports.pop(alias)
+                        if previous['observed_at']>row['observed_at']:row=previous
                 old = self._reports.get(row['id'])
                 if old is None or row['observed_at'] >= old['observed_at']:
                     self._reports[row['id']] = row
@@ -239,9 +322,10 @@ class AprsReceiver:
     """Persistent daemon, bounded buffers and idle reads, reconnect across hosts."""
     def __init__(self, cache, devices, active, *, connector=socket.create_connection):
         self.cache=cache; self.devices=devices; self.active=active; self.connector=connector
-        self.stop=Event(); self.thread=None; self.status='idle'
+        self.stop=Event(); self.thread=None; self.status='idle'; self.received_packets=0; self.last_received=None; self.ready=Event()
+        self.login=aprs_login()
         # A managed HTTP proxy cannot tunnel public APRS TCP. Do not bypass it.
-        self.enabled = os.getenv('DUO_OGN_APRS', '0' if os.getenv('HTTPS_PROXY') or os.getenv('https_proxy') else '1') == '1'
+        self.enabled = os.getenv('DUO_OGN_APRS', '0' if any(os.getenv(k) for k in ('HTTPS_PROXY','https_proxy','HTTP_PROXY','http_proxy','ALL_PROXY','all_proxy')) else '1') == '1'
 
     def start(self):
         if not self.enabled:
@@ -256,11 +340,12 @@ class AprsReceiver:
             host=APRS_HOSTS[host_index % len(APRS_HOSTS)]; host_index+=1
             try:
                 with self.connector((host,14580),timeout=3) as connection:
-                    connection.sendall(APRS_LOGIN); connection.settimeout(2)
-                    self.status='Connected to '+host; pending=b''; last=time.monotonic()
+                    connection.sendall(self.login); connection.settimeout(2)
+                    self.status='Connected to '+host; pending=b''; last=time.monotonic(); initial=last
                     while self.active() and not self.stop.is_set():
                         try:chunk=connection.recv(8192)
                         except socket.timeout:
+                            if time.monotonic()-initial>=4.5:self.ready.set()
                             if time.monotonic()-last>45:break
                             continue
                         if not chunk:break
@@ -270,7 +355,9 @@ class AprsReceiver:
                             line,pending=pending.split(b'\n',1)
                             try:row=parse_aprs(line.decode('ascii',errors='replace').strip(),devices=self.devices())
                             except (ValueError,OverflowError):continue
-                            if row:self.cache.merge([row])
+                            if row:
+                                self.cache.merge([row]);self.received_packets+=1;self.last_received=datetime.now(UTC).isoformat();self.ready.set()
             except (OSError,ValueError):
                 self.status='APRS unavailable; HTTPS fallback'
-            self.stop.wait(3)
+            if not self.stop.is_set():self.status='APRS reconnecting; HTTPS remains active'
+            self.stop.wait(1)

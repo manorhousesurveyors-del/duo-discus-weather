@@ -119,20 +119,25 @@ class PageNavigationTests(unittest.TestCase):
         from datetime import UTC,datetime
         import app
         start=datetime.now(UTC).replace(hour=0,minute=0,second=0,microsecond=0)
+        fixed_now=start+timedelta(hours=12)
+        class FrozenClock(datetime):
+            @classmethod
+            def now(cls,tz=None):return fixed_now.astimezone(tz) if tz else fixed_now.replace(tzinfo=None)
         forecasts=tuple(forecast(p,start=start,hours=144) for p in forecast_locations())
         regional=Future();regional.set_result(ForecastBatch(forecasts,()))
         data=Future();data.set_result(forecasts)
         snapshot=grid.assemble((data,),(tuple(f.location for f in forecasts),),FORECAST_MODELS['ifs025'],start)
         # National transport remains pending while we navigate away, then finishes.
-        pending=Future();bundle=Mock(cycle=int(datetime.now(UTC).timestamp()//1800),coverage_revision=3,wind_grid_revision=1);bundle.request.return_value=pending
+        pending=Future();bundle=Mock(cycle=int(fixed_now.timestamp()//1800),coverage_revision=3,wind_grid_revision=1);bundle.request.return_value=pending
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict('os.environ',{'DUO_DASHBOARD_SNAPSHOT':'','DUO_TASK_STORE':tmp,'GEMINI_API_KEY':''}), \
+             patch.object(app,'datetime',FrozenClock), \
              patch.object(grid,'regional_future',return_value=regional), \
              patch.object(grid,'load_uk_map_grid',return_value=bundle) as loader, \
              patch('ogn_traffic.ensure_worker'),patch('ogn_traffic.traffic_heartbeat'), \
              patch.object(grid.st,'spinner',wraps=grid.st.spinner) as spinner:
             app.load_sites.clear()
-            at=AppTest.from_file(str(Path(app.__file__)),default_timeout=90).run()
+            at=AppTest.from_string('import app\napp.main()',default_timeout=90).run()
             at.selectbox(key='visual_mode').select('wind').run()
             self.assertFalse(at.exception)
             self.assertFalse(pending.done())

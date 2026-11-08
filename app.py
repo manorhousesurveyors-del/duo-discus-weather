@@ -26,7 +26,7 @@ import importlib
 import runtime_imports
 
 # The compatibility registry itself may also predate this deployment.
-if getattr(runtime_imports,'API_REVISION',0)<9:
+if getattr(runtime_imports,'API_REVISION',0)<10:
     importlib.reload(runtime_imports)
 optional_module=runtime_imports.optional_module
 
@@ -497,8 +497,8 @@ def _main():
     close_probe=st.session_state.pop('_close_point_probe',False)
     if active_page!='Weather map' or close_probe:st.session_state['point_probe_enabled']=False
     ogn_traffic=optional_module('ogn_traffic')
-    getattr(ogn_traffic,'set_worker_active',lambda *_args,**_kwargs:None)(
-        active_page=='Live OGN Glider Radar' and not bool(recorded))
+    if not recorded:
+        getattr(ogn_traffic,'start_background',lambda:None)()
     catalog=current_catalog()
     default_thermal=st.query_params.get('thermals','off')=='on'
     if 'map_layers' not in st.session_state:
@@ -672,10 +672,10 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
             for name in ('set_worker_active','traffic_heartbeat','add_traffic'))
         if not traffic_ready:
             st.info('Live traffic is temporarily unavailable while the app updates. Weather and task planning remain available.')
-        elif not recorded:
-            getattr(ogn_traffic,'traffic_heartbeat',lambda *_args,**_kwargs:None)()
         st.subheader('Live OGN Glider Radar')
-        st.caption('Current glider reports refresh independently of the forecast. Recent reports remain for 15 minutes, with their position age shown. BGA turnpoints and airfields start off; use the switches at the top of the map. Use the map’s Demo button for clearly labelled playback.')
+        if traffic_ready and not recorded:
+            getattr(ogn_traffic,'traffic_heartbeat',lambda *_args,**_kwargs:None)()
+        st.caption('Current glider reports refresh independently of the forecast. Recent reports remain for 20 minutes, with their position age shown. BGA turnpoints and airfields start off; use the switches at the top of the map. Yellow marks identified gliders; blue marks powered and unidentified targets.')
         from map_component import document_version
         def traffic_document():
             return build_map(combined,when,layers=[],visual_mode='clean',include_modes=False,map_identity='traffic',

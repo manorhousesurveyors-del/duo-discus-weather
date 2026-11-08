@@ -172,7 +172,7 @@ async def main():
         assert await root().evaluate('el=>!window.map_div._duoProbe')
         # Leaving Weather while enabled must reset it, not revive it on return.
         await on()
-        for name,marker in [('Task planner','[data-action="clear"]'),('Wave watch','[data-wave-level="0"]'),('Live OGN Glider Radar','[data-ogn="demo"]'),('Help Guide',None),('Help & Briefing Bot',None),('Data quality',None)]:
+        for name,marker in [('Task planner','[data-action="clear"]'),('Wave watch','[data-wave-level="0"]'),('Live OGN Glider Radar','[data-ogn="refresh"]'),('Help Guide',None),('Help & Briefing Bot',None),('Data quality',None)]:
             start=time.perf_counter();await nav.get_by_text(name,exact=True).click();await idle()
             if marker:
                 await frame().locator(marker).wait_for(timeout=90000)
@@ -197,7 +197,7 @@ async def main():
         # Three real navigation samples separate normal timing from scheduler
         # jitter. Retain every sample; enforce the warm median, not the fastest.
         for trial in range(3):
-            for name,marker in [('Task planner','[data-action="clear"]'),('Wave watch','[data-wave-level="0"]'),('Live OGN Glider Radar','[data-ogn="demo"]'),('Help Guide',None),('Help & Briefing Bot',None),('Data quality',None),('Weather map','[data-clear-task]')]:
+            for name,marker in [('Task planner','[data-action="clear"]'),('Wave watch','[data-wave-level="0"]'),('Live OGN Glider Radar','[data-ogn="refresh"]'),('Help Guide',None),('Help & Briefing Bot',None),('Data quality',None),('Weather map','[data-clear-task]')]:
                 start=time.perf_counter();await nav.get_by_text(name,exact=True).click()
                 if marker:await frame().locator(marker).wait_for(timeout=30000)
                 else:

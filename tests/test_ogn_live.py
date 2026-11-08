@@ -6,7 +6,7 @@ import json
 import tempfile
 import time
 
-from ogn_live import (APRS_LOGIN, AprsReceiver, TrafficCache, fetch,
+from ogn_live import (aprs_login, AprsReceiver, TrafficCache, fetch,
                       parse_aprs, parse_devices, parse_spot_xml)
 from ogn_traffic import TrafficWorker
 
@@ -27,7 +27,7 @@ class OgnLiveTests(TestCase):
         other=parse_spot_xml(XML,now=NOW,devices=DDB)['aircraft']
         self.assertEqual(len(cache.merge(other,now=NOW)),1)
         self.assertEqual(len(cache.merge([],now=NOW+timedelta(minutes=14))),1)
-        self.assertEqual(cache.merge([],now=NOW+timedelta(minutes=16)),[])
+        self.assertEqual(cache.merge([],now=NOW+timedelta(minutes=21)),[])
 
     def test_ground_sink_tug_and_fifteen_minute_positions_are_kept(self):
         for kind in (1,2,8):
@@ -35,32 +35,32 @@ class OgnLiveTests(TestCase):
             row=parse_spot_xml(xml,now=NOW,devices=DDB)['aircraft'][0]
             self.assertFalse(row['airborne']);self.assertEqual(row['age_seconds'],840)
             self.assertEqual(row['vario_kt'],-1.2)
-        self.assertEqual(parse_spot_xml(XML.replace(b'11:59:50,10',b'11:40:00,1200'),now=NOW)['aircraft'],[])
+        self.assertEqual(parse_spot_xml(XML.replace(b'11:59:50,10',b'11:39:00,1260'),now=NOW)['aircraft'],[])
 
     def test_legacy_packed_clock_only_layout_and_unknown_flarm(self):
         legacy=XML.replace(b'11:59:50,10,',b'11:59:50,')
         self.assertEqual(parse_spot_xml(legacy,now=NOW,devices=DDB)['aircraft'][0]['competition_id'],'KA')
         unknown=XML.replace(b',1,TEST',b',0,TEST')
-        self.assertEqual(parse_spot_xml(unknown,now=NOW,devices=DDB)['aircraft'],[])
+        self.assertEqual(len(parse_spot_xml(unknown,now=NOW,devices=DDB)['aircraft']),1)
         registry={'ABC123':[dict(DDB['ABC123'][0],device_type='F')]}
         self.assertEqual(len(parse_spot_xml(unknown,now=NOW,devices=registry)['aircraft']),1)
 
     def test_key_value_layout_unknown_vario_and_anonymous_label(self):
         xml=b'<markers><m lat="53.3" lon="-7.5" id="ABC188" alt="150" time="2026-11-08T11:59:00Z" speed="5" type="1"/></markers>'
         row=parse_spot_xml(xml,now=NOW)['aircraft'][0]
-        self.assertEqual(row['registration'],'?88');self.assertIsNone(row['vario_kt'])
+        self.assertEqual(row['registration'],'_88');self.assertIsNone(row['vario_kt'])
         self.assertEqual(row['age_seconds'],60)
         with self.assertRaises(ValueError):parse_spot_xml(xml.replace(b'2026-11-08T11:59:00Z',b'bad'),now=NOW)
 
     def test_aprs_comment_unidentified_and_privacy_flags(self):
-        for line in ('# welcome',APRS.replace('id06','id86'),APRS.replace('115950','105950'),APRS.replace('id06','id26')):
+        for line in ('# welcome',APRS.replace('id06','id86'),APRS.replace('115950','105950'),APRS.replace('id06','id86')):
             self.assertIsNone(parse_aprs(line,now=NOW,devices=DDB))
         row=parse_aprs(APRS.replace('id06','id46'),now=NOW,devices=DDB)
-        self.assertFalse(row['highlight']);self.assertEqual(row['registration'],'?23')
+        self.assertFalse(row['highlight']);self.assertEqual(row['registration'],'_23')
         hidden={'ABC123':[dict(DDB['ABC123'][0],tracked='N')]}
         self.assertIsNone(parse_aprs(APRS,now=NOW,devices=hidden))
         anonymous=parse_aprs(APRS,now=NOW)
-        self.assertEqual(anonymous['registration'],'?23')
+        self.assertEqual(anonymous['registration'],'_23')
 
     def test_http_headers_and_bounded_read(self):
         response=MagicMock();response.__enter__.return_value=response;response.read.return_value=b'<markers/>'
@@ -90,7 +90,7 @@ class OgnLiveTests(TestCase):
         with patch('ogn_live.datetime',Clock):
             receiver.stop.wait=Mock(return_value=False)
             receiver.run()
-        self.assertEqual(connection.login,APRS_LOGIN)
+        self.assertEqual(connection.login,receiver.login)
         self.assertEqual(connector.call_args_list[0].args[0],('aprs.glidernet.org',14580))
         self.assertEqual(connector.call_args_list[1].args[0],('glidern1.glidernet.org',14580))
         self.assertEqual(len(cache.merge([],now=NOW)),1)
@@ -99,13 +99,14 @@ class OgnLiveTests(TestCase):
         worker=TrafficWorker();worker.devices=DDB;worker.registry_at=time.time()
         now=datetime.now(UTC);clock=(now-timedelta(seconds=10)).strftime('%H:%M:%S').encode()
         xml=XML.replace(b'11:59:50',clock)
-        with patch('ogn_traffic.fetch',side_effect=[OSError('primary down'),xml]):
+        with patch.object(worker.mirrors[0],'fetch',side_effect=OSError('primary down')), patch.object(worker.mirrors[1],'fetch',return_value=xml):
             first=worker.once()
         self.assertEqual(first['status'],'live');self.assertEqual(len(first['aircraft']),1)
-        with patch('ogn_traffic.fetch',side_effect=OSError('both down')):
+        with patch.object(worker.mirrors[0],'fetch',side_effect=OSError('both down')), patch.object(worker.mirrors[1],'fetch',side_effect=OSError('both down')):
             second=worker.once()
         self.assertEqual(second['status'],'degraded');self.assertEqual(len(second['aircraft']),1)
         self.assertEqual(second['aircraft'][0]['competition_id'],'KA')
         worker.devices={'ABC123':[dict(DDB['ABC123'][0],identified='N')]}
-        with patch('ogn_traffic.fetch',side_effect=OSError('both down')):
-            self.assertEqual(worker.once()['aircraft'][0]['registration'],'?23')
+        with patch.object(worker.mirrors[0],'fetch',side_effect=OSError('both down')), patch.object(worker.mirrors[1],'fetch',side_effect=OSError('both down')):
+            self.assertEqual(worker.once()['aircraft'][0]['registration'],'_23')
+        worker.close()

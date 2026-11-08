@@ -74,7 +74,7 @@ async def main():
         await frame().locator('[data-wave-level="3"]').click()
         assert result['pages']['Wave watch']['iframes']==1
         cold_wave=result['pages']['Wave watch']['ready_ms']
-        await choose('Live OGN Glider Radar','[data-ogn="demo"]')
+        await choose('Live OGN Glider Radar','[data-ogn="refresh"]')
         await choose('Help Guide');assert result['pages']['Help Guide']['iframes']==0
         await choose('Wave watch','[data-wave-level="0"]')
         result['cold_wave_ready_ms']=cold_wave

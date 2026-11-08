@@ -1,4 +1,7 @@
 """Synthetic weather only; these profiles are not a forecast or flight validation."""
+import os
+os.environ.setdefault("DUO_OGN_ENABLED", "0")  # Offline fixtures must not start provider threads.
+
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 

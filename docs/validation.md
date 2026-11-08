@@ -1129,3 +1129,50 @@ regression also passed: task draw **1.6 ms**, cursor **0.5 ms**, wave height
 switches **0.6–0.9 ms**, OGN demo draw **0.8 ms**, no JavaScript errors and no failed
 assets. No notifications were sent. Captures and temporary runtime data stay
 under ignored `var/` paths.
+
+## Telemetry-only persistent OGN radar — 8 November 2026, 13:07 UTC
+
+This update supersedes the earlier optional demo and page-lease behaviour.
+There is no demo button, aircraft animation generator or hardcoded fallback in
+the production receiver or renderer. Runtime Python/JavaScript scans found none
+of the reported placeholder callsigns. Genuine telemetry may still contain
+those public callsigns; they are not excluded from the feed.
+
+The final suite passes **319 tests**, including compressed/uncompressed APRS,
+`!`/`=` receive timestamps, `/`/`@` packet timestamps, UTC/local time handling,
+base-91 course/speed and altitude, missing fields, all aircraft categories,
+registry privacy, ID/registration deduplication, 20-minute expiry, cookie-session
+warm-up, all five reconnect hosts, singleton startup and safe hot deployment.
+A page-navigation timing test now freezes its clock so crossing a real
+half-hour boundary cannot invalidate its mocked cache bucket. `pip check`
+reports no broken dependencies.
+
+A live two-mirror HTTPS check returned **295** recent reports in **1.73 seconds**:
+154 positions were under two minutes old, 53 were yellow-category targets,
+242 were blue-category targets and 167 had anonymous IDs. Both `a=1` and the
+alternate snapshot responded. The sessions preserve cookies when issued; no
+cookies were issued during this check. Counts are observations, not an expected
+fixed fixture size or a guarantee of parity with another viewer's filters.
+
+`scripts/verify_live_ogn_app.py` starts an isolated Streamlit server with
+synthetic weather and **genuine live OGN**. Before opening Radar, the Weather
+page had already started the receiver and received **280** targets. HTTPS
+acquisition continued on Help Guide: the source timestamp advanced from
+13:06:59 to 13:07:15 UTC. Radar then displayed **280** reports, including
+**125** positions under two minutes old, the exact XML source, yellow/blue
+badges, working category filters, BGA/airfields off and no demo control. The
+startup weather fixture retained five 8/8 ICON-EU cards. No Streamlit exception
+or JavaScript error occurred. The test server and temporary root entrypoint
+were removed after verification.
+
+The isolated canvas regression also passed: source counts, both colours,
+independent yellow/blue/ground controls, badge popups, no server event from
+filter/reference switches, rapid cold-start polling, and **zero fabricated
+markers when the feed is empty**. Test-only synthetic protocol rows never enter
+the production static endpoint. Recorded weather displays no traffic.
+
+Public APRS TCP cannot be reached through this managed HTTP proxy. Socket
+protocol and reconnection were verified with simulated sockets; **live APRS
+was not verified here**. The live integration exercised HTTPS fallback. On a
+direct-TCP deployment, the persistent receiver uses the randomized receive-only
+login and `r/54.2/-3.5/750`, with glidern1–4 fallbacks. No notifications were sent.

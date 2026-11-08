@@ -27,7 +27,7 @@ class RuntimeImportTests(unittest.TestCase):
         worker = SimpleNamespace(active_until=0)
         with patch.object(ogn_traffic, '_worker', worker), patch.object(ogn_traffic.time, 'time', return_value=100):
             ogn_traffic.set_worker_active(True)
-            self.assertEqual(worker.active_until, 135)
+            self.assertEqual(worker.active_until, 0)
             ogn_traffic.set_worker_active(False)
             self.assertEqual(worker.active_until, 0)
 
@@ -72,7 +72,7 @@ runtime_imports.LAZY_APIS={}
 del map_component.cached_document
 map_modes.add_map_modes=lambda view:None
 import app
-assert runtime_imports.API_REVISION==9
+assert runtime_imports.API_REVISION==10
 assert callable(map_component.cached_document)
 assert runtime_imports._supports(map_modes,{'add_map_modes':('wind_product',)})
 """

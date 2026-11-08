@@ -136,29 +136,36 @@ See [physics](physics.md) and [elevation provenance](../data/README.md).
 
 **Live OGN Gliders (FLARM)** appears in Weather and Task layer menus; the
 **Live OGN Glider Radar** tab enables it initially. A shared server worker reads
-OGN/SpotTheGlider's HTTPS UK snapshot every 20 seconds and publishes a same-origin
+OGN/SpotTheGlider's HTTPS UK snapshots every 15 seconds and publishes a same-origin
 static JSON file. Browser timers poll at 15, 20 or 30 seconds without rerunning
 Streamlit. Public device metadata supplies registration/CN and highlights G-CKML.
 
+The cached receiver starts with the live app, not on a page switch, and remains
+active until the process stops. Startup never blocks the UI for network I/O.
+A cold browser polls rapidly for up to 4.5 seconds while acquisition continues.
 `ogn_live.py` merges the two HTTPS snapshot variants with a persistent,
 receive-only APRS listener where public TCP is permitted. It uses the radius
-filter `r/54.0/-2.5/650` and the same UK/Ireland rectangle as the wind field.
+filter `r/54.2/-3.5/750` and the same UK/Ireland rectangle as the wind field.
 The DDB registry refreshes every 12 hours and resolves CN, registration and type.
 Tracking/identification opt-outs apply to both transports. Unknown aircraft use
-`?<short_id>`. Unclassified ADS-B traffic is excluded unless the registry or
-APRS sender identifies a FLARM/OGN device.
+`_xx` (the last two lowercase ID digits). Public OGN XML categories are retained,
+including powered, helicopter, paraglider and unclassified targets. Receive-only
+APRS supports timestamped and untimestamped plain and compressed positions;
+receipt-time and UK-local-time interpretation are recorded explicitly.
 
-Glider, tug and powered/motor-glider reports remain for 15 minutes, including
-stationary and sinking aircraft. The Airborne filter uses ≥25 km/h groundspeed,
+Reports remain for 20 minutes, including stationary and sinking aircraft.
+Identified gliders/motor gliders are yellow (`#FDE047`); other and unidentified
+targets are blue (`#38BDF8`). Each group has an independent checkbox. Disabling
+Include Ground / Stationary Targets selects ≥25 km/h groundspeed,
 which does not prove flight. BGA turnpoints and airfields start off on Radar;
 prominent on-map switches toggle them without a server rerun. Rectangular
 callsign badges have heading pointers and feet/knots/age popups. GNSS-derived
 vario is not a total-energy/netto instrument measurement.
 
-Positions older than two minutes fade, and expire after 15 minutes even when
+Positions older than two minutes fade, and expire after 20 minutes even when
 refresh is paused. Feed failures retain unexpired reports with a delayed-feed
-notice. They never substitute fake traffic. **Demo** explicitly shows fictional
-gliders and can be switched back to Live. Recorded weather disables live traffic.
+notice. No demo, synthetic aircraft generator or automatic placeholder exists.
+Recorded weather disables live traffic and displays zero targets.
 OGN reception is incomplete and unsuitable for collision avoidance.
 
 ## Optional Point Forecast Probe

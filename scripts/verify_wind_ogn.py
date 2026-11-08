@@ -37,12 +37,12 @@ async def main(args):
     docs=documents(args.live_wind);out=Path('var/wind-ogn-browser');out.mkdir(parents=True,exist_ok=True)
     errors=[];cache={};results={}
     now=datetime.now(UTC)
-    rows=[{'id':'fixture'+str(i),'lat':lat,'lon':lon,'registration':'FIXTURE '+str(i),'competition_id':cn,
+    rows=[{'id':'fixture'+str(i),'lat':lat,'lon':lon,'registration':'FIXTURE '+str(i),'competition_id':cn,'badge':cn,'category':'glider' if i%2==0 else 'other',
            'aircraft_type':1,'aircraft_model':'Synthetic glider','altitude_ft':4000,'groundspeed_kt':55 if i else 0,
            'airborne':bool(i),'heading':i*60,'vario_kt':i-2.,'observed_at':(now-timedelta(seconds=20+i*80)).isoformat(),
            'highlight':False,'source':'Synthetic verification fixture'}
           for i,((lat,lon),cn) in enumerate(zip(PROBES,('TEST1','TEST2','TEST3','TEST4','?88')))]
-    body={'schema':1,'status':'live','fetched_at':now.isoformat(),'aircraft':rows}
+    body={'schema':2,'status':'live','source':'Isolated protocol test fixture','fetched_at':now.isoformat(),'aircraft':rows}
     async with async_playwright() as p:
         browser=await p.chromium.launch(executable_path='/usr/bin/chromium',headless=True,args=['--no-sandbox'])
         page=await browser.new_page(viewport={'width':1450,'height':1100})
@@ -60,10 +60,14 @@ async def main(args):
                 mime,raw=await asyncio.to_thread(fetch);await route.fulfill(content_type=mime,body=raw)
             except Exception:await route.abort()
         await page.route('https://**/*',asset)
+        traffic_reads=0
         async def local(route):
+            nonlocal traffic_reads
             url=route.request.url
             if '/app/static/ogn/uk.json' in url:
-                await route.fulfill(content_type='application/json',body=json.dumps(body));return
+                traffic_reads+=1
+                reply=body if traffic_reads>1 else {**body,'aircraft':[],'status':'connecting'}
+                await route.fulfill(content_type='application/json',body=json.dumps(reply));return
             name=url.rsplit('/',1)[-1].replace('.html','')
             await route.fulfill(content_type='text/html',body=docs[name][0])
         await page.route('http://duo.test/**',local)
@@ -101,9 +105,20 @@ async def main(args):
             assert await page.evaluate(f'map_div.hasLayer(map_div.{key})')
             await page.locator('[data-reference="'+control+'"]').uncheck()
             assert not await page.evaluate(f'map_div.hasLayer(map_div.{key})')
-        await page.locator('[data-ogn="filter"]').select_option('airborne')
+        await page.locator('[data-ogn-filter="ground"]').uncheck()
         assert await page.evaluate('map_div._duoTraffic.count')==4
-        await page.locator('[data-ogn="filter"]').select_option('all')
+        await page.locator('[data-ogn-filter="ground"]').check()
+        await page.locator('[data-ogn-filter="other"]').uncheck()
+        assert await page.evaluate('map_div._duoTraffic.count')==3
+        await page.locator('[data-ogn-filter="glider"]').uncheck()
+        assert await page.evaluate('map_div._duoTraffic.count')==0
+        await page.locator('[data-ogn-filter="other"]').check()
+        assert await page.evaluate('map_div._duoTraffic.count')==2
+        await page.locator('[data-ogn-filter="glider"]').check()
+        colours=await page.evaluate('[...new Set(map_div._duoTraffic.layer.records.map(p=>p.colour))].sort()')
+        assert colours==['#38BDF8','#FDE047'],colours
+        assert await page.locator('[data-ogn="demo"]').count()==0
+        assert 'Isolated protocol test fixture' in await page.locator('.duo-ogn-state').inner_text()
         await page.evaluate('map_div.setView([52.5,-2.9],7,{animate:false})')
         await page.wait_for_timeout(100)
         assert await page.evaluate('window.events.length')==0,await page.evaluate('window.events')
@@ -112,7 +127,7 @@ async def main(args):
         await page.locator('.leaflet-popup').wait_for()
         assert 'Position age:' in await page.locator('.leaflet-popup').inner_text()
         await page.screenshot(path=str(out/'traffic-fixture.png'))
-        results['traffic']={'fixture_targets':5,'airborne_filter':4,'references_default_off':True,'rerun_events':0}
+        results['traffic']={'fixture_targets':5,'airborne_filter':4,'cold_start_reads':traffic_reads,'references_default_off':True,'rerun_events':0}
         if args.live_traffic:
             body=json.loads(Path(args.live_traffic).read_text())
             await page.locator('[data-ogn="refresh"]').click()
@@ -123,6 +138,11 @@ async def main(args):
             await page.evaluate('map_div.setView([53.1,-2.6],7,{animate:false})')
             await page.wait_for_timeout(200)
             await page.screenshot(path=str(out/'traffic-live.png'))
+        body={'schema':2,'status':'degraded','source':'No live feed connected','fetched_at':now.isoformat(),'aircraft':[]}
+        await page.locator('[data-ogn="refresh"]').click()
+        await page.wait_for_function('map_div._duoTraffic.count===0')
+        assert not await page.locator('[data-ogn="demo"]').count()
+        results['traffic']['empty_feed_has_no_placeholder']=True
         assert not errors,errors
         results['errors']=errors;(out/'results.json').write_text(json.dumps(results,indent=2))
         print(json.dumps(results));await browser.close()
