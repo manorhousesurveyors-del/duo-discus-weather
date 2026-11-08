@@ -38,12 +38,12 @@ class ProviderGate:
                 self.costs.popleft()
             if now < self.until:
                 self.deferred += 1
-                raise DeferredWeather('Weather provider cooling down; background recovery is scheduled',
+                raise DeferredWeather('Weather provider requested a cooldown; try Refresh weather later',
                                       status=429, retry_after=self.until-now)
             if sum(c for _, c in self.costs)+cost > self.budget:
                 self.deferred += 1
                 delay = max(1., self.costs[0][0]+60-now) if self.costs else 60.
-                raise DeferredWeather('Weather request budget reserved; background update queued', retry_after=delay)
+                raise DeferredWeather('Weather request budget reached; try Refresh weather after the current minute', retry_after=delay)
             self.costs.append((now, cost)); self.requests += 1
 
     def failed(self, error):

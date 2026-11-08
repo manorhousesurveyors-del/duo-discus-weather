@@ -156,16 +156,14 @@ def task_builder(catalog,day,*,location):
 
 
 def fetch_corridor(points: tuple[GeoPoint, ...], model_key: str, refresh_bucket: int):
-    from weather_engine import read_forecasts
-    return read_forecasts(points,model_key)
+    from sync_weather import fetch_forecasts
+    return fetch_forecasts(tuple(points),model_key,refresh_bucket)
 
 
 def task_weather(points,base_forecasts,model_key,bucket,*,recorded=False):
     samples=corridor_points(points)
     if recorded:
         return nearby_forecasts(samples,base_forecasts,maximum_km=15), ('Recorded mode: only stored weather within 15 km is used; other corridor samples remain unavailable.',)
-    from weather_ui import forecasts_pending
-    forecasts_pending(samples,model_key)
     batch=fetch_corridor(samples,model_key,bucket)
     return batch.forecasts,tuple(f'{f.target}: {f.message}' for f in batch.failures)
 
@@ -460,7 +458,6 @@ def briefing_panel(catalog,day,loading,model_key,bucket,forecasts,assessment,cla
         from place_resolver import resolve_place,sector_radius,sector_points,local_forecasts,PlaceError
         from weather_engine import resources
         from uk_map_grid import grid_progress
-        from weather_ui import forecasts_pending
         try:
             if recorded:resolved=resolve_place(question,catalog,selected,allow_network=False)
             else:
@@ -475,16 +472,12 @@ def briefing_panel(catalog,day,loading,model_key,bucket,forecasts,assessment,cla
             st.session_state['assistant_routes']={};st.rerun()
         if not recorded:
             with st.spinner('Loading the requested local forecast…'):
-                if forecasts_pending(sector_points(resolved.point,sector_radius(question)),model_key):st.stop()
                 batch=local_forecasts(resolved.point,sector_radius(question),model_key,bucket)
                 forecasts=tuple({(f.location.key,f.model):f for f in (*forecasts,*batch.forecasts)}.values())
                 if batch.failures:st.warning('; '.join(f.message for f in batch.failures))
                 if re.search(r'\b(task|route|national|regions|sectors|triangle|cross.country)\b',question,re.I):
                     from weather_ui import load_sites
-                    regional_job=load_sites(model_key,bucket)
-                    if not regional_job.done():
-                        grid_progress(regional_job);st.stop()
-                    regional=regional_job.result()
+                    regional=load_sites(model_key,bucket)
                     forecasts=tuple({(f.location.key,f.model):f for f in (*forecasts,*regional.forecasts)}.values())
         with st.spinner('Preparing your requested briefing…'):
             evidence,proposed=build_context(question,catalog,forecasts,requested_day,today or day,loading,selected=selected,active=active_task(day),assessment=assessment,resolved=resolved)

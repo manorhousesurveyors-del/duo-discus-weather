@@ -57,17 +57,12 @@ def optimizer_panel(catalog,day,loading,model_key,bucket,forecasts,*,recorded=Fa
         origin=next((p for p in points if p.code==origin_code),catalog.by_code.get(origin_code))
         cols[2].metric('Start point',origin_code,help='Use your current task’s start. With no task, the search starts at Long Mynd MYN.')
         job_key=(day,loading,model_key,target,objective,origin)
-        if st.button('Optimise Route',key='optimise_route',disabled=origin is None,help='Screen nearby routes, check their corridors in the background, then plot the best supported route.'):
+        if st.button('Optimise Route',key='optimise_route',disabled=origin is None,help='Screen nearby routes, check their corridors, then plot the best supported route.'):
             screening=forecasts if recorded else screening_forecasts(forecasts,model_key,bucket)
             st.session_state['optimizer_job']=(job_key,shortlist_tasks(catalog,origin,target,screening,day,loading,preference=(FORECAST_MODELS[model_key].api_name,)))
         pending=st.session_state.get('optimizer_job')
         if pending and pending[0]==job_key:
             candidates=pending[1]
-            if not recorded:
-                from weather_ui import forecasts_pending
-                from task_planning import corridor_points
-                waiting=[forecasts_pending(corridor_points(task),model_key) for task in candidates]
-                if any(waiting):return
             checked=[];errors=[]
             for task in candidates:
                 try:

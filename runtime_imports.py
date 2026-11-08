@@ -10,7 +10,7 @@ import sys
 from threading import RLock
 
 # Bump when new compatibility contracts must reach an already-running app.
-API_REVISION = 12
+API_REVISION = 13
 
 _lock = RLock()
 _log = logging.getLogger(__name__)
@@ -27,7 +27,11 @@ LAZY_APIS = {
     'map_weather': {'soaring_samples': (), 'fill_wind_grid': ()},
     'day_rating': {'rate_day': ()},
     'alerts': {'load_bundle': ()},
-    'uk_map_grid': {'grid_variables': (), 'transform': (), 'load_uk_map_grid': ('wind_grid_revision',)},
+    'forecast_sanitizer': {'sanitize': (), 'COMPLETION_API': ()},
+    'sync_weather': {'fetch_forecasts': ('product',)},
+    'weather_ui': {'source_value': ()},
+    'session_state': {'migrate': ('synchronous',)},
+    'uk_map_grid': {'grid_variables': (), 'transform': (), 'synchronous_snapshot': (), 'load_uk_map_grid': ('wind_grid_revision',)},
     'json_payload': {'display_coordinates': ()},
     'app_cache': {'file_version': (), 'catalog_resource': (), 'forecast_run_id': ('physics_revision',),
                   'day_summary': (), 'assessed_task': (), 'gemini_discovery': (), 'covered_forecasts': ('coverage_revision',)},
@@ -35,6 +39,7 @@ LAZY_APIS = {
     'briefing_bot': {'site_evidence': ('maximum_km',)},
     'flight_briefing': {'build_context': ('resolved',)},
     'help_guide': {'render_help': ('model_key', 'bucket', 'recorded')},
+    'place_resolver': {'local_forecasts': ()},
     'planning_ui': {'task_payload': (), 'set_task': ('client_version',)},
     'client_map': {'add_shared_task': (), 'task_soaring_layers': (), 'install_wind_canvas': (), 'surface_payload': (), 'add_task_editor': ('prepared',)},
     'uk_airfields': {'add_airfields': ('show','forecasts')},
@@ -44,6 +49,8 @@ LAZY_APIS = {
     'map_component': {'compressed_document': (), 'render_document': ('browser_cache',), 'document_version': (), 'cached_document': ()},
     'route_tools': {'screening_forecasts': ()},
     'route_analysis': {'planner_panel': ('document_cache',)},
+    'pages.weather': {'synchronous_render': ()},
+    'pages.wave': {'render': ()},
 }
 
 
@@ -67,7 +74,7 @@ def refresh_cached_modules():
         for name, api in LAZY_APIS.items():
             module = sys.modules.get(name)
             # Consumers must rebind functions after the physics/config update.
-            changed_physics=bool({'config','data_ingestion','soaring_physics'} & set(refreshed))
+            changed_physics=bool({'config','data_ingestion','soaring_physics','forecast_sanitizer','weather_ui','uk_map_grid'} & set(refreshed))
             if module is not None and (not _supports(module, api) or changed_physics):
                 importlib.invalidate_caches()
                 module = importlib.reload(module)

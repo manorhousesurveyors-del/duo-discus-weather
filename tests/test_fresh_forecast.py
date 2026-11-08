@@ -1,15 +1,13 @@
-"""A clean live-mode session must not confuse pending/partial UKMO with no data."""
-from concurrent.futures import Future
+"""First-pass live rendering uses synchronous, evidence-preserving forecasts."""
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import os
-from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from config import FORECAST_MODELS, default_forecast_model, forecast_locations
-from data_ingestion import FetchFailure, ForecastBatch
+from data_ingestion import JsonResponse, ServiceError
 from day_rating import rate_day
 from forecast_coverage import complete_regional_forecasts, soaring_coverage
 from tests.fixtures import alter, forecast
@@ -20,32 +18,33 @@ CYCLE = int(NOW.timestamp()//1800)
 POINT = next(p for p in forecast_locations() if p.key=='region:shropshire')
 
 
-def sources():
-    forecasts = []
-    for key, model in FORECAST_MODELS.items():
-        f = forecast(POINT, start=START, hours=144, model=model.api_name)
-        if key in ('ukmo', 'icon_eu'):
-            f = alter(f, boundary_layer_height=None, cape=None, precipitation=None, cloud_cover_low=None)
-            f = alter(f, **{name:list(series[:48])+[None]*96 for name,series in f.hourly.items() if name.endswith('hPa')})
-        forecasts.append(f)
-    return tuple(forecasts)
-
-
 class FreshForecastTests(unittest.TestCase):
     def setUp(self):
         import app
         import uk_map_grid as grid
-        self.app,self.grid=app,grid
-        import weather_engine
-        from unittest.mock import Mock
-        store=weather_engine.ResourceStore(workers=2)
-        owner=patch.object(weather_engine,'_store',store);owner.start();self.addCleanup(owner.stop);self.addCleanup(store.close)
-        http=weather_engine.ForecastHttpClient(opener=Mock(side_effect=AssertionError('Unexpected network')))
-        owner=patch.object(weather_engine,'_transport',http);owner.start();self.addCleanup(owner.stop)
-        app.load_sites.clear();grid.regional_sources.clear();grid.regional_future.clear()
-        self.addCleanup(app.load_sites.clear)
-        self.addCleanup(grid.regional_sources.clear)
-        self.addCleanup(grid.regional_future.clear)
+        import sync_weather
+        self.app,self.grid,self.sync=app,grid,sync_weather
+        sync_weather.clear();sync_weather._last_good()[0].clear()
+        grid.load_uk_map_grid.clear()
+        self.addCleanup(sync_weather.clear)
+        self.addCleanup(sync_weather._last_good()[0].clear)
+        self.http=Mock()
+        self.http.get_json.side_effect=AssertionError('Unexpected network')
+        owner=patch.object(sync_weather,'transport',return_value=self.http)
+        owner.start();self.addCleanup(owner.stop)
+
+    def healthy_response(self, endpoint, params, **kwargs):
+        """Return only fields requested by production, with absent model BLH."""
+        f=forecast(POINT,start=START,hours=144,model=params['models'],
+                   changes={'pressure_msl':1012.,'boundary_layer_height':None,'cape':None})
+        fields=params['hourly'].split(',')
+        rows=[]
+        for lat,lon in zip(params['latitude'].split(','),params['longitude'].split(',')):
+            rows.append({'latitude':float(lat),'longitude':float(lon),'elevation':100.,
+                'utc_offset_seconds':0,'hourly_units':{'time':'unixtime',**{k:f.units[k] for k in fields}},
+                'hourly':{'time':[int(t.timestamp()) for t in f.times],
+                          **{k:list(f.hourly[k]) for k in fields}}})
+        return JsonResponse(rows,NOW)
 
     def assert_ready(self, at):
         self.assertFalse(at.exception)
@@ -58,43 +57,48 @@ class FreshForecastTests(unittest.TestCase):
 
     def test_fresh_live_startup_default_renders_five_valid_days_without_unavailable_flash(self):
         from streamlit.testing.v1 import AppTest
+        self.http.get_json.side_effect=self.healthy_response
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ,{'DUO_DASHBOARD_SNAPSHOT':'','DUO_TASK_STORE':tmp,'GEMINI_API_KEY':''}), \
              patch.object(self.app,'datetime',wraps=datetime) as clock, \
-             patch.object(self.grid,'forecast_locations',return_value=(POINT,)), \
-             patch.object(self.grid.OpenMeteoClient,'fetch_batched',return_value=ForecastBatch(sources(),())) as fetch, \
+             patch.object(self.sync,'forecast_locations',return_value=(POINT,)), \
              patch('watchdog_weather.fetch_weather',side_effect=AssertionError('Healthy donors need no extra network')):
             clock.now.return_value=NOW
             at=AppTest.from_string('import app\napp._main()',default_timeout=30).run()
             self.assertEqual(at.selectbox(key='forecast_model').value,'icon_eu')
             self.assertEqual(default_forecast_model(),'icon_eu')
             self.assertFalse(any('Unavailable' in m.value or 'unavailable' in m.value for m in at.metric))
-            self.grid.regional_future(CYCLE).result(timeout=10)
-            at.run();self.assert_ready(at)
-            # A user's explicit UKMO choice persists, with support from the same
-            # raw bundle before ratings are calculated. Switching does no I/O.
+            self.assert_ready(at)  # The very first run, without warm-up or polling.
+            # Each explicit model choice is fetched once. Day/hour changes then
+            # reuse its complete synchronous five-day response.
             for key in ('ukmo','ifs025'):
                 at.selectbox(key='forecast_model').select(key).run()
-                self.grid.regional_future(CYCLE,key).result(timeout=10)
-                at.run();self.assert_ready(at)
+                self.assert_ready(at)
                 self.assertEqual(at.selectbox(key='forecast_model').value,key)
-            self.assertEqual(fetch.call_count,3)  # Each newly selected model loads once; days/hours reuse it.
+            at.selectbox(key='forecast_day').select(4).run()
+            at.slider(key='forecast_hour').set_value(14).run()
+            self.assert_ready(at)
+            self.assertEqual(self.http.get_json.call_count,3)
 
-    def test_pending_cold_start_keeps_help_usable_and_does_not_render_zero_cards_or_load_grid(self):
+    def test_failed_cold_start_keeps_help_usable_without_waiting_or_loading_grid(self):
         from streamlit.testing.v1 import AppTest
-        pending=Future()
+        self.http.get_json.side_effect=ServiceError('HTTP 429',status=429)
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ,{'DUO_DASHBOARD_SNAPSHOT':'','DUO_TASK_STORE':tmp,'GEMINI_API_KEY':''}), \
-             patch.object(self.grid,'regional_future',return_value=pending), \
-             patch.object(self.grid,'load_uk_map_grid',side_effect=AssertionError('No grid before regional coverage')):
+             patch.object(self.grid,'load_uk_map_grid',side_effect=AssertionError('Clean mode needs no national grid')):
             at=AppTest.from_string('import app\napp._main()',default_timeout=30).run()
-            self.assertFalse(at.exception);self.assertFalse(at.warning)
+            self.assertFalse(at.exception)
             self.assertEqual(len(at.metric),10)
             self.assertTrue(at.get('component_instance'))
-            self.assertTrue(all('Unavailable' not in str(m.value) for m in at.metric))
-            self.assertTrue(any('Loading the five-day regional forecast' in i.value for i in at.info))
+            self.assertTrue(any('no stored forecast' in w.value for w in at.warning))
+            self.assertFalse(any('★' in m.value for m in at.metric))
+            text=' '.join(str(x.value) for group in (at.info,at.caption,at.metric) for x in group)
+            for message in ('Weather updating','Awaiting live weather','waiting for verified weather','background'):
+                self.assertNotIn(message,text)
+            calls=self.http.get_json.call_count
             at.radio(key='active_page').set_value('Help Guide').run()
             self.assertFalse(at.exception);self.assertFalse(at.get('component_instance'))
+            self.assertEqual(self.http.get_json.call_count,calls)
 
     def test_incomplete_primary_sounding_falls_back_before_day_validation(self):
         # Non-null but unusable surface pressure defeats a simple null merge.
@@ -124,16 +128,18 @@ class FreshForecastTests(unittest.TestCase):
         results=complete_regional_forecasts((bad,nearby),FORECAST_MODELS['ukmo'],START.date())
         self.assertEqual(soaring_coverage(next(f for f in results if f.location==POINT),START.date()),(0,)*5)
 
-    def test_failed_primary_uses_targeted_donor_before_validation(self):
-        empty=ForecastBatch((),(FetchFailure(POINT.key,'icon_eu','HTTP timeout'),))
-        recovered=ForecastBatch((sources()[-1],),())
-        with patch.object(self.grid,'forecast_locations',return_value=(POINT,)), \
-             patch.object(self.grid.OpenMeteoClient,'fetch_batched',side_effect=(empty,recovered)) as fetch:
-            batch=self.grid.regional_future(CYCLE,'icon_eu').result(timeout=10)
-            self.assertEqual(soaring_coverage(batch.forecasts[0],START.date()),(8,)*5)
-            self.assertEqual(fetch.call_count,2)
-            self.assertEqual(fetch.call_args.args[0],(POINT,))
-            self.assertEqual(fetch.call_args.args[1],(FORECAST_MODELS['ifs025'],))
+    def test_failed_explicit_refresh_retains_original_real_forecast_without_retry_loop(self):
+        self.http.get_json.side_effect=self.healthy_response
+        with patch.object(self.sync,'forecast_locations',return_value=(POINT,)):
+            first=self.sync.regional_forecasts('icon_eu',CYCLE)
+            self.assertEqual(soaring_coverage(first.forecasts[0],START.date()),(8,)*5)
+            self.sync.clear()
+            self.http.get_json.side_effect=ServiceError('HTTP timeout')
+            stored=self.sync.regional_forecasts('icon_eu',CYCLE)
+            self.assertEqual(stored.forecasts,first.forecasts)
+            self.assertEqual(stored.forecasts[0].fetched_at,NOW)
+            self.assertIn('Using stored forecast',stored.failures[0].message)
+            self.assertEqual(self.http.get_json.call_count,2)
 
 
 if __name__=='__main__':unittest.main()

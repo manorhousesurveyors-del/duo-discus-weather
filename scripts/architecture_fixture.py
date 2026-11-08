@@ -1,34 +1,81 @@
-"""Real live-mode engine with synthetic HTTP success, 429 or slow timeout.
+"""Production synchronous weather path with a synthetic HTTP boundary.
 
 DUO_TEST_SCENARIO selects the boundary. No weather, OGN or alert traffic leaves
 this fixture. Use verify_architecture.py; never deploy this file as the app.
 """
-import os,sys
+import json,os,sys
+from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+from threading import Thread
 from pathlib import Path
 from datetime import datetime
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 os.environ['DUO_OGN_ENABLED']='0'
 os.environ['DUO_DASHBOARD_SNAPSHOT']=''
 import streamlit as st
-import app,weather_engine
+import app,sync_weather
+from data_ingestion import JsonResponse,ServiceError
 from tests.provider_fixture import Provider,NOW
+from urllib.error import HTTPError
+from urllib.parse import urlencode
+from urllib.request import Request
 
 class Clock(datetime):
     @classmethod
     def now(cls,tz=None):return NOW.astimezone(tz) if tz else NOW.replace(tzinfo=None)
 
+
+class FixtureTransport:
+    """Respect the exact requested variables; extra fixture fields cannot help."""
+    def __init__(self,provider):self.provider=provider
+
+    def get_json(self,url,params,*,ttl_seconds=0):
+        request=Request(url+'?'+urlencode(params))
+        try:
+            with self.provider(request,timeout=4.0) as response:
+                rows=json.loads(response.read())
+        except HTTPError as exc:
+            raise ServiceError('Synthetic provider HTTP '+str(exc.code),status=exc.code) from exc
+        except TimeoutError as exc:
+            raise ServiceError('Synthetic provider timeout') from exc
+        wanted={'time',*str(params.get('hourly','')).split(',')}
+        for row in rows:
+            row['hourly']={key:value for key,value in row['hourly'].items() if key in wanted}
+            row['hourly_units']={key:value for key,value in row['hourly_units'].items() if key in wanted}
+        return JsonResponse(rows,NOW)
+
 @st.cache_resource
 def install():
     scenario=os.environ.get('DUO_TEST_SCENARIO','healthy')
     provider=Provider(scenario,2.5 if scenario=='timeout' else .1)
-    weather_engine._store=weather_engine.ResourceStore()
-    weather_engine._transport=weather_engine.ForecastHttpClient(opener=provider,clock=lambda:NOW,
-        gate=weather_engine.ProviderGate(clock=lambda:0.,budget=100000))
-    return provider
+    # The older broad fixture used native surface_pressure only. The compact
+    # production query requests the provider's standard MSL pressure instead.
+    provider.hourly['pressure_msl']=[1013.25]*len(provider.hourly['time'])
+    class Statistics(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body=json.dumps({'requests':len(provider.calls)}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type','application/json')
+            self.send_header('Content-Length',str(len(body)))
+            self.end_headers();self.wfile.write(body)
+        def do_POST(self):
+            scenario=self.rfile.read(int(self.headers.get('Content-Length','0'))).decode()
+            if scenario not in ('healthy','429','timeout'):
+                self.send_error(400);return
+            provider.scenario=scenario
+            provider.delay=2.5 if scenario=='timeout' else .1
+            self.send_response(204);self.end_headers()
+        def log_message(self,*args):pass
+    statistics=ThreadingHTTPServer(('127.0.0.1',0),Statistics)
+    Thread(target=statistics.serve_forever,daemon=True).start()
+    return provider,FixtureTransport(provider),statistics.server_address[1]
 
-provider=install()
+provider,transport,statistics_port=install()
+sync_weather.transport=lambda:transport
+sync_weather.datetime=Clock
 app.datetime=Clock
 app.main()
 st.caption('Fixture server render ms: '+str(st.session_state['_page_render_ms']))
+st.caption('Fixture full renders: '+str(st.session_state['_full_render_count']))
 st.caption('Fixture HTTP requests: '+str(len(provider.calls)))
+st.caption('Fixture statistics URL: http://127.0.0.1:'+str(statistics_port))
 st.caption('Synthetic browser test only · '+provider.scenario)

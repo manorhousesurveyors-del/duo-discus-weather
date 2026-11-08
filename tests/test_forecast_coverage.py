@@ -126,23 +126,28 @@ class ForecastCoverageTests(unittest.TestCase):
         self.assertEqual(len(batch.forecasts),1);self.assertEqual(len(batch.failures),1)
         self.assertEqual(batch.failures[0].target,'missing')
 
-    def test_regional_and_grid_views_use_the_engine_and_complete_before_validation(self):
+    def test_regional_and_grid_views_complete_synchronously_and_reuse_grid(self):
         import uk_map_grid as grid
-        from concurrent.futures import Future
         raw=missing_model_fixture()
-        def request(points,key):
-            future=Future();future.set_result(ForecastBatch(complete_forecasts(raw,FORECAST_MODELS[key]),()))
-            return future
-        with patch.object(grid,'request_forecasts',side_effect=request) as fetch:
+        def request(points,key,cycle,product='regional'):
+            return ForecastBatch(complete_forecasts(raw,FORECAST_MODELS[key]),())
+        with patch('sync_weather.fetch_forecasts',side_effect=request) as fetch:
             for key in FORECAST_MODELS:
-                batch=grid.regional_future(int(START.timestamp()//1800),key).result(timeout=10)
+                result=grid.regional_future(int(START.timestamp()//1800),key)
+                self.assertTrue(result.done())
+                batch=result.result()
                 self.assertEqual(batch.forecasts[0].model,FORECAST_MODELS[key].api_name)
                 self.assertTrue(batch.forecasts[0].supplemental_sources)
             bundle=grid.UKGridBundle(int(START.timestamp()//1800))
             for key in FORECAST_MODELS:
-                snapshot=bundle.request(key).result(timeout=10)
-                self.assertGreater(snapshot.hour(START)[0,list(snapshot.batch.forecasts[0].hourly).index('boundary_layer_height')],0)
+                result=bundle.request(key)
+                self.assertTrue(result.done())
+                snapshot=result.result()
+                self.assertGreater(snapshot.hour(START)[0,grid.grid_variables().index('boundary_layer_height')],0)
+                self.assertIs(bundle.request(key),result)
+                self.assertIs(bundle.completed(key),snapshot)
             self.assertEqual(fetch.call_count,6)
+            self.assertEqual(sum(call.kwargs.get('product')=='wind' for call in fetch.call_args_list),3)
 
     def test_real_app_dropdown_five_day_cards_and_probe_render_for_each_model(self):
         from streamlit.testing.v1 import AppTest

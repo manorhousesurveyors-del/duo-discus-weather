@@ -12,7 +12,7 @@ from pathlib import Path
 import streamlit as st
 import runtime_imports
 
-if getattr(runtime_imports,'API_REVISION',0)<12:
+if getattr(runtime_imports,'API_REVISION',0)<13:
     importlib.reload(runtime_imports)
 runtime_imports.refresh_cached_modules()
 optional_module=runtime_imports.optional_module
@@ -99,10 +99,8 @@ def _main():
             mode=st.radio('Map clicks',['Inspect weather','Add to task'],key='map_click_mode',
                 help='Inspect changes the sounding only. Add mode appends a clicked BGA marker or custom coordinate using the builder’s Add as role.')
         show_airfields=st.checkbox('UK airfields and live reports',value=True,key='show_airfields',help='Show gliding clubs and UK aerodromes. Hover for current model weather; click for runway details and NOAA METAR/TAF reports. Turquoise marks gliding fields, purple reporting airfields and grey known closures.')
-        if st.button('Refresh weather',width='stretch',help='Clear stored forecasts and restart background updates. UK grid requests make one attempt per model and cycle.'):
-            _refresh_weather()
-            st.session_state.pop('_map_documents',None)
-            st.rerun()
+        st.button('Refresh weather',width='stretch',on_click=_refresh_weather,
+            help='Fetch weather once again. Successful forecasts are stored for 30 minutes; no automatic page refresh runs.')
         st.caption('Thermals are radiation/parcel estimates. Hover over controls and column headings for guidance.')
     day=anchor.astimezone(LOCAL_TIMEZONE).date()+timedelta(days=day_index)
     when=utc_datetime(datetime.combine(day,time(hour),LOCAL_TIMEZONE))
@@ -114,9 +112,7 @@ def _main():
         if st.session_state.get('task_message'): st.caption(st.session_state['task_message'])
         if st.session_state.get('task_error'): st.error(st.session_state.pop('task_error'))
     points=active_task(day)
-    page_body=st.empty()
-    page_body.empty()
-    with page_body.container(key='page_body_'+active_page):
+    with st.container(key='page_body_'+active_page):
         _render_page(active_page,catalog,recorded,model_key,points,day,day_index,when,
                      loading,bucket,now,anchor,visual_mode,layers,mode,show_airfields)
 
@@ -125,38 +121,18 @@ def _render_page(active_page,catalog,recorded,model_key,points,day,day_index,whe
                  loading,bucket,now,anchor,visual_mode,layers,mode,show_airfields):
     from page_router import PageContext,PAGES,dispatch
     from app_cache import forecast_run_id,covered_forecasts
-    regional_loading=False
     if recorded:
-        forecasts=covered_forecasts(forecast_run_id(recorded.forecasts),model_key,_forecasts=recorded.forecasts); errors=recorded.errors
+        forecasts=covered_forecasts(forecast_run_id(recorded.forecasts),model_key,_forecasts=recorded.forecasts)
+        errors=recorded.errors
     elif not PAGES[active_page][1]:
         forecasts=st.session_state.get('forecast_bundle:'+model_key,())
         errors=()
     else:
-        from uk_map_grid import grid_progress
-        pending=load_sites(model_key,bucket)
-        if pending.done():
-            try:
-                batch=pending.result()
-                forecasts=batch.forecasts or st.session_state.get('forecast_bundle:'+model_key,())
-                errors=tuple(f.message for f in batch.failures)
-                if batch.failures or not batch.forecasts:
-                    grid_progress(pending,'Forecast recovery continues in the background.',retry=lambda:load_sites(model_key,bucket))
-            except (IngestionError,OSError,ValueError) as exc:
-                forecasts=st.session_state.get('forecast_bundle:'+model_key,())
-                errors=(str(exc),)
-                grid_progress(pending,'Weather recovery continues in the background.',retry=lambda:load_sites(model_key,bucket))
-        else:
-            regional_loading=True
-            forecasts=st.session_state.get('forecast_bundle:'+model_key,())
-            errors=()
-            grid_progress(pending,'Regional forecasts are updating in the background. Stored data retains its retrieval time.')
-    from weather_engine import complete_batch
-    if forecasts and complete_batch(ForecastBatch(forecasts,())):
+        batch=load_sites(model_key,bucket)
+        forecasts=batch.forecasts
+        errors=tuple(f.message for f in batch.failures)
+    if forecasts:
         st.session_state['forecast_bundle:'+model_key]=forecasts
-    if regional_loading and not forecasts and active_page=='Weather map':
-        st.info('Loading the five-day regional forecast and checking ICON-EU / ECMWF coverage…')
-        # Pending is not a forecast failure. Do not create false 0/8 ratings.
-        # Controls and the terrain map still render while the worker runs.
     context=PageContext(catalog,recorded,model_key,points,day,day_index,when,loading,bucket,now,anchor,visual_mode,layers,mode,show_airfields,forecasts,errors)
     dispatch(active_page,context)
 

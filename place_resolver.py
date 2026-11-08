@@ -116,13 +116,13 @@ def sector_points(point,radius):
 
 
 def local_forecasts(point,radius,model_key,refresh_bucket):
-    from weather_engine import read_forecasts
-    return read_forecasts(sector_points(point,radius),model_key)
+    from sync_weather import fetch_forecasts
+    return fetch_forecasts(sector_points(point,radius),model_key,refresh_bucket)
 
 
 def _clear_weather():
-    from weather_engine import resources
-    resources().clear()
+    from sync_weather import clear
+    clear()
 
 
 local_forecasts.clear=_clear_weather

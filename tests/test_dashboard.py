@@ -13,6 +13,17 @@ from tests.fixtures import NOW, forecast
 
 
 class DashboardTests(unittest.TestCase):
+    def test_optional_source_failure_cannot_crash_page_or_cache_failed_value(self):
+        from weather_ui import source_value, cached_value
+        from unittest.mock import Mock
+        cached_value.clear()
+        self.addCleanup(cached_value.clear)
+        loader = Mock(side_effect=[IngestionError('Temporary METAR failure'), {'ok':True}])
+        self.assertIsNone(source_value('test-source', loader))
+        self.assertEqual(source_value('test-source', loader), {'ok':True})
+        self.assertEqual(source_value('test-source', loader), {'ok':True})
+        self.assertEqual(loader.call_count, 2)
+
     def test_sounding_is_log_pressure_and_missing_humidity_stays_a_gap(self):
         p=Profile.from_forecast(forecast(changes={'relative_humidity_850hPa':None}),NOW)
         figure=app.sounding_figure(p)
@@ -45,7 +56,7 @@ class DashboardTests(unittest.TestCase):
         from weather_ui import fetch_radar_metadata
         for body in ({'host':'https://example.test'},
                      {'host':'https://tilecache.rainviewer.com','radar':{'past':[{}]}}):
-            with patch('weather_engine.transport') as client:
+            with patch('sync_weather.transport') as client:
                 client.return_value.get_json.return_value=JsonResponse(body,NOW)
                 with self.assertRaises(IngestionError):fetch_radar_metadata()
 

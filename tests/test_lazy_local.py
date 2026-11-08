@@ -84,7 +84,7 @@ class LocalForecastTests(unittest.TestCase):
     def test_local_forecast_fetches_centre_and_four_bounded_sector_samples(self):
         from soaring_physics import distance_bearing
         point=GeoPoint('town','Shrewsbury',52.7,-2.75);local_forecasts.clear()
-        with patch('weather_engine.read_forecasts',return_value='batch') as fetch:
+        with patch('sync_weather.fetch_forecasts',return_value='batch') as fetch:
             self.assertEqual(local_forecasts(point,20,'ifs025',0),'batch')
             points=fetch.call_args.args[0]
             self.assertEqual(len(points),5);self.assertEqual(points[0],point)

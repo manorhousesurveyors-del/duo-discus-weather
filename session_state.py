@@ -1,9 +1,9 @@
 """Owned session-state migration; saved tasks/preferences are never swept away."""
-SCHEMA_VERSION=1
+SCHEMA_VERSION=2
 OBSOLETE_KEYS={'_uk_grid_hour','_weather_map_state','forecast_coverage_revision'}
 
 
-def migrate(state):
+def migrate(state, *, synchronous=True):
     if state.get('session_schema_version')==SCHEMA_VERSION:return
     for key in list(state):
         if key in OBSOLETE_KEYS or key.startswith('forecast_fallback:'):

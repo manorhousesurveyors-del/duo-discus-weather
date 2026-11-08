@@ -42,13 +42,14 @@ forecast heuristics, with missing evidence hatched. The header explicitly shows
 **Wing loading: 34 kg/m² · no water ballast** or the 43 kg/m² ballasted option;
 the loading choice does not disable clouds.
 
-Public weather APIs need no credentials. One shared weather engine schedules
-regional, national, corridor and point requests in the background. Fresh startup
-keeps maps and controls usable while forecasts arrive. Verified chunks are cached;
-failed chunks retry without redownloading completed work. A total outage leaves
-values pending or last verified, without fabricated ratings. See the
-[architecture audit and cache contracts](docs/architecture.md). Allow about 2 GB
-RAM for the dashboard and land mask; the mask alone expands to about 1 GB.
+Public weather APIs need no credentials. The dashboard fetches five days in one
+synchronous request per product, with a four-second socket timeout and no retry
+sleeps. Successful results are cached for 30 minutes. There is no weather polling
+or automatic page refresh. A failed request uses timestamped real stored data
+when available; a cold outage is reported honestly without fabricated flying
+conditions. Use **Refresh weather** to request another attempt. See the
+[architecture diagnostic and cache contracts](docs/architecture.md). Allow about
+2 GB RAM for the dashboard and land mask; the mask alone expands to about 1 GB.
 Dependencies are pinned in [requirements.txt](requirements.txt).
 
 ## BGA tasks, thermal map and briefing assistant

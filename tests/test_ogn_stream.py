@@ -141,13 +141,13 @@ class StreamTests(TestCase):
         self.assertIn('next.schema!==2',code)
 
     def test_real_app_startup_starts_receiver_before_ogn_page_is_opened(self):
-        from concurrent.futures import Future
+        from data_ingestion import ForecastBatch
         from tempfile import TemporaryDirectory
         from streamlit.testing.v1 import AppTest
-        import app,uk_map_grid,ogn_traffic
+        import app,ogn_traffic
         with TemporaryDirectory() as tmp, \
              patch.dict(os.environ,{'DUO_OGN_ENABLED':'1','DUO_DASHBOARD_SNAPSHOT':'','DUO_TASK_STORE':tmp}), \
-             patch.object(uk_map_grid,'regional_future',return_value=Future()), \
+             patch.object(app,'load_sites',return_value=ForecastBatch((),())), \
              patch.object(ogn_traffic,'ensure_worker') as receiver:
             at=AppTest.from_string('import app\napp._main()',default_timeout=30).run()
             self.assertFalse(at.exception)

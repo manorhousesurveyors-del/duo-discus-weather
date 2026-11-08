@@ -45,25 +45,33 @@ class UKGridTests(unittest.TestCase):
         self.assertIsNone(result[0].at(source.times[-1])['temperature_2m'])
         self.assertEqual(result[0].model,FORECAST_MODELS['ukmo'].api_name)
 
-    def test_cycle_view_reuses_one_engine_job_without_own_transport(self):
-        raw=Future();points=grid.national_grid()
-        with patch.object(grid,'request_forecasts',return_value=raw) as request:
+    def test_cycle_view_returns_completed_grid_and_retries_only_on_request(self):
+        points=grid.national_grid();source=forecast()
+        failure=ForecastBatch((),())
+        success=ForecastBatch((source,),())
+        with patch('sync_weather.fetch_forecasts',side_effect=(failure,success)) as request:
             bundle=grid.UKGridBundle(int(NOW.timestamp()//1800))
-            started=perf_counter();pending=bundle.request('ifs025')
-            self.assertLess(perf_counter()-started,.02)
-            for _ in range(120):self.assertIs(bundle.request('ifs025'),pending)
-            self.assertEqual(request.call_args.args,(points,'ifs025'))
-            self.assertFalse(pending.done())
-            raw.set_result(ForecastBatch((),()))
-            result=pending.result(timeout=10)
-            self.assertEqual(result.batch.forecasts,())
-            self.assertIs(bundle.request('ifs025'),pending)
-            # A new retry source is observed in the SAME cycle.
-            next_source=Future();next_source.set_result(ForecastBatch((forecast(),),()))
-            request.return_value=next_source
+            failed=bundle.request('ifs025')
+            self.assertTrue(failed.done())
+            self.assertEqual(failed.result().batch.forecasts,())
+            self.assertIsNone(bundle.completed('ifs025'))
+            self.assertEqual(request.call_args.args,(points,'ifs025',bundle.cycle))
+            self.assertEqual(request.call_args.kwargs,{'product':'wind'})
             recovered=bundle.request('ifs025')
-            self.assertIsNot(recovered,pending)
-            self.assertTrue(recovered.result(timeout=10).batch.forecasts)
+            self.assertTrue(recovered.done())
+            self.assertTrue(recovered.result().batch.forecasts)
+            for _ in range(120):self.assertIs(bundle.request('ifs025'),recovered)
+            self.assertEqual(request.call_count,2)
+
+    def test_progress_adapter_never_reruns_without_a_user_click(self):
+        future=Future()
+        retry=Mock()
+        with patch.object(grid.st,'caption'),patch.object(grid.st,'button',return_value=False), \
+             patch.object(grid.st,'rerun',side_effect=AssertionError('Automatic rerun')):
+            grid.grid_progress(future,retry=retry)
+            future.set_result(None)
+            grid.grid_progress(future,retry=retry)
+        retry.assert_not_called()
 
     def test_task_optimizer_can_only_read_an_already_finished_grid(self):
         from route_tools import screening_forecasts
@@ -112,15 +120,16 @@ class PageNavigationTests(unittest.TestCase):
             @classmethod
             def now(cls,tz=None):return fixed_now.astimezone(tz) if tz else fixed_now.replace(tzinfo=None)
         forecasts=tuple(forecast(p,start=start,hours=144) for p in forecast_locations())
-        regional=Future();regional.set_result(ForecastBatch(forecasts,()))
+        regional=ForecastBatch(forecasts,())
         data=Future();data.set_result(forecasts)
         snapshot=grid.assemble((data,),(tuple(f.location for f in forecasts),),FORECAST_MODELS['ifs025'],start)
-        # National transport remains pending while we navigate away, then finishes.
-        pending=Future();bundle=Mock(cycle=int(fixed_now.timestamp()//1800),coverage_revision=3,wind_grid_revision=2);bundle.request.return_value=pending
+        # The first pass receives the entire completed national product.
+        completed=Future();completed.set_result(snapshot)
+        bundle=Mock(cycle=int(fixed_now.timestamp()//1800),coverage_revision=3,wind_grid_revision=3);bundle.request.return_value=completed
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict('os.environ',{'DUO_DASHBOARD_SNAPSHOT':'','DUO_TASK_STORE':tmp,'GEMINI_API_KEY':''}), \
              patch.object(app,'datetime',FrozenClock), \
-             patch.object(grid,'regional_future',return_value=regional), \
+             patch.object(app,'load_sites',return_value=regional), \
              patch.object(grid,'load_uk_map_grid',return_value=bundle) as loader, \
              patch('ogn_traffic.ensure_worker'),patch('ogn_traffic.traffic_heartbeat'), \
              patch.object(grid.st,'spinner',wraps=grid.st.spinner) as spinner:
@@ -128,16 +137,15 @@ class PageNavigationTests(unittest.TestCase):
             at=AppTest.from_string('import app\napp.main()',default_timeout=90).run()
             at.selectbox(key='visual_mode').select('wind').run()
             self.assertFalse(at.exception)
-            self.assertFalse(pending.done())
-            self.assertTrue(any('background' in x.value for x in at.caption))
+            self.assertTrue(completed.done())
+            self.assertFalse(any('background' in x.value for x in at.caption))
             held=at.session_state['uk_map_grid_bundle']
-            # A pending fetch does not obstruct help. No map constructor is mocked.
+            # Help never requests the national grid. No map constructor is mocked.
             count=bundle.request.call_count
             clock=perf_counter();at.radio(key='active_page').set_value('Help Guide').run()
             self.assertLess(perf_counter()-clock,.3)
             self.assertEqual(bundle.request.call_count,count)
             self.assertFalse(at.get('component_instance'))
-            pending.set_result(snapshot)
             pages=at.radio(key='active_page').options
             timings={}
             for iteration in range(2):

@@ -1,103 +1,316 @@
-"""Production pages/controls against healthy, rate-limited and slow HTTP fixtures.
+"""Browser regressions for first-pass forecasts and a completely still idle UI.
 
-Start architecture_fixture.py with DUO_TEST_SCENARIO and a private task store.
-Warm server timings exclude initial imports, browser tile I/O and chart prep.
+Run with run_architecture_checks.py. Weather is synthetic at the HTTP boundary;
+production page, cache, normalization, map, and component code are exercised.
 """
-import argparse,asyncio,json,re,time,os,shutil
+import argparse
+import asyncio
+import json
+import os
 from pathlib import Path
-from playwright.async_api import async_playwright,expect
+import re
+import shutil
+import time
+from urllib.request import Request, urlopen
 
-PAGES={'Weather map':None,'Task planner':'Task planning map','Help Guide':'Help Guide',
-       'Wave watch':'Wave Watch Map','Live OGN Glider Radar':'Live OGN Glider Radar',
-       'Help & Briefing Bot':'Help & Briefing Bot','Data quality':'Forecast quality'}
+from playwright.async_api import async_playwright, expect
+from streamlit.proto.BackMsg_pb2 import BackMsg
+
+PAGES = {
+    'Weather map': None,
+    'Task planner': 'Task planning map',
+    'Help Guide': 'Help Guide',
+    'Wave watch': 'Wave Watch Map',
+    'Live OGN Glider Radar': 'Live OGN Glider Radar',
+    'Help & Briefing Bot': 'Help & Briefing Bot',
+    'Data quality': 'Forecast quality',
+}
+FORBIDDEN = (
+    'Forecast recovery continues in the background',
+    'Weather recovery continues in the background',
+    'Weather updating',
+    'waiting for verified weather',
+    'Awaiting live weather',
+)
+METRICS = ('LONG MYND · NET CLIMB', 'POTENTIAL CLOUD BASE', 'USABLE MIXING TOP')
+DATES = ('Sun 08 Nov', 'Mon 09 Nov', 'Tue 10 Nov', 'Wed 11 Nov', 'Thu 12 Nov')
+
 
 async def main(args):
-    out=Path('var/architecture-browser')/args.scenario;out.mkdir(parents=True,exist_ok=True)
-    result={'scenario':args.scenario,'pages':{},'errors':[]}
-    async with async_playwright() as p:
-        browser=await p.chromium.launch(executable_path=os.environ.get('CHROMIUM_EXECUTABLE') or shutil.which('chromium'),headless=True,args=['--no-sandbox'])
-        page=await browser.new_page(viewport={'width':1650,'height':1450})
-        page.on('pageerror',lambda e:result['errors'].append(str(e)))
-        await page.route('https://**/*',lambda r:r.abort())
+    out = Path('var/architecture-browser') / args.scenario
+    out.mkdir(parents=True, exist_ok=True)
+    result = {'scenario': args.scenario, 'pages': {}, 'idle': {}, 'errors': [], 'slow_pages': []}
+    websocket_reruns = []
+    frame_navigations = []
+
+    def inspect_frame(payload):
+        if not isinstance(payload, bytes):
+            return
+        message = BackMsg()
+        message.ParseFromString(payload)
+        if message.WhichOneof('type') == 'rerun_script':
+            websocket_reruns.append(time.perf_counter())
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(
+            executable_path=os.environ.get('CHROMIUM_EXECUTABLE') or shutil.which('chromium'),
+            headless=True, args=['--no-sandbox'])
+        page = await browser.new_page(viewport={'width': 1650, 'height': 1450})
+        page.on('pageerror', lambda error: result['errors'].append(str(error)))
+        page.on('websocket', lambda socket: socket.on('framesent', inspect_frame))
+        page.on('framenavigated', lambda frame: frame_navigations.append(frame.url))
+        # Maps use bundled JavaScript. Blocking external tiles makes these tests
+        # deterministic and guarantees fixtures never query real weather/OGN.
+        await page.route('https://**/*', lambda route: route.abort())
         await page.goto(args.url)
-        nav=page.locator('.st-key-active_page')
+        nav = page.locator('.st-key-active_page')
         await nav.wait_for(timeout=60000)
+        frames = page.locator('iframe[title="map_component.duo_map"]')
+
+        def frame():
+            return frames.last.content_frame
+
+        def map_root():
+            return frame().locator('.leaflet-container')
+
+        async def counter(label):
+            value = await page.get_by_text(label, exact=False).inner_text()
+            return float(value.rsplit(':', 1)[-1])
+
+        async def live_request_count():
+            # The footer is deliberately static. A separate fixture-only
+            # counter catches HTTP calls even without a Streamlit rerender.
+            text = await page.get_by_text('Fixture statistics URL:', exact=False).inner_text()
+            with urlopen(text.split(': ', 1)[1], timeout=2) as response:
+                return json.load(response)['requests']
+
         async def settle():
-            await expect(page.get_by_test_id('stApp')).not_to_have_attribute('data-test-script-state','running',timeout=60000)
-            await page.get_by_text('Fixture server render ms:',exact=False).wait_for(timeout=60000)
-            await page.wait_for_timeout(100)
-            assert not await page.get_by_test_id('stException').count(),await page.get_by_test_id('stException').all_text_contents()
+            # Streamlit may receive the widget event just after click() returns.
+            # Observe that transition before checking the idle script flag.
+            await page.wait_for_timeout(150)
+            await expect(page.get_by_test_id('stApp')).not_to_have_attribute(
+                'data-test-script-state', 'running', timeout=60000)
+            await page.get_by_text('Fixture full renders:', exact=False).wait_for(timeout=60000)
+            # Allow the component's single document-cache acknowledgement to
+            # finish. It may rerun its fragment, but never the full application.
+            await page.wait_for_timeout(150)
+            errors = await page.get_by_test_id('stException').all_text_contents()
+            assert not errors, errors
+            content = await page.locator('body').inner_text()
+            assert not [text for text in FORBIDDEN if text in content], content
+
+        async def after_full_render(previous):
+            await page.wait_for_function("""previous =>
+                [...document.querySelectorAll('[data-testid="stCaptionContainer"]')].some(
+                    el => /^Fixture full renders: /.test(el.innerText) &&
+                    Number(el.innerText.split(':').at(-1)) > previous)
+            """, arg=previous, timeout=60000)
+            await settle()
+
+        async def completed_map():
+            await expect(frames).to_have_count(1)
+            await map_root().wait_for(timeout=60000)
+            await map_root().evaluate("""() => new Promise(resolve => {
+                const ready = () => window._duoRenderTiming?.readyAt ? resolve() : requestAnimationFrame(ready);
+                ready();
+            })""")
+            await settle()
+
+        async def idle_check(name):
+            """Catch reruns even if Streamlit reuses the iframe element itself."""
+            await completed_map()
+            await page.evaluate("""() => {
+                window.__idleFrames = {added: 0, removed: 0};
+                window.__idleObserver?.disconnect();
+                const count = node => node.nodeType !== 1 ? 0 :
+                    (node.matches('iframe[title="map_component.duo_map"]') ? 1 : 0) +
+                    node.querySelectorAll('iframe[title="map_component.duo_map"]').length;
+                window.__idleObserver = new MutationObserver(mutations => {
+                    for (const mutation of mutations) {
+                        for (const node of mutation.addedNodes) window.__idleFrames.added += count(node);
+                        for (const node of mutation.removedNodes) window.__idleFrames.removed += count(node);
+                    }
+                });
+                window.__idleObserver.observe(document.body, {childList: true, subtree: true});
+            }""")
+            identity = await map_root().evaluate("""() => {
+                window.__idleMap = window.map_div;
+                return {readyAt: window._duoRenderTiming.readyAt,
+                        leaflet: window.map_div._leaflet_id};
+            }""")
+            before = {
+                'full_renders': await counter('Fixture full renders:'),
+                'weather_requests': await live_request_count(),
+                'websocket_reruns': len(websocket_reruns),
+                'frame_navigations': len(frame_navigations),
+            }
+            bounds = await map_root().bounding_box()
+            started = time.perf_counter()
+            await page.wait_for_timeout(10000)
+            after = {
+                'full_renders': await counter('Fixture full renders:'),
+                'weather_requests': await live_request_count(),
+                'websocket_reruns': len(websocket_reruns),
+                'frame_navigations': len(frame_navigations),
+            }
+            mutations = await page.evaluate('window.__idleFrames')
+            current = await map_root().evaluate("""() => ({
+                readyAt: window._duoRenderTiming.readyAt,
+                leaflet: window.map_div._leaflet_id,
+                sameObject: window.map_div === window.__idleMap
+            })""")
+            assert before == after, (name, before, after)
+            assert mutations == {'added': 0, 'removed': 0}, (name, mutations)
+            assert current.pop('sameObject'), (name, current)
+            assert current == identity, (name, identity, current)
+            assert bounds == await map_root().bounding_box(), name + ': map jumped while idle'
+            result['idle'][name] = {
+                'seconds': round(time.perf_counter() - started, 2),
+                'extra_full_renders': 0, 'extra_weather_requests': 0,
+                'extra_websocket_reruns': 0, 'extra_frame_navigations': 0,
+                'iframe_additions': 0, 'iframe_removals': 0,
+            }
+            print(json.dumps({'scenario': args.scenario, 'idle_check': name, **result['idle'][name]}), flush=True)
+            await page.evaluate('window.__idleObserver.disconnect()')
+
         await settle()
-        model=page.get_by_role('combobox',name='Forecast model',exact=True)
+        # First completed render, before ANY recovery wait or user interaction.
+        assert await counter('Fixture full renders:') == 1
+        model = page.get_by_role('combobox', name='Forecast model', exact=True)
         await expect(model).to_have_value('DWD ICON-EU · 7 km')
-        frames=page.locator('iframe[title="map_component.duo_map"]')
-        frame=lambda:frames.last.content_frame
-        root=lambda:frame().locator('.leaflet-container')
-        if args.scenario=='healthy':
-            await expect(page.get_by_text('8/8 local hours covered',exact=False)).to_have_count(5,timeout=60000)
+        first_metrics = {}
+        for label in METRICS:
+            card = page.get_by_test_id('stMetric').filter(has_text=label)
+            first_metrics[label] = await card.get_by_test_id('stMetricValue').inner_text()
+        if args.scenario == 'healthy':
+            assert all(re.search(r'\d', value) and '—' not in value for value in first_metrics.values()), first_metrics
+            assert await page.get_by_text('8/8 local hours covered', exact=False).count() == 5
+            for day in DATES:
+                value = await page.get_by_test_id('stMetric').filter(
+                    has=page.get_by_test_id('stMetricLabel').filter(has_text=day)
+                ).get_by_test_id('stMetricValue').inner_text()
+                assert '★' in value and '—' not in value, (day, value)
         else:
-            await expect(page.get_by_text('Awaiting live weather',exact=True)).to_have_count(5)
-            assert not await page.get_by_text('8/8 local hours covered',exact=False).count()
-        await page.get_by_role('combobox',name='Map mode',exact=True).click()
-        await page.get_by_role('option',name='Windy-style Wind Stream',exact=True).click()
-        await frame().locator('[data-wind-view=arrows]').wait_for(timeout=60000)
-        if args.scenario=='healthy':
-            for _ in range(100):
-                if await root().evaluate('el=>!!window.map_div._duoWind.sampleAt(52.5,-2.9)'):break
-                await page.wait_for_timeout(200)
-            assert await root().evaluate('el=>!!window.map_div._duoWind.sampleAt(52.5,-2.9)')
+            assert await page.get_by_text('8/8 local hours covered', exact=False).count() == 0
+            text = await page.locator('body').inner_text()
+            assert re.search(r'could not|not available|no weather|no forecast|no verified|unavailable|not received|couldn.t|request failed|weather.*failed|forecast.*failed', text, re.I), text
+        result['first_pass_metrics'] = first_metrics
+        result['first_pass_full_renders'] = 1
+        result['first_pass_weather_requests'] = await counter('Fixture HTTP requests:')
+        assert result['first_pass_weather_requests'] == 1, result
+        await idle_check('clean_weather')
+
+        await page.get_by_role('combobox', name='Map mode', exact=True).click()
+        await page.get_by_role('option', name='Windy-style Wind Stream', exact=True).click()
+        await completed_map()
+        await frame().locator('[data-wind-view=arrows]').wait_for()
         assert not await frame().locator('.duo-wind-heat,.duo-wind-raster').count()
         await expect(frame().locator('[data-reference=bga]')).not_to_be_checked()
-        wind=[]
-        for mode in ('barbs','off','arrows'):
-            ms=await root().evaluate('(el,mode)=>{const start=performance.now();document.querySelector(`[data-wind-view="${mode}"]`).click();return performance.now()-start;}',mode)
-            assert await root().evaluate('el=>window.map_div._duoWind.display')==mode
-            assert ms<100,ms;wind.append(round(ms,2))
+        if args.scenario == 'healthy':
+            domain = await map_root().evaluate('() => window.map_div._duoWind.bounds')
+            assert (domain['latMin'], domain['latMax'], domain['lonMin'], domain['lonMax']) == (49.5, 61, -11, 2.5), domain
+            coverage = await map_root().evaluate("""() =>
+                [[50.5,-3.5],[52.5,-2.9],[54.5,-2],[57.2,-3.8],[53.3,-7.5]].map(
+                    ([lat,lon]) => window.map_div._duoWind.sampleAt(lat,lon))""")
+            assert all(sample and all(isinstance(sample.get(key), (int, float)) for key in ('u', 'v')) for sample in coverage), coverage
+            stats = await map_root().evaluate('() => window.map_div._duoWind.renderStats')
+            assert stats['style']['colour'] == '#111827', stats
+            assert stats['style']['arrowWidth'] >= 2.2, stats
+            assert 7 <= stats['style']['headLength'] <= 9, stats
+            assert stats['style']['headWidth'] >= 5, stats
+            assert stats['arrowCount'] > 0 and stats['animationRunning'], stats
+            assert await live_request_count() == 2
+            result['wind_initial'] = stats
+        controls = []
+        before_controls = await counter('Fixture full renders:')
+        for mode in ('barbs', 'off', 'arrows'):
+            duration = await map_root().evaluate("""(element, mode) => {
+                const start = performance.now();
+                document.querySelector(`[data-wind-view="${mode}"]`).click();
+                return performance.now() - start;
+            }""", mode)
+            assert await map_root().evaluate('() => window.map_div._duoWind.display') == mode
+            assert duration < 100, (mode, duration)
+            if args.scenario == 'healthy' and mode == 'barbs':
+                stats = await map_root().evaluate('() => window.map_div._duoWind.renderStats')
+                assert stats['barbCount'] > 0 and not stats['animationRunning'], stats
+            controls.append(round(duration, 2))
+        assert await counter('Fixture full renders:') == before_controls
         await frames.last.scroll_into_view_if_needed()
-        box=await root().bounding_box()
-        xy=await root().evaluate('el=>{const p=window.map_div.latLngToContainerPoint([53.2,-4.5]);return [p.x,p.y];}')
-        await page.mouse.click(box['x']+xy[0],box['y']+xy[1])
-        await frame().locator('.duo-callout').last.wait_for()
+        box = await map_root().bounding_box()
+        xy = await map_root().evaluate('() => {const p=window.map_div.latLngToContainerPoint([53.2,-4.5]);return [p.x,p.y];}')
+        await page.mouse.click(box['x'] + xy[0], box['y'] + xy[1])
         await expect(frame().locator('.duo-callout').last).to_contain_text('Wind')
         await frame().locator('[data-level="3"]').click()
-        result['wind_controls_ms']=wind
-        # Record baseline after background grid assembly has settled.
-        await page.wait_for_timeout(3000);await settle()
-        for iteration in range(2):
-            for name,heading in PAGES.items():
-                start=time.perf_counter()
-                await nav.get_by_text(name,exact=True).click()
-                if heading:await page.get_by_role('heading',name=heading,exact=True).wait_for(timeout=60000)
-                await settle()
-                for page_name,title in (('Task planner','Task planning map'),('Wave watch','Wave Watch Map')):
-                    await expect(page.get_by_role('heading',name=title,exact=True)).to_have_count(int(name==page_name))
-                await expect(frames).to_have_count(0 if name in ('Help Guide','Help & Briefing Bot','Data quality') else 1)
-                if name!='Weather map':assert not await page.get_by_text('Enable Point Forecast Probe',exact=True).count()
-                ms=float((await page.get_by_text('Fixture server render ms:',exact=False).inner_text()).split(':')[-1])
-                if iteration:
-                    result['pages'][name]={'server_ms':ms,'browser_ready_ms':round((time.perf_counter()-start)*1000,1)}
-                    assert ms<500,(name,ms)
-        await nav.get_by_text('Weather map',exact=True).click();await settle()
-        # Changes slice the same bundle; transport request count remains stable.
-        before=await page.get_by_text('Fixture HTTP requests:',exact=False).inner_text()
-        day=page.get_by_role('combobox',name='Forecast day',exact=True)
-        await day.click();await page.get_by_role('option',name=re.compile('Day 2 ·')).click();await settle()
-        after=await page.get_by_text('Fixture HTTP requests:',exact=False).inner_text()
-        assert before==after,(before,after)
-        await page.get_by_text('Enable Point Forecast Probe',exact=True).click()
-        await frame().locator('.duo-probe-prompt').wait_for(timeout=60000)
-        # Product generation is background; clicks are local canvas work.
-        await page.wait_for_timeout(3000);await settle()
-        await root().evaluate('el=>window.map_div._duoProbe.show({lat:52.518,lon:-2.88,name:"Long Mynd"})')
-        await frame().locator('.duo-point-panel').wait_for()
-        probe=await root().evaluate('el=>({ms:window.map_div._duoProbe.lastRenderMs,paint:window.map_div._duoProbe.lastPaintMs,rows:window.map_div._duoProbe.last.rows.length})')
-        assert probe['ms']<100,probe
-        result['probe']=probe;result['day_change_request_count']=after
-        await page.screenshot(path=str(out/'weather-probe.png'),full_page=True)
-        assert not result['errors'],result['errors']
-        (out/'results.json').write_text(json.dumps(result,indent=2)+'\n')
-        print(json.dumps(result));await browser.close()
+        result['wind_controls_ms'] = controls
+        await idle_check('wind_weather')
 
-if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--scenario',choices=['healthy','429','timeout'],default='healthy');ap.add_argument('--url',default='http://127.0.0.1:8508')
-    asyncio.run(main(ap.parse_args()))
+        # Exercise every lazy page, with no Weather/Task headings bleeding across.
+        for iteration in range(2):
+            for name, heading in PAGES.items():
+                started = time.perf_counter()
+                await nav.get_by_text(name, exact=True).click()
+                if heading:
+                    await page.get_by_role('heading', name=heading, exact=True).wait_for(timeout=60000)
+                await settle()
+                for page_name, title in (('Task planner', 'Task planning map'), ('Wave watch', 'Wave Watch Map')):
+                    await expect(page.get_by_role('heading', name=title, exact=True)).to_have_count(int(name == page_name))
+                await expect(frames).to_have_count(0 if name in ('Help Guide', 'Help & Briefing Bot', 'Data quality') else 1)
+                if name != 'Weather map':
+                    assert not await page.get_by_text('Enable Point Forecast Probe', exact=True).count()
+                if iteration:
+                    ms = await counter('Fixture server render ms:')
+                    result['pages'][name] = {'server_ms': ms, 'browser_ready_ms': round((time.perf_counter() - started) * 1000, 1)}
+                    if args.scenario == 'healthy' or name in ('Help Guide', 'Help & Briefing Bot', 'Live OGN Glider Radar', 'Data quality'):
+                        if ms >= 500:
+                            result['slow_pages'].append({'page': name, 'server_ms': ms})
+        await nav.get_by_text('Weather map', exact=True).click()
+        await settle()
+        # Day/hour changes slice the same successful 120-hour data bundle.
+        before = await counter('Fixture HTTP requests:')
+        await page.get_by_role('combobox', name='Forecast day', exact=True).click()
+        await page.get_by_role('option', name=re.compile('Day 2 ·')).click()
+        await settle()
+        after = await counter('Fixture HTTP requests:')
+        if args.scenario == 'healthy':
+            assert before == after, (before, after)
+        result['day_change_request_count'] = after
+        await page.get_by_text('Enable Point Forecast Probe', exact=True).click()
+        await completed_map()
+        await frame().locator('.duo-probe-prompt').wait_for()
+        await map_root().evaluate('() => window.map_div._duoProbe.show({lat:52.518,lon:-2.88,name:"Long Mynd"})')
+        await frame().locator('.duo-point-panel').wait_for()
+        probe = await map_root().evaluate('() => ({ms:window.map_div._duoProbe.lastRenderMs,paint:window.map_div._duoProbe.lastPaintMs,rows:window.map_div._duoProbe.last.rows.length})')
+        assert probe['ms'] < 100, probe
+        if args.scenario == 'healthy':
+            assert probe['rows'] > 0, probe
+        result['probe'] = probe
+        if args.scenario != 'healthy':
+            # Restore the provider, then use the actual user refresh control.
+            # A cached failed response would keep these cards empty.
+            statistics = await page.get_by_text('Fixture statistics URL:', exact=False).inner_text()
+            with urlopen(Request(statistics.split(': ', 1)[1], data=b'healthy', method='POST'), timeout=2):
+                pass
+            before_refresh = await live_request_count()
+            renders_before_refresh = await counter('Fixture full renders:')
+            await page.get_by_role('button', name='Refresh weather', exact=True).click()
+            await after_full_render(renders_before_refresh)
+            assert await page.get_by_text('8/8 local hours covered', exact=False).count() == 5, await page.locator('body').inner_text()
+            for label in METRICS:
+                value = await page.get_by_test_id('stMetric').filter(has_text=label).get_by_test_id('stMetricValue').inner_text()
+                assert re.search(r'\d', value) and '—' not in value, (label, value)
+            assert await live_request_count() > before_refresh
+            result['explicit_refresh_recovers'] = True
+        await page.screenshot(path=str(out / 'weather-probe.png'), full_page=True)
+        (out / 'results.json').write_text(json.dumps(result, indent=2) + '\n')
+        print(json.dumps(result))
+        assert not result['errors'], result['errors']
+        assert not result['slow_pages'], result['slow_pages']
+        await browser.close()
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--scenario', choices=['healthy', '429', 'timeout'], default='healthy')
+    parser.add_argument('--url', default='http://127.0.0.1:8508')
+    asyncio.run(main(parser.parse_args()))

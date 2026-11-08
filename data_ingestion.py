@@ -923,7 +923,8 @@ def forecast_from_snapshot(record: Mapping[str, Any]) -> Forecast:
             'elevation': record['terrain_elevation_m'], 'utc_offset_seconds': 0,
             'hourly': hourly, 'hourly_units': {**record['units'], 'time': 'unixtime'}}
     forecast = parse_forecast(JsonResponse(body, _timestamp(record['fetched_at'], 'snapshot retrieval'),
-                                         bool(record.get('from_cache', False))), location, model)
+                                         bool(record.get('from_cache', False))), location, model,
+                              variables=tuple(record['hourly']))
     sources = record.get('field_sources', {})
     if not isinstance(sources, dict) or any(k not in forecast.hourly or not isinstance(v, (list, tuple))
         or len(v) != len(forecast.times) or any(s is not None and not isinstance(s, str) for s in v)

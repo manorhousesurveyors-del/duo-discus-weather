@@ -22,16 +22,11 @@ def render(ctx):
     from airspace import DEFAULT_PATH,NEXT_PATH,LOCAL_PATH
     from map_component import render_document
     versions=file_version([DEFAULT_PATH,NEXT_PATH,LOCAL_PATH,*Path('data').glob('*turnpoint*'),*Path('assets').glob('*.js')])
-    from wave_map import cached_wave_payload,empty_wave_payload
-    from weather_engine import products
-    from uk_map_grid import grid_progress
+    from wave_map import cached_wave_payload
     run_id=forecast_run_id(combined)
-    job=products().request(('wave-field',run_id,when),lambda:cached_wave_payload(run_id,when,_forecasts=combined))
-    ready=job.done()
-    prepared=job.result() if ready else empty_wave_payload(when)
-    if not ready:grid_progress(job,'Wave layers are being prepared in the background.')
+    prepared=cached_wave_payload(run_id,when,_forecasts=combined)
     # Uploaded catalogs participate in the key; no task/session state is cached.
-    document=wave_document(run_id,when,(versions,catalog.content_sha256,ready),bool(recorded),
+    document=wave_document(run_id,when,(versions,catalog.content_sha256),bool(recorded),
         _forecasts=combined,_turnpoints=catalog.turnpoints,_prepared=prepared)
     def on_wave_click():process_map_event(st.session_state.get('wave_map',{}),catalog,day,'Inspect weather',event_key='last_wave_event',visual_override='wave')
     render_document(document,key='wave_map',on_change=on_wave_click)

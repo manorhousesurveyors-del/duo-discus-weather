@@ -1,152 +1,119 @@
-# Architecture diagnostic and refactor — 8 November 2026
+# Synchronous weather architecture — 8 November 2026
 
-The dashboard now reads weather through one process-wide engine. HTTP work,
-forecast completion, chart preparation, page rendering and live aircraft
-reception have separate responsibilities. A failed provider cannot prevent a
-map or navigation control from mounting.
+The dashboard completes weather requests before rendering its cards and map.
+It has no weather recovery timer, periodic fragment, or automatic app rerun.
+Only an explicit user action changes the Weather page. Animated wind and live
+OGN graphics remain client-side features; they do not reload the weather iframe.
 
-## Audit scope and findings
+## Emergency diagnostic
 
-The reproducible [source inventory](architecture-inventory.json) covers every
-first-party Python and JavaScript source, including scripts and tests. Run
-`python scripts/audit_architecture.py` to regenerate imports, cache decorators,
-session-state keys and networking call sites. Vendored Leaflet is excluded.
-The detailed review followed all forecast consumers, browser controls, OGN
-receivers, notification entry points and their regression tests. This repository
-uses `alerts.py` plus `watchdog_weather.py`; it has no `soaring_watchdog.py`.
+The previous implementation combined three faults:
 
-| Root problem | Structural correction |
-| --- | --- |
-| Regional, national, corridor, inspector, local bot and radar readers owned different clients/caches. Airfield hover also fetched Open-Meteo directly from JavaScript. | `weather_engine.py` owns forecast scheduling and the shared HTTP transport. Browser airfield hover uses the selected forecast payload, with sample distance and retrieval time. |
-| A healthy primary caused whole-domain requests for all three models. Independent retries and pacing sleeps multiplied latency. | Request the selected model first; fetch donors only for incomplete coordinates. One HTTP attempt, a 3.5-second socket timeout, shared weighted admission and `Retry-After` cooldown, with no retry sleeps. |
-| A partially successful large-grid retry could repeatedly spend its quota on the first geographic chunks. | Eight-coordinate jobs have independent verified-result caches. Aggregate requests reuse finished chunks and resume only unfinished work. |
-| Raw HTTP 200 JSON could be cached before schema/coverage validation. Failed national futures remained pinned for a full cycle. | Raw weather HTTP caching is disabled. Empty/partial/error results never enter the verified cache. Retry state is separate and can recover within the same cycle. |
-| The completion test checked soaring hours, while cache admission checked overnight fields too. A real ICON response exposed this mismatch. | Both use the same `forecast_sanitizer.has_core_coverage` contract. An overnight core gap also requests donor support before admission. |
-| A cold regional request returned before map construction, hiding otherwise usable controls. | The page shell, five day slots and map mount immediately. Background fragments update the products when ready. |
-| One very large application function mixed all seven pages, weather scheduling, charts and map construction. | `app.py` is the shell; `page_router.py` imports exactly one renderer from `pages/`. `weather_ui.py` handles nonblocking reads and `map_view.py` builds maps/charts. There are no `st.tabs()` wrappers. |
-| Wave calculations, task contour preparation and optional probe preparation could occupy the UI thread on a cold product. | Pure products have separate background workers. Task and wave controls mount with transparent pending layers; a completed product replaces them. |
-| Bot/optimiser/route-analysis actions assumed a synchronous forecast return. Optional Gemini discovery could block navigation and retain a failed connection. | Actions keep explicit pending state and resume after their jobs finish. Optional Gemini discovery/generation use separate workers; failed discovery is not cached as a connection. |
-| Weather date/model changes unnecessarily rebuilt the independent OGN document. | OGN rendering receives no forecasts and is keyed by reference/asset versions, not weather selections. |
-| Old grid slices and overlapping page-state caches survived reruns. | A versioned session migration removes the known obsolete keys. Saved daily tasks, chat and preferences survive. Refresh invalidates weather TTLs, not all application caches or active jobs. |
+1. A two-second fragment compared background Future identities. Failed jobs
+   acquired new identities on retry and triggered a full Streamlit rerun.
+2. Each rerun explicitly emptied the page container, tearing down its map.
+3. The 23-point regional request asked for 129 variables: 296.7 weighted calls
+   against a 300/minute local budget. The 168-point grid required 2,167.2 more.
+   Primary requests could repeatedly consume the allowance before donor data
+   completed verification. Requiring every optional field overnight compounded
+   this starvation. A test-only 10,000/minute budget had hidden the problem.
 
-CAPE was already optional in the physical rating calculation, and the existing
-moisture code already contained useful derivations. Those were retained and
-centralised, rather than replaced with arbitrary zeroes. Strict route/alert
-checks remain where evidence is required to claim an achievable flight.
+The synchronous path removes the polling/Future scheduler from dashboard
+weather reads. Strict flight assessment remains separate from map availability.
 
-## Ownership
+## Data flow
 
-```mermaid
-flowchart LR
-    App[app.py shell] --> Router[page_router.py]
-    Router --> Pages[one active pages renderer]
-    Pages --> UI[weather_ui.py]
-    UI --> Engine[weather_engine.py]
-    Engine --> HTTP[shared admission and HTTP transport]
-    HTTP --> Parser[data_ingestion.py]
-    Parser --> Sanitizer[forecast_sanitizer.py / forecast_coverage.py]
-    Engine --> Products[pure background products]
-    Pages --> Map[map_view.py / client_map.py]
-    Map --> Canvas[Leaflet and canvas controls]
-    OGN[ogn_live.py / ogn_traffic.py] --> Traffic[real traffic snapshot]
-    Traffic --> Canvas
-    Alerts[alerts.py] --> Engine
-    Bot[optional briefing_jobs.py] --> Gemini[Gemini REST]
-```
+`app.py` selects exactly one renderer in `pages/`. `weather_ui.py` and the
+regional/grid adapters call `sync_weather.py`. Its `cached_forecasts` function
+uses `@st.cache_data(ttl=1800, show_spinner=False)` and makes one multi-coordinate
+GET per product for five calendar days. There is one attempt, a four-second
+socket timeout, and no retry or pacing sleeps. The socket timeout is not a
+promise about an external server's total response time.
 
-### Forecast and cache contract
+The regional request contains 30 standard variables: the requested 21 surface
+and wind fields plus temperature, geopotential height and humidity at 925, 850
+and 700 hPa. These nine sounding fields support genuine inversion/moisture
+checks; surface dewpoint alone cannot describe the upper atmosphere. The full
+168-point UK/Ireland wind grid requests only 12 temperature, pressure and wind
+fields. Together these consume 270.6 weighted calls, below the default 300/minute
+budget, with two HTTP requests rather than dozens of full-sounding requests. When UKMO
+omits late shortwave radiation, one additional request asks ECMWF for only
+`temperature_2m,shortwave_radiation` at affected coordinates. This brings the
+combined regional/support/grid cost to 293.6, still below 300. Completion preserves
+native hours and records the donor on each repaired hour; support failures return
+usable primary data outside the successful cache, with no automatic retry.
 
-- Request identity is coordinates, model and optional field selection. Selected
-  day/hour, active page and task UI state are not forecast cache keys.
-- Every request contains the whole requested horizon, including the past hours
-  needed to assess today's morning window. A verified chunk lasts 30 minutes.
-- Concurrent identical jobs share a future. Concurrent identical HTTP requests
-  also share their in-flight result. Successful chunks survive failed refreshes.
-- Only parsed, completed core fields and all requested locations admit a forecast
-  to the verified cache. Compact products validate their requested core fields.
-  Optional CAPE/upper-level gaps remain explicit, not zero-filled.
-- An incomplete attempt is transient retry status, normally retried after 15
-  seconds. HTTP cooldowns and admission limits still apply. Neither a page change
-  nor Refresh can bypass a running request or a provider cooldown.
-- The regional and national adapters retain a previous verified product when a
-  refresh fails. Retrieval times and supporting-model provenance are preserved.
-- Day summaries, contours and chart caches are derived products keyed by forecast
-  identity. A pending/empty product cannot hide a later successful forecast.
-- Full-domain wind payloads always have a deterministic 168-node, 120-hour,
-  six-altitude schema over 49.5–61°N, −11–2.5°E. Missing values remain null.
-  Supported spatial wind estimates disclose their nearest-source distance.
+Coordinates, selected model, product and half-hour cycle identify the cache.
+Selected date/hour, task and active page do not. The national grid is requested
+only for relevant Weather map overlays; other pages reuse regional or explicitly
+requested local forecasts. The grid adapter reuses its completed snapshot and
+read-only hourly NumPy lookup. Its completed-Future wrappers exist only for API
+compatibility and never schedule work.
 
-The shared gate applies within one Python process. It cannot coordinate other
-customers on Streamlit Cloud's shared IP, or guarantee that a free upstream
-service never returns HTTP 429. Quotas can spread a national refresh across
-multiple admission windows; the interface does not wait for that work.
+## Missing fields and failures
 
-### Completion and physics
+- Parsing validates timestamps, units, coordinates and response ordering. Empty,
+  malformed or short-horizon responses raise outside the successful cache.
+- A missing optional field does not reject all locations or hide the map.
+- `forecast_sanitizer.py` derives surface pressure from MSL pressure, elevation
+  and temperature, and relative humidity using Magnus–Tetens. Wind interpolation
+  uses vector components between available pressure levels.
+- Missing mixing height first uses the available parcel sounding. Where needed,
+  a conservative solar-energy estimate is explicitly labelled with its assumed
+  stability. The LCL formula `125*(T-Td)` is not relabelled as measured mixing
+  height. Native zeroes and provenance are preserved.
+- Missing rain, radiation and wind are never invented. Task ratings continue to
+  require adequate evidence. An estimated field is not an observation.
+- A failed refresh can reuse a bounded process-local last successful forecast,
+  retaining its original retrieval time and valid horizon. No request retries
+  itself. The page reports the failure and offers explicit Refresh weather.
+- A cold process without stored real data reports that condition honestly. It
+  does not manufacture a synoptic forecast or label synthetic flying conditions
+  as verified. The map and controls still work.
+- Explicit Refresh clears both data and derived-grid caches, retaining the real
+  last-good backup. Provider Retry-After cooldowns remain respected.
 
-Model-suffixed fields are normalised before completion. Native values and known
-zeroes are preserved. Donors are aligned by coordinate, UTC hour and units;
-borrowed fields retain provenance. Humidity uses temperature/dewpoint evidence
-and Magnus conversion. Upper wind interpolation operates on vectors and uses
-bracketing pressure levels, avoiding angle-wrap and underground-wind mistakes.
+## Page and service isolation
 
-`400 × (T − Td)` estimates condensation height in **feet AGL**. It is not a
-boundary-layer depth in metres. Missing mixing depth uses the existing
-bracketed dry-parcel intersection with the sounding. Radiation already enters
-the thermal heat-flux calculation; an arbitrary extra solar boost would double
-count heating. Unsupported rain, CAPE or mixing depth is not fabricated.
-The Duo Discus polar and single circling-sink deduction remain unchanged.
+The Weather map prepares an enabled point probe synchronously from cached
+samples. Wave and task overlays likewise complete their cached pure calculations
+in the selected page. Optional assistant jobs have an explicit Check result
+button, never a timer. OGN remains independent of the weather engine, with real
+traffic only. Saved tasks and user preferences survive the session migration;
+obsolete asynchronous grid handles and documents are discarded on deployment.
 
-A complete provider outage leaves the five dated card slots, terrain map,
-controls, task editing and exports usable. Values are pending or last verified;
-there is no fabricated synoptic forecast or false “8/8”/star-rating claim.
-
-### Page and service boundaries
-
-Weather alone can start the national grid or enable the Point Forecast Probe.
-Task planning uses regional/corridor weather and can read an already-completed
-national grid. Help, the bot's initial view, Data quality and OGN navigation do
-not start weather requests. Explicit bot questions may request their local sector.
-
-Wind always exposes Streaming Wind, Wind Barbs and Wind Off, including with an
-empty grid. The canvas keeps black 2.4 px arrows and arrowheads, with no colour
-haze. BGA references start off on weather/traffic views and are a local toggle.
-Point probe clicks and wind altitude changes remain browser operations.
-
-OGN retains its independent APRS receiver, cookie-aware XML mirror sessions,
-DDB resolver and age/privacy filters. There are no synthetic production aircraft.
-The tests use clearly isolated synthetic packets. No notification delivery was
-performed during this refactor's verification.
+`runtime_imports.py` refreshes already-loaded provider and consumer modules in
+dependency order during Streamlit hot deployments. This prevents an old page
+from retaining the removed pending-weather API.
 
 ## Verification
 
-All **339 unit tests** passed. Run the full suite with
-`python -m unittest discover -s tests -v`. Browser checks
-use `requirements-test.txt`, followed by `python -m playwright install chromium`
-and `python scripts/run_architecture_checks.py`. CI runs the unit suite and the
-healthy/429/timeout browser scenarios, retaining timing reports and screenshots.
+`tests/test_sync_weather.py` exercises the real default request budget, one-pass
+model completion, success caching, HTTP 429/timeout handling and original-time
+stored fallback. Compact fixtures return only the fields actually requested.
 
-Regression coverage includes shared-request deduplication, interrupted chunk
-recovery, failed-cache rejection, cooldowns, all three model parsers, five-day
-coverage, session migration, lazy routing, missing-payload controls, wind glyphs,
-probe/cloud physics, OGN age/privacy behaviour and all task export formats.
+`scripts/run_architecture_checks.py` tests healthy, HTTP 429 and timeout sessions
+in Chromium. It checks numeric headline metrics and five rated 8/8 day cards on
+the first healthy render. Ten-second clean-map and wind-map observations count
+full reruns, websocket rerun requests, HTTP calls, iframe replacement/navigation
+and Leaflet identity/bounds changes. All must remain zero. It also checks black
+streaming arrows, meteorological barbs, altitude inspection, lazy page navigation
+and explicit Refresh after provider recovery. Test data is labelled synthetic
+and confined to test fixtures.
 
-Measured in this workspace:
+Live checks in this environment retrieved the 23 regional points in 1.63 seconds
+and the 168 wind-grid points in 1.37 seconds. Long Mynd had 8/8 local soaring hours
+on each of the five days. These are measurements, not upstream availability
+or Streamlit Cloud performance guarantees.
 
-- Healthy, forced 429 and slow-timeout sessions: all seven pages opened with no
-  Python startup exceptions or JavaScript errors; changing day did not add HTTP
-  requests. Outage fixtures keep the fault active for the full browser scenario.
-- Warm server page renders: 6–327 ms in the isolated CI scenarios, including
-  the first completed task-overlay document. The final recorded-data browser's
-  true click-to-ready medians were 203–410 ms across all seven pages.
-- Wind display switches: below 4 ms, zero server events; 3,600 coordinate/hour/
-  altitude checks passed. Pixel checks found black strokes and no blue haze.
-- Probe draws: 20–35 ms in healthy/outage sessions. Cloud-family scene checks
-  passed, including missing moisture, clear skies and structured cloud forms.
-- Live Open-Meteo: UKMO, ICON and ECMWF each returned five 8/8 soaring-hour days
-  at the checked location. The UKMO sounding disclosed ECMWF/parcel support.
-- The real watchdog dry run exited 0 in 7.3 seconds; no messages were sent.
+Final Chromium checks passed for healthy, HTTP 429 and timeout providers: six
+10-second idle windows had zero automatic reruns, weather calls, iframe reloads
+or map jumps. Warm server renders across seven pages measured 6–30 ms; probe
+preparation measured 32 ms and wind control switches stayed below 3 ms. External
+tiles are intentionally blocked in this deterministic test; the live HTTP checks
+above are separate. Socket timeouts are per request: sequential products or
+selective support can make a cold explicit interaction longer than four seconds.
 
-These are measured tests, not a promise of identical timing on every device.
-Cold imports, first-time terrain/geometry preparation, raster downloads and
-provider completion have separate costs. Cold wave/task products now prepare
-in the background so those costs do not become a synchronous weather wait.
+A live UKMO check after selective support completed in 1.18 seconds with 8/8
+local soaring hours on all five days. A live ECMWF check also covered all five
+days; missing UKMO shortwave values were supplied by ECMWF with provenance.
