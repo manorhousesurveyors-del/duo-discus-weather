@@ -74,20 +74,22 @@ class PointPrecipitationTests(unittest.TestCase):
         self.client.get_json.assert_not_called()
 
     def test_point_cache_separates_coordinates_hours_and_models(self):
-        app.load_radar_precipitation.clear()
-        with patch('precipitation.fetch_point_precipitation', return_value={'rate': 1.2}) as fetch:
-            app.load_radar_precipitation(52, -3, NOW, 'ifs025', 1)
-            app.load_radar_precipitation(52, -3, NOW, 'ifs025', 1)
-            self.assertEqual(fetch.call_count, 1)
-            app.load_radar_precipitation(53, -3, NOW, 'ifs025', 1)
-            app.load_radar_precipitation(52, -3, NOW+timedelta(hours=1), 'ifs025', 1)
-            app.load_radar_precipitation(52, -3, NOW, 'ukmo', 1)
-            app.load_radar_precipitation(52, -3, NOW, 'ifs025', 2)
-            self.assertEqual(fetch.call_count, 5)
-        app.load_radar_precipitation.clear()
+        from weather_engine import ResourceStore
+        store=ResourceStore();self.addCleanup(store.close)
+        with patch('weather_engine._store',store), patch('precipitation.fetch_point_precipitation', return_value={'rate': 1.2}) as fetch:
+            def read(lat=52,lon=-3,when=NOW,model='ifs025',bucket=1):
+                try:app.load_radar_precipitation(lat,lon,when,model,bucket)
+                except IngestionError:pass
+                store.queue.join()
+                return app.load_radar_precipitation(lat,lon,when,model,bucket)
+            self.assertEqual(read()['rate'],1.2)
+            read();self.assertEqual(fetch.call_count,1)
+            read(lat=53);read(when=NOW+timedelta(hours=1));read(model='ukmo')
+            read(bucket=2)  # UI bucket changes do not invalidate the five-minute product.
+            self.assertEqual(fetch.call_count,4)
 
     def test_outage_and_recorded_mode_do_not_reuse_a_previous_value(self):
-        with patch('app.load_radar_precipitation', side_effect=IngestionError('Timed out')) as fetch:
+        with patch('weather_ui.load_radar_precipitation', side_effect=IngestionError('Timed out')) as fetch:
             result = app.radar_point_result((53, -2), NOW, 'ukmo', 1)
             self.assertIsNone(result['rate']); self.assertIn('Timed out', result['error'])
             self.assertEqual(result['latitude'], 53)

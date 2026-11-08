@@ -42,10 +42,12 @@ forecast heuristics, with missing evidence hatched. The header explicitly shows
 **Wing loading: 34 kg/m² · no water ballast** or the 43 kg/m² ballasted option;
 the loading choice does not disable clouds.
 
-Public weather APIs need no credentials. Regional and national fetches run in
-the background. Fresh startup shows a loading message while the regional check
-finishes, rather than false 0/8 cards. Unsupported regions get one bounded
-recovery fetch in the same cycle; an actual total outage remains explicit. Allow about 2 GB
+Public weather APIs need no credentials. One shared weather engine schedules
+regional, national, corridor and point requests in the background. Fresh startup
+keeps maps and controls usable while forecasts arrive. Verified chunks are cached;
+failed chunks retry without redownloading completed work. A total outage leaves
+values pending or last verified, without fabricated ratings. See the
+[architecture audit and cache contracts](docs/architecture.md). Allow about 2 GB
 RAM for the dashboard and land mask; the mask alone expands to about 1 GB.
 Dependencies are pinned in [requirements.txt](requirements.txt).
 
@@ -83,8 +85,8 @@ geocoding. Ambiguous or unavailable places are explained rather than substituted
 Controls, metrics, table columns and map markers have hover explanations.
 
 The horizontal page bar loads only the selected page. Help, briefing and data
-quality pages build no maps; OGN provider polling runs only while its radar page
-is active. Each selected map uses a 680 px canvas inside a 720 px component and
+quality pages build no maps. OGN acquisition is independent of the active page
+and weather engine; its own view contains no forecast payload. Each selected map uses a 680 px canvas inside a 720 px component and
 bundled Leaflet. Missing weather does not prevent map mounting. Cursor drawing
 and wave altitude changes stay in the browser. Every added, dropped or removed
 task point saves through a small Streamlit fragment update. Weather and Task
@@ -115,9 +117,10 @@ for source attribution, supported formats, assessment limits and operating detai
 
 Wind uses a complete **168-node rectangular grid** from 49.5–61°N and
 11°W–2.5°E, including coastal water. Bilinear canvas interpolation removes the
-old distance-cutoff holes. Four workers fetch 45-coordinate batches with a
-six-second timeout and no retries. All geographic chunks of the selected model
-go first, before donor-model requests. Missing vectors use same-hour, same-level
+old distance-cutoff holes. Three shared I/O workers fetch eight-coordinate
+chunks with one 3.5-second attempt, no retry sleeps, and a process-wide quota
+gate. Only incomplete coordinates request model support. Verified chunks are
+reused across later attempts; geographic updates can span quota windows. Missing vectors use same-hour, same-level
 nearest-neighbour interpolation, explicitly labelled as spatial estimates. The
 legend reports the largest nearest-source distance; broad gaps are less reliable.
 A completely unavailable hour/level stays unknown. All six altitude frames are cached together;
@@ -125,17 +128,18 @@ wind/wave altitude changes, panning and zooming stay in the browser.
 Initial live downloads still depend on provider latency and quotas.
 
 Wind draws charcoal arrows with white outlines over the clear terrain map;
-there is no coloured wind haze at any zoom. **Wind Display** switches instantly
-to static meteorological barbs with knot labels. Arrows follow the flow; barbs
+there is no coloured wind haze at any zoom. **Streaming Wind**, **Wind Barbs**
+and **Wind Off** switch instantly on the client canvas. Barbs include knot labels. Arrows follow the flow; barbs
 point into the wind (half feather = 5 kt, full = 10 kt, pennant = 50 kt).
 Barb spacing adapts to zoom and symbol size. Both displays retain the same
 click inspection, six altitude choices and five-day timeline. Reduced-motion
 preferences stop the arrow animation while keeping its direction visible.
 
 The **1,098-entry UK airfield layer** includes the named gliding clubs and
-130 distinct NOAA reporting stations. Hover for current model wind and surface
-weather; click for runway information, latest METAR, full TAF and a six-hour
-trend. Missing or old reports are labelled. Airfield status and landing
+130 distinct NOAA reporting stations. Hover for the selected cached forecast
+and a six-hour trend, with sample distance and retrieval time. The browser does
+not make another Open-Meteo request. Click for runway information and any loaded
+METAR/TAF reports; enable the METAR layer to fetch current reports. Missing or old reports are labelled. Airfield status and landing
 permission require an operator check.
 
 **Task planner** has its own BGA/airfield map, CUP/TSK task import and an

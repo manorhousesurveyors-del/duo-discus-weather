@@ -19,7 +19,8 @@ def fetch_point_precipitation(latitude: float, longitude: float, when,
     when = utc_datetime(when)
     if when.minute or when.second or when.microsecond:
         raise ValueError('Point precipitation requires a whole forecast hour')
-    response = (client or JsonHttpClient()).get_json(OPEN_METEO_URL, {
+    from weather_engine import transport
+    response = (client or transport()).get_json(OPEN_METEO_URL, {
         'latitude': point.latitude, 'longitude': point.longitude,
         'models': model.api_name, 'hourly': 'precipitation',
         'precipitation_unit': 'mm', 'timezone': 'GMT', 'timeformat': 'unixtime',

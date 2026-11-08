@@ -8,8 +8,7 @@ from dataclasses import replace
 from datetime import datetime, time, timedelta
 
 from config import FORECAST_MODELS, HOURLY_VARIABLES, LOCAL_TIMEZONE
-from soaring_physics import Profile, boundary_layer_height, evaluate_thermals
-from atmospheric_moisture import complete_moisture
+from soaring_physics import Profile, evaluate_thermals
 
 COVERAGE_REVISION = 3
 PARCEL_SOURCE = 'estimated dry-parcel mixing depth'
@@ -63,31 +62,15 @@ def complete_forecasts(forecasts, model):
             values[name], units[name] = tuple(series), unit
             if any(origins):
                 provenance[name] = tuple(origins)
-        complete_moisture(values,units,provenance)
         resolved = replace(primary, model=model.api_name, times=times, hourly=values,
                            units=units, field_sources=provenance,
                            fetched_at=min(f.fetched_at for f in sources),
                            source_runs=tuple(sorted({run for f in sources for run in
                                (f.source_runs or ((f.model,f.fetched_at.isoformat()),))})),
                            requested_horizon_hours=model.horizon_hours)
-        # Both UKMO and ECMWF can omit BLH entirely. Use the bracketed parcel
-        # sounding after completion. Solar radiation drives the existing core
-        # heat-flux calculation; do not double-count it as arbitrary extra lift.
-        depth = list(values['boundary_layer_height'])
-        origins = list(provenance.get('boundary_layer_height', (None,) * len(times)))
-        for i, when in enumerate(times):
-            if depth[i] is not None:
-                continue
-            try:
-                estimate, _ = boundary_layer_height(Profile.from_forecast(resolved, when))
-            except (ValueError, KeyError):
-                continue
-            if estimate is not None:
-                depth[i], origins[i] = estimate, PARCEL_SOURCE
-        values['boundary_layer_height'] = tuple(depth)
-        if any(origins):
-            provenance['boundary_layer_height'] = tuple(origins)
-            units['boundary_layer_height'] = 'm'
+        from forecast_sanitizer import sanitize
+        resolved=sanitize(resolved)
+        values,units,provenance=resolved.hourly,resolved.units,resolved.field_sources
         counts = {k: sum(v is None for v in series) for k, series in values.items()}
         missing = [k for k, n in counts.items() if n == len(times)]
         partial = [k for k, n in counts.items() if 0 < n < len(times)]

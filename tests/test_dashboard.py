@@ -29,7 +29,7 @@ class DashboardTests(unittest.TestCase):
 
     def test_map_contains_layers_and_only_verified_asset_hosts(self):
         values=tuple(forecast(p) for p in forecast_locations())
-        with patch('app.thermal_overlay_data',return_value=None):
+        with patch('map_view.thermal_overlay_data',return_value=None):
             map_view,waves=app.build_map(values,NOW,layers=['Thermals','Cloud base','Wave sites'])
         document=map_view.get_root().render()
         for value in ('tile.openstreetmap.org','a.tile.opentopomap.org','cdn.jsdelivr.net',
@@ -42,13 +42,12 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn('d3js.org',document)
 
     def test_radar_rejects_foreign_host_and_malformed_frames(self):
+        from weather_ui import fetch_radar_metadata
         for body in ({'host':'https://example.test'},
                      {'host':'https://tilecache.rainviewer.com','radar':{'past':[{}]}}):
-            app.load_radar.clear()
-            with patch('app.JsonHttpClient') as client:
+            with patch('weather_engine.transport') as client:
                 client.return_value.get_json.return_value=JsonResponse(body,NOW)
-                with self.assertRaises(IngestionError): app.load_radar(1)
-        app.load_radar.clear()
+                with self.assertRaises(IngestionError):fetch_radar_metadata()
 
     def test_streamlit_controls_tabs_and_unavailable_model(self):
         from streamlit.testing.v1 import AppTest

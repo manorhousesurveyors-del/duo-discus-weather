@@ -22,3 +22,26 @@ jobs:
       - run: python -m pip install --disable-pip-version-check -r requirements.txt
       - name: Run offline tests
         run: python -m unittest discover -s tests -v
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5 · Node 24
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6 · Node 24
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-test.txt
+      - run: python -m pip install --disable-pip-version-check -r requirements-test.txt
+      - run: python -m playwright install --with-deps chromium
+      - name: Verify healthy, HTTP 429 and timeout pages
+        run: python scripts/run_architecture_checks.py
+      - name: Save browser timing evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6 · Node 24
+        with:
+          name: architecture-browser
+          path: var/architecture-browser/
+          retention-days: 14

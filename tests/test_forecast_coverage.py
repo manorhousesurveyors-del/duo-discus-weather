@@ -126,25 +126,23 @@ class ForecastCoverageTests(unittest.TestCase):
         self.assertEqual(len(batch.forecasts),1);self.assertEqual(len(batch.failures),1)
         self.assertEqual(batch.failures[0].target,'missing')
 
-    def test_regional_and_grid_completion_share_raw_transport_on_model_switch(self):
+    def test_regional_and_grid_views_use_the_engine_and_complete_before_validation(self):
         import uk_map_grid as grid
+        from concurrent.futures import Future
         raw=missing_model_fixture()
-        grid.regional_sources.clear();grid.regional_future.clear()
-        with patch.object(grid,'forecast_locations',return_value=(raw[0].location,)), \
-             patch.object(grid.OpenMeteoClient,'fetch_batched',return_value=ForecastBatch(raw,())) as fetch:
+        def request(points,key):
+            future=Future();future.set_result(ForecastBatch(complete_forecasts(raw,FORECAST_MODELS[key]),()))
+            return future
+        with patch.object(grid,'request_forecasts',side_effect=request) as fetch:
             for key in FORECAST_MODELS:
                 batch=grid.regional_future(int(START.timestamp()//1800),key).result(timeout=10)
                 self.assertEqual(batch.forecasts[0].model,FORECAST_MODELS[key].api_name)
                 self.assertTrue(batch.forecasts[0].supplemental_sources)
-            fetch.assert_called_once()
-        grid.regional_sources.clear();grid.regional_future.clear()
-        with patch.object(grid,'national_grid',return_value=(raw[0].location,)), \
-             patch.object(grid,'fetch_chunk',side_effect=lambda points,model,http:tuple(f for f in raw if f.model==model.api_name)) as fetch:
             bundle=grid.UKGridBundle(int(START.timestamp()//1800))
             for key in FORECAST_MODELS:
                 snapshot=bundle.request(key).result(timeout=10)
                 self.assertGreater(snapshot.hour(START)[0,list(snapshot.batch.forecasts[0].hourly).index('boundary_layer_height')],0)
-            self.assertEqual(fetch.call_count,3)
+            self.assertEqual(fetch.call_count,6)
 
     def test_real_app_dropdown_five_day_cards_and_probe_render_for_each_model(self):
         from streamlit.testing.v1 import AppTest

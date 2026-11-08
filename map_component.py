@@ -83,7 +83,7 @@ def document_version(forecasts,when,*options):
     # Session-specific task content is included by callers. File versions also
     # invalidate an existing browser session after a deployment or data import.
     root=Path(__file__).parent
-    versions=file_version([*root.glob('*.py'),*root.glob('assets/*.js'),
+    versions=file_version([*root.glob('*.py'),*root.glob('pages/*.py'),*root.glob('assets/*.js'),
                            *root.glob('data/*.json'),root/'map_component/index.html'])
     return (forecast_run_id(forecasts),when.isoformat(),versions,options)
 

@@ -46,5 +46,7 @@ def assessed_task(run_id,points,day,loading,model,_forecasts):
 def gemini_discovery(fingerprint,auth,_credential):
     # Only a one-way credential fingerprint is a cache key. Cached output contains
     # model names and redacted diagnostics, never the key or an authenticated URL.
-    from gemini_rest import GeminiREST
-    return GeminiREST(_credential,auth).connect()
+    from gemini_rest import GeminiREST,GeminiError
+    result=GeminiREST(_credential,auth).connect()
+    if _credential and result.error:raise GeminiError(0,result.error)
+    return result

@@ -63,9 +63,9 @@ class WindCoverageTests(unittest.TestCase):
 
     def test_all_components_return_only_click_objects(self):
         count=0;cached=0
-        for path in ('app.py','route_analysis.py'):
+        for path in ('pages/weather.py','pages/traffic.py','pages/wave.py','route_analysis.py'):
             for node in ast.walk(ast.parse(Path(path).read_text())):
-                if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='st_folium':
+                if isinstance(node,ast.Call) and ((isinstance(node.func,ast.Name) and node.func.id=='st_folium') or (isinstance(node.func,ast.Attribute) and node.func.attr=='render_map')):
                     kwargs={k.arg:k.value for k in node.keywords};self.assertEqual(ast.literal_eval(kwargs['returned_objects']),['last_object_clicked','last_clicked']);count+=1
                 elif isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='render_document':
                     kwargs={k.arg:k.value for k in node.keywords}
@@ -182,16 +182,14 @@ class RouteAndWaveTests(unittest.TestCase):
         self.assertTrue(all(not line['points'] for line in energy_line(task,(),NOW)))
 
     def test_terrain_uses_dem_and_keeps_missing_samples(self):
-        terrain_samples.clear()
         def response(endpoint,params,**kw):
             self.assertEqual(endpoint,'https://api.open-meteo.com/v1/elevation')
             count=len(params['latitude'].split(','))
             return JsonResponse({'elevation':[500]*(count-1)+[None]},NOW)
-        with patch('route_analysis.JsonHttpClient') as client:
+        with patch('weather_engine.transport') as client:
             client.return_value.get_json.side_effect=response
             result=terrain_samples(TASK)
         self.assertTrue(any(r['missing'] for r in result));self.assertEqual(result[0]['peak_m'],500)
-        terrain_samples.clear()
 
     def test_wave_altitudes_keep_missing_and_underground_levels_unavailable(self):
         p=Profile.from_forecast(forecast(),NOW)

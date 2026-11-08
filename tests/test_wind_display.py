@@ -74,4 +74,4 @@ console.log(JSON.stringify({rows,arrow,arrowStrokes:a.strokes,arrowFills:a.fills
         self.assertLess(html.index('installDuoWindCanvas('+view.get_name()),html.index('installDuoModes('+view.get_name()))
         self.assertNotIn("canvas.style.filter='blur(8px)'",html)
         self.assertNotIn("create('canvas','duo-wind-heat'",html)
-        self.assertIn('Wind Display: Streaming Arrows',html)
+        for label in ('Streaming Wind','Wind Barbs','Wind Off'):self.assertIn(label,html)

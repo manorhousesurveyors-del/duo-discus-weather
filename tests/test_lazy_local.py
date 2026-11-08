@@ -29,7 +29,7 @@ class LocalForecastTests(unittest.TestCase):
         geocode.clear()
         rows={'results':[{'id':1,'name':'Birmingham','country_code':'US','latitude':33,'longitude':-86},
                          {'id':2,'name':'Birmingham','country_code':'GB','latitude':52.4814,'longitude':-1.8998,'admin1':'England'}]}
-        with patch('place_resolver.JsonHttpClient') as http:
+        with patch('weather_engine.transport') as http:
             http.return_value.get_json.return_value.body=rows
             place=resolve_place('What are the soaring conditions at Birmingham?',self.catalog,allow_network=True)
             self.assertEqual(place.point.latitude,52.4814)
@@ -41,7 +41,7 @@ class LocalForecastTests(unittest.TestCase):
             self.assertEqual(place.point.name,'Church Stretton')
             lookup.assert_called_once_with('Church Stretton')
         rows['results']=[{**rows['results'][1],'id':i,'name':'Newport','admin2':county} for i,county in enumerate(('Shropshire','Wales'))]
-        with patch('place_resolver.JsonHttpClient') as http:
+        with patch('weather_engine.transport') as http:
             http.return_value.get_json.return_value.body=rows
             with self.assertRaisesRegex(PlaceError,'Several places'):geocode('Newport')
         geocode.clear()
@@ -84,10 +84,9 @@ class LocalForecastTests(unittest.TestCase):
     def test_local_forecast_fetches_centre_and_four_bounded_sector_samples(self):
         from soaring_physics import distance_bearing
         point=GeoPoint('town','Shrewsbury',52.7,-2.75);local_forecasts.clear()
-        with patch('data_ingestion.OpenMeteoClient') as client:
-            client.return_value.fetch_batched.return_value='batch'
+        with patch('weather_engine.read_forecasts',return_value='batch') as fetch:
             self.assertEqual(local_forecasts(point,20,'ifs025',0),'batch')
-            points=client.return_value.fetch_batched.call_args.args[0]
+            points=fetch.call_args.args[0]
             self.assertEqual(len(points),5);self.assertEqual(points[0],point)
             for p in points[1:]:self.assertAlmostEqual(distance_bearing(point,p)[0],20,places=2)
         local_forecasts.clear()

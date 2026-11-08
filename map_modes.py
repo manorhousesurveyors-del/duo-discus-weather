@@ -16,8 +16,9 @@ MODES = {'clean':'Off / Clean Map', 'wind':'Windy-style Wind Stream', 'radar':'W
 def map_products(forecasts,when,anchor,loading,mode):
     """Keep expensive contour geometry and wind frames across click reruns."""
     from streamlit.runtime.scriptrunner import get_script_run_ctx
+    from app_cache import forecast_run_id
     key=(mode,None if mode=='wind' else when.isoformat(),anchor.date().isoformat(),loading,
-         tuple((f.location.key,f.model,f.fetched_at.isoformat(),len(f.times)) for f in forecasts))
+         forecast_run_id(forecasts))
     cache=st.session_state.setdefault('_map_products',{}) if get_script_run_ctx(suppress_warning=True) else {}
     if key in cache:return cache[key]
     samples=soaring_samples(forecasts,when,loading) if mode in ('thermal','pfd','xc','stf') else []
@@ -32,6 +33,8 @@ def add_map_modes(map_view,forecasts,when,anchor,loading,*,mode='clean',radar=No
     if mode not in MODES: mode='clean'
     if mode=='wind':install_wind_canvas(map_view)
     samples,contours,wind=([],{'type':'FeatureCollection','features':[]},wind_product) if mode=='wind' and wind_product is not None else map_products(forecasts,when,anchor,loading,mode)
+    if mode=='wind' and (not isinstance(wind,dict) or not all(k in wind for k in ('grid','stations','times','labels','levels'))):
+        wind=wind_payload((),anchor)
     payload={'mode':mode,'modes':MODES,'when':when.isoformat(),'wind':wind,'samples':samples,
              'contours':contours,'bands':BANDS.get(mode),'radar':radar,'points':len(task),
              'date':when.date().isoformat(),'loading':loading,'rate_grid':rate_grid,'radar_point':radar_point,'hide_menu':hide_menu}

@@ -46,9 +46,10 @@ class IngestionError(RuntimeError):
 
 
 class ServiceError(IngestionError):
-    def __init__(self, message: str, *, status: int | None = None) -> None:
+    def __init__(self, message: str, *, status: int | None = None, retry_after: float | None = None) -> None:
         super().__init__(message)
         self.status = status
+        self.retry_after = retry_after
 
 
 class SchemaError(IngestionError):
@@ -220,7 +221,13 @@ class JsonHttpClient:
                 exc.close()
                 if status not in {408, 429, 500, 502, 503, 504}:
                     raise ServiceError(f"{host} returned HTTP {status}", status=status) from None
-                failure = ServiceError(f"{host} returned HTTP {status} after retries", status=status)
+                try:
+                    cooldown=float(retry_header) if retry_header else None
+                except ValueError:
+                    try:cooldown=max(0.,(utc_datetime(parsedate_to_datetime(retry_header))-utc_datetime(self.clock())).total_seconds())
+                    except (ValueError,TypeError,OverflowError):cooldown=None
+                failure = ServiceError(f"{host} returned HTTP {status} after retries", status=status,
+                                       retry_after=cooldown if cooldown is not None and math.isfinite(cooldown) else None)
             except (URLError, TimeoutError, socket.timeout, ConnectionError, HTTPException, ssl.SSLError) as exc:
                 reason = exc.reason if isinstance(exc, URLError) else exc
                 if isinstance(reason, ssl.SSLError) or "403 Forbidden" in str(reason) or "407 Proxy" in str(reason):
@@ -309,8 +316,10 @@ def split_model_response(body, model_name):
     """Open-Meteo multi-model columns carry a model suffix; never blend them."""
     suffix='_'+model_name
     return {**body,'hourly':{'time':body.get('hourly',{}).get('time'),
+        **{key:value for key,value in body.get('hourly',{}).items() if key in HOURLY_VARIABLES},
         **{key[:-len(suffix)]:value for key,value in body.get('hourly',{}).items() if key.endswith(suffix)}},
         'hourly_units':{'time':body.get('hourly_units',{}).get('time'),
+        **{key:value for key,value in body.get('hourly_units',{}).items() if key in HOURLY_VARIABLES},
         **{key[:-len(suffix)]:value for key,value in body.get('hourly_units',{}).items() if key.endswith(suffix)}}}
 
 
@@ -318,6 +327,8 @@ def parse_forecast(response: JsonResponse, location: GeoPoint, model: ForecastMo
     body = response.body
     if not isinstance(body, dict) or not isinstance(body.get("hourly"), dict) or not isinstance(body.get("hourly_units"), dict):
         raise SchemaError("Forecast must contain hourly and hourly_units objects")
+    if any(key.endswith('_'+model.api_name) for key in body['hourly']):
+        body=split_model_response(body,model.api_name)
     if body.get("utc_offset_seconds") != 0 or body["hourly_units"].get("time") != "unixtime":
         raise SchemaError("Forecast must use UTC Unix timestamps")
     raw_times = body["hourly"].get("time")
@@ -387,10 +398,17 @@ class ForecastBatch:
             raise IngestionError(f"{len(self.failures)} forecast requests failed; inspect batch.failures")
 
 
+def weather_transport():
+    from weather_engine import transport
+    return transport()
+
+
 class OpenMeteoClient:
     def __init__(self, settings: Settings | None = None, *, http: JsonHttpClient | None = None) -> None:
         self.settings = settings or Settings.from_env()
-        self.http = http or JsonHttpClient(self.settings)
+        if http is None:
+            http=weather_transport()
+        self.http = http
 
     def fetch(self, location: GeoPoint, model: ForecastModel) -> Forecast:
         response = self.http.get_json(OPEN_METEO_URL, {
@@ -409,8 +427,29 @@ class OpenMeteoClient:
         methods remain available for comparison, archives and diagnostics.
         """
         from forecast_coverage import complete_forecasts
-        batch = self.fetch_batched(locations, FORECAST_MODELS.values(), batch_size=batch_size)
-        return ForecastBatch(complete_forecasts(batch.forecasts, model), batch.failures)
+        from forecast_coverage import soaring_coverage
+        from forecast_sanitizer import has_core_coverage
+        points=tuple(locations)
+        batch=self.fetch_batched(points,(model,),batch_size=batch_size)
+        raw=list(batch.forecasts);failures=list(batch.failures)
+        resolved=complete_forecasts(raw,model)
+        # A healthy primary needs no two extra whole-domain downloads. Fetch
+        # donors only for coordinates with incomplete five-day evidence.
+        for donor in (FORECAST_MODELS['ifs025'],FORECAST_MODELS['icon_eu']):
+            if donor.api_name==model.api_name:continue
+            by_key={f.location.key:f for f in resolved}
+            def ready(point):
+                f=by_key.get(point.key)
+                return f is not None and has_core_coverage(f) and min(soaring_coverage(f,f.fetched_at.astimezone(LOCAL_TIMEZONE).date()))==8
+            missing=tuple(p for p in points if not ready(p))
+            if not missing:break
+            # A host-wide 429/timeout cooldown makes fallback requests futile.
+            gate=getattr(self.http,'gate',None)
+            if gate is not None and gate.clock()<gate.until:break
+            support=self.fetch_batched(missing,(donor,),batch_size=batch_size)
+            raw.extend(support.forecasts);failures.extend(support.failures)
+            resolved=complete_forecasts(raw,model)
+        return ForecastBatch(resolved,tuple(failures))
 
     def fetch_many(self, locations: Iterable[GeoPoint] | None = None,
                    models: Iterable[ForecastModel] | None = None) -> ForecastBatch:
@@ -907,14 +946,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, help="Write full normalized snapshot as JSON")
     args = parser.parse_args(argv)
     settings = Settings.from_env()
-    http = JsonHttpClient(settings)
+    http = weather_transport()
     payload: dict[str, Any] = {"schema_version": 1}
     summary: dict[str, Any] = {}
     failed = False
     if args.mode in {"forecast", "all"}:
         locations = forecast_locations() if args.all_locations else (MONITORING_ZONES[args.region],)
         models = tuple(FORECAST_MODELS.values()) if args.model == "all" else (FORECAST_MODELS[args.model],)
-        batch = OpenMeteoClient(settings, http=http).fetch_many(locations, models)
+        batch = OpenMeteoClient(http=http).fetch_batched(locations, models,batch_size=8)
         payload["forecast"] = asdict(batch)
         summary["forecasts"] = [{"location": f.location.key, "model": f.model,
                                  "hours": len(f.times), "available_through": f.available_through,
@@ -938,6 +977,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # Keep exception types identical to the shared engine when run as a script.
+    from data_ingestion import main, IngestionError
     try:
         raise SystemExit(main())
     except (IngestionError, ValueError, OSError) as error:

@@ -85,7 +85,6 @@ def energy_line(points,forecasts,when,loading='dry',airspace=None):
     return routes
 
 
-@st.cache_data(ttl=86400,show_spinner=False)
 def terrain_samples(points):
     """Sample track plus a 2 km lateral corridor, at no more than 5 km spacing."""
     locations=[];legs=[]
@@ -97,7 +96,8 @@ def terrain_samples(points):
                 indices.append(len(locations));locations.append((lat,lon))
         legs.append(indices)
     if len(locations)>5000:raise ValueError('Route terrain sample budget exceeded; shorten the task')
-    elevations=[];client=JsonHttpClient()
+    from weather_engine import transport
+    elevations=[];client=transport()
     for start in range(0,len(locations),100):
         chunk=locations[start:start+100]
         body=client.get_json('https://api.open-meteo.com/v1/elevation',{'latitude':','.join(str(p[0]) for p in chunk),
@@ -170,11 +170,21 @@ def planner_panel(catalog,day,when,loading,model_key,bucket,forecasts,points,ass
     report=st.session_state.get('route_analysis')
     if report and report['key']!=request_key:report=None
     from map_component import document_version
+    from weather_engine import products
+    from app_cache import forecast_run_id
+    from client_map import task_soaring_layers
+    from uk_map_grid import grid_progress
+    run_id=forecast_run_id(forecasts)
+    layers_job=products().request(('task-layers',run_id,when,loading),
+        lambda:task_soaring_layers(run_id,when,loading,_forecasts=forecasts))
+    layers_ready=layers_job.done()
+    task_product=layers_job.result() if layers_ready else ([],{k:{'type':'FeatureCollection','features':[]} for k in ('stf','thermal','pfd')})
+    if not layers_ready:grid_progress(layers_job,'Task weather overlays are being prepared in the background.')
     version=document_version(forecasts,when,request_key,catalog.content_sha256,bool(recorded),
-        repr(report['energy']) if report else None,st.session_state.get('airfield_popup:last_planner_event'))
+        repr(report['energy']) if report else None,st.session_state.get('airfield_popup:last_planner_event'),layers_ready)
     def planner_document():
         view,_=map_builder(forecasts,when,layers=[],task=points,turnpoints=catalog.turnpoints,visual_mode='route',
-            map_identity='planner',loading=loading,anchor=when,aviation=aviation,show_airfields=True,live_airfields=not recorded,selected_airfield=st.session_state.get('airfield_popup:last_planner_event'))
+            map_identity='planner',loading=loading,anchor=when,aviation=aviation,show_airfields=True,live_airfields=not recorded,selected_airfield=st.session_state.get('airfield_popup:last_planner_event'),task_product=task_product)
         if airspace:
             import folium
             from airspace import display_airspace
@@ -211,24 +221,41 @@ def planner_panel(catalog,day,when,loading,model_key,bucket,forecasts,points,ass
                 body=import_airspace(boundaries.getvalue(),boundaries.name);LOCAL_PATH.parent.mkdir(exist_ok=True);LOCAL_PATH.write_text(json.dumps(body));st.rerun()
             except (ValueError,OSError) as exc:st.error(str(exc))
     requested=st.session_state.pop('analyse_client_task',False)
-    if st.button('Analyse Task & Route Weather',type='primary',disabled=len(points)<2,width='stretch',key='analyse_route',help='Analyse the saved route. For an unsaved browser draft, use Analyse / save on the map. Current airspace activation needs a NOTAM check.') or (requested and len(points)>=2):
+    if st.button('Analyse Task & Route Weather',type='primary',disabled=len(points)<2,width='stretch',key='analyse_route',help='Check saved route weather, terrain and airspace in the background.') or (requested and len(points)>=2):
+        st.session_state['pending_route_analysis']=request_key
+    if st.session_state.get('pending_route_analysis')==request_key:
         try:
             from task_planning import assess_task,nearby_forecasts
+            from weather_engine import resources
+            from weather_ui import forecasts_pending
+            from uk_map_grid import grid_progress
             samples=tuple({p.key:p for leg in energy_sample_rows(points) for row in leg for p in row}.values())
-            with st.spinner('Analysing route weather, terrain and candidate energy lines…'):
-                if recorded:sample_forecasts=nearby_forecasts(samples,forecasts,maximum_km=15);terrain=None;failures=('Recorded mode: no live DEM query.',)
-                else:
-                    batch=fetch_corridor(samples,model_key,bucket);sample_forecasts=batch.forecasts;failures=tuple(f.message for f in batch.failures)
-                    try:terrain=terrain_samples(points)
-                    except (IngestionError,ValueError) as exc:terrain=None;failures+=(f'Terrain: {exc}',)
+            if recorded:
+                sample_forecasts=nearby_forecasts(samples,forecasts,maximum_km=15);terrain=None;failures=('Recorded mode: no live DEM query.',)
+            else:
+                dem=resources().request(('route-terrain',signature(points)),lambda:terrain_samples(points),
+                    accept=lambda rows:bool(rows) and all(row['missing']==0 for row in rows),ttl=86400)
+                waiting=forecasts_pending(samples,model_key)
+                if not dem.done():grid_progress(dem,'Terrain screening continues in the background.');waiting=True
+                if waiting:return
+                batch=fetch_corridor(samples,model_key,bucket);sample_forecasts=batch.forecasts;failures=tuple(f.message for f in batch.failures)
+                try:terrain=dem.result()
+                except (IngestionError,ValueError) as exc:terrain=None;failures+=(f'Terrain: {exc}',)
+            def analyse():
                 evaluated=assess_task(points,sample_forecasts,day,loading,preference=(FORECAST_MODELS[model_key].api_name,))
-                st.session_state['route_analysis']={'key':request_key,'assessment':evaluated,
+                return {'key':request_key,'assessment':evaluated,
                     'energy':energy_line(points,sample_forecasts,when,loading,airspace),
                     'hazards':hazard_report(points,sample_forecasts,evaluated,terrain,airspace,when),
                     'hourly_details':hourly_details(points,sample_forecasts,evaluated),
                     'failures':failures,'airspace_source':airspace.get('source','User-supplied boundaries') if airspace else None}
+            from app_cache import forecast_run_id
+            job=resources().request(('route-analysis',request_key,forecast_run_id(sample_forecasts),repr(terrain)),analyse,ttl=300)
+            if not job.done():grid_progress(job,'Computing the route report in the background.');return
+            st.session_state['route_analysis']=job.result()
+            st.session_state.pop('pending_route_analysis',None)
             st.rerun()
-        except (ValueError,IngestionError) as exc:st.error(str(exc))
+        except (ValueError,IngestionError) as exc:
+            st.session_state.pop('pending_route_analysis',None);st.error(str(exc))
     if not report:return
     result=report['assessment'];st.subheader('Operational route synopsis')
     from planning_ui import task_result

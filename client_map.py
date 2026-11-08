@@ -26,6 +26,29 @@ def install_wind_canvas(map_view):
     script(map_view,'wind_glyphs.js','installDuoWindCanvas',wind_canvas_options())
 
 
+def surface_payload(forecasts,when):
+    """Airfield hover consumes this page's selected forecast; no browser API."""
+    from datetime import timedelta
+    fields=('temperature_2m','dew_point_2m','pressure_msl','visibility',
+            'wind_speed_10m','wind_direction_10m','wind_gusts_10m','precipitation')
+    records=[]
+    for f in forecasts:
+        hours={name:[] for name in (*fields,'time')}
+        for offset in range(7):
+            time=when+timedelta(hours=offset)
+            try:values=f.at(time)
+            except KeyError:values={}
+            hours['time'].append(time.timestamp())
+            for name in fields:
+                value=values.get(name)
+                if value is not None and name in ('wind_speed_10m','wind_gusts_10m'):value*=1.943844492
+                hours[name].append(value)
+        records.append({'lat':f.location.latitude,'lon':f.location.longitude,
+            'model':f.model,'retrieved':f.fetched_at.isoformat(),'hourly':hours,
+            'current':{key:values[0] for key,values in hours.items()}})
+    return records
+
+
 def add_shared_task(map_view,points,when,*,editable=False):
     from planning_ui import task_payload
     payload=task_payload()
@@ -55,10 +78,10 @@ def task_soaring_layers(run_id,when,loading,_forecasts):
     return samples,{key:contour_features(samples,key) for key in ('stf','thermal','pfd')}
 
 
-def add_task_editor(map_view,points,when,forecasts,loading):
+def add_task_editor(map_view,points,when,forecasts,loading,*,prepared=None):
     from map_weather import BANDS
     from app_cache import forecast_run_id
-    samples,contours=task_soaring_layers(forecast_run_id(forecasts),when,loading,_forecasts=forecasts)
+    samples,contours=prepared if prepared is not None else task_soaring_layers(forecast_run_id(forecasts),when,loading,_forecasts=forecasts)
     records=[{'code':p.code,'name':p.name,'lat':p.latitude,'lon':p.longitude,'elevation_m':p.elevation_m} for p in points]
     version=hashlib.sha256(json.dumps(records,sort_keys=True).encode()).hexdigest()[:16]
     from route_tools import is_complete

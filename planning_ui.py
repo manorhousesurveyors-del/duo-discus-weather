@@ -60,7 +60,7 @@ def set_task(day,points,*,rerun=True,client_version=None):
     st.session_state['task_version']=max(st.session_state.get('task_version',0)+1,client_version or 0)
     st.session_state.setdefault('tasks_by_day',{})[day.isoformat()]=points
     st.session_state['task_message']=f'Saved {len(points)} task points for {day:%d %b}.'
-    for key in ('route_analysis','_weather_map_state','published_tasks'):
+    for key in ('route_analysis','published_tasks'):
         st.session_state.pop(key,None)
     st.session_state.setdefault('completed_tasks',{}).pop(day.isoformat(),None)
     if len(points)>=3 and points[0]==points[-1]:
@@ -155,15 +155,17 @@ def task_builder(catalog,day,*,location):
                 except ValueError as exc: st.error(str(exc))
 
 
-@st.cache_data(ttl=1800,show_spinner=False)
 def fetch_corridor(points: tuple[GeoPoint, ...], model_key: str, refresh_bucket: int):
-    return OpenMeteoClient().fetch_supported(points,FORECAST_MODELS[model_key])
+    from weather_engine import read_forecasts
+    return read_forecasts(points,model_key)
 
 
 def task_weather(points,base_forecasts,model_key,bucket,*,recorded=False):
     samples=corridor_points(points)
     if recorded:
         return nearby_forecasts(samples,base_forecasts,maximum_km=15), ('Recorded mode: only stored weather within 15 km is used; other corridor samples remain unavailable.',)
+    from weather_ui import forecasts_pending
+    forecasts_pending(samples,model_key)
     batch=fetch_corridor(samples,model_key,bucket)
     return batch.forecasts,tuple(f'{f.target}: {f.message}' for f in batch.failures)
 
@@ -423,9 +425,8 @@ def briefing_panel(catalog,day,loading,model_key,bucket,forecasts,assessment,cla
         refresh=st.button('Check connection / refresh models',help='Query Google’s model list for this credential. Only available text models appear in the selector.')
         if st.button('Forget pasted key',help='Clear this session’s pasted credential.',on_click=lambda:(st.session_state.pop('gemini_runtime_key',None),st.session_state.pop('_gemini_runtime_saved',None))):st.rerun()
         saved=st.session_state.get('gemini_connection')
-        from app_cache import gemini_discovery
-        if refresh:gemini_discovery.clear(fingerprint,auth,_credential=key)
-        connection=gemini_discovery(fingerprint,auth,_credential=key)
+        from briefing_jobs import connection as discover_connection
+        connection=discover_connection(fingerprint,auth,key,refresh=refresh)
         if saved is None or saved['fingerprint']!=fingerprint or refresh:
             st.session_state.pop('gemini_active_model',None);st.session_state.pop('gemini_last_error',None)
         st.session_state['gemini_connection']={'fingerprint':fingerprint,'connection':connection}
@@ -446,6 +447,8 @@ def briefing_panel(catalog,day,loading,model_key,bucket,forecasts,assessment,cla
     if buttons[2].button('Explain my task',help='Discuss the active route and alternatives against regional and hourly weather.'):
         question='Explain my task and the best sectors to use'
     question=st.chat_input('Ask for a task, day briefing, turnpoint or explanation…',max_chars=4000) or question
+    if question:st.session_state['pending_briefing']=(question,explicit_search)
+    question,explicit_search=st.session_state.get('pending_briefing',(None,False))
     if question:
         requested_day=briefing_date(question,day,today or datetime.now(LOCAL_TIMEZONE).date())
         selected=st.session_state.get('briefing_point')
@@ -454,20 +457,34 @@ def briefing_panel(catalog,day,loading,model_key,bucket,forecasts,assessment,cla
         if not selected and st.session_state.get('selected_airfield'):
             from uk_airfields import airfield_by_id
             field=airfield_by_id(st.session_state['selected_airfield']);selected=field.turnpoint.point if field else None
-        from place_resolver import resolve_place,sector_radius,local_forecasts,PlaceError
+        from place_resolver import resolve_place,sector_radius,sector_points,local_forecasts,PlaceError
+        from weather_engine import resources
+        from uk_map_grid import grid_progress
+        from weather_ui import forecasts_pending
         try:
-            resolved=resolve_place(question,catalog,selected,allow_network=not recorded)
-        except PlaceError as exc:
+            if recorded:resolved=resolve_place(question,catalog,selected,allow_network=False)
+            else:
+                resolved_job=resources().request(('resolve-place',question,selected,catalog.content_sha256),
+                    lambda:resolve_place(question,catalog,selected,allow_network=True),ttl=86400)
+                if not resolved_job.done():
+                    grid_progress(resolved_job,'Resolving the requested location in the background.');st.stop()
+                resolved=resolved_job.result()
+        except (PlaceError,IngestionError) as exc:
+            st.session_state.pop('pending_briefing',None)
             history.extend([{'role':'user','content':question},{'role':'assistant','content':str(exc)}])
             st.session_state['assistant_routes']={};st.rerun()
         if not recorded:
             with st.spinner('Loading the requested local forecast…'):
+                if forecasts_pending(sector_points(resolved.point,sector_radius(question)),model_key):st.stop()
                 batch=local_forecasts(resolved.point,sector_radius(question),model_key,bucket)
                 forecasts=tuple({(f.location.key,f.model):f for f in (*forecasts,*batch.forecasts)}.values())
                 if batch.failures:st.warning('; '.join(f.message for f in batch.failures))
                 if re.search(r'\b(task|route|national|regions|sectors|triangle|cross.country)\b',question,re.I):
-                    from app import load_sites
-                    regional=load_sites(model_key,bucket)
+                    from weather_ui import load_sites
+                    regional_job=load_sites(model_key,bucket)
+                    if not regional_job.done():
+                        grid_progress(regional_job);st.stop()
+                    regional=regional_job.result()
                     forecasts=tuple({(f.location.key,f.model):f for f in (*forecasts,*regional.forecasts)}.values())
         with st.spinner('Preparing your requested briefing…'):
             evidence,proposed=build_context(question,catalog,forecasts,requested_day,today or day,loading,selected=selected,active=active_task(day),assessment=assessment,resolved=resolved)
@@ -490,7 +507,15 @@ def briefing_panel(catalog,day,loading,model_key,bucket,forecasts,assessment,cla
             if key and connection.models:
                 try:
                     client=GeminiREST(key,connection.auth)
-                    answer,active=client.generate(question,evidence,models=tuple(dict.fromkeys([model,*connection.models])),history=history if evidence['scope']['task_requested'] else ())
+                    from briefing_jobs import jobs
+                    prompt_history=tuple(history) if evidence['scope']['task_requested'] else ()
+                    prompt_hash=hashlib.sha256(json.dumps([question,evidence,prompt_history],sort_keys=True).encode()).hexdigest()
+                    answer_job=jobs().request(('answer',fingerprint,model,prompt_hash),
+                        lambda:client.generate(question,evidence,models=tuple(dict.fromkeys([model,*connection.models])),history=prompt_history),ttl=300)
+                    if not answer_job.done():
+                        from uk_map_grid import grid_progress
+                        grid_progress(answer_job,'Preparing the assistant answer in the background.');st.stop()
+                    answer,active=answer_job.result()
                     response=answer['answer']+'\n\n---\n\n**Checked weather evidence**\n\n'+response
                     if evidence['scope']['task_requested']:suggestions+=validated_suggestions(answer,catalog)
                     st.session_state['gemini_active_model']=active;st.session_state.pop('gemini_last_error',None)
@@ -505,10 +530,15 @@ def briefing_panel(catalog,day,loading,model_key,bucket,forecasts,assessment,cla
                 evaluated.append((name,reason,task,result,failures))
             st.session_state['assistant_routes']={'day':requested_day,'model':model_key,'loading':loading,'items':evaluated}
         history.extend([{'role':'user','content':question},{'role':'assistant','content':response+'\n\n*'+source+'*'}])
+        st.session_state.pop('pending_briefing',None)
         st.session_state['briefing_messages']=history[-24:];st.rerun()
     saved=st.session_state.get('assistant_routes',{})
     if saved.get('model')==model_key and saved.get('loading')==loading:
         for i,(name,reason,task,result,failures) in enumerate(saved.get('items',[])):
+            # Re-evaluate suggested corridors after their shared background job completes.
+            weather,failures=task_weather(task,forecasts,model_key,bucket,recorded=recorded)
+            from app_cache import assessed_task,forecast_run_id
+            result=assessed_task(forecast_run_id(weather),task,saved['day'],loading,FORECAST_MODELS[model_key].api_name,_forecasts=weather)
             st.markdown('**'+name+'** · '+' → '.join(p.code for p in task))
             st.caption(reason+' '+explain_task(result))
             if failures:st.caption('; '.join(failures[:2]))

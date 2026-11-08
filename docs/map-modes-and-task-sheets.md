@@ -14,12 +14,14 @@ particular screenshot has not been established.
 
 ## Wind
 
-Wind mode fetches a paced, cached **13 × 15 regular grid (195 nodes)** covering
-49.8–59°N and −8.5–2°E, including sea points. Bilinear interpolation uses the
-four enclosing nodes with no distance-cutoff mask. This display grid does not
-increase the source model's resolution. Blue/green through yellow/red/magenta
-shows speed in knots. White canvas particles follow the wind towards its
-destination. The animation honours reduced-motion preferences.
+Wind mode uses the shared background engine and a **168-node regular display
+grid** covering 49.5–61°N and −11–2.5°E, including sea points. The display does
+not increase the source model's resolution. **Streaming Wind**, **Wind Barbs**
+and **Wind Off** work locally even while data is pending. Arrows are charcoal
+black with a white halo and directional heads; no coloured wind haze is drawn.
+Barbs use standard 5/10/50 kt symbols. The animation honours reduced motion.
+Missing geographic samples use disclosed same-hour/altitude spatial estimates;
+an unsupported whole slice remains empty. See the [engine contracts](architecture.md).
 
 The six-level bar selects surface 10 m, 950, 850, 800, 700 or 500 hPa. Pressure
 heights are approximate standard-atmosphere labels, not terrain clearance.

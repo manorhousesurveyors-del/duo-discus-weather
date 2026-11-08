@@ -60,7 +60,7 @@ class PlanningUiTests(unittest.TestCase):
         self.assertIsNone(app.thermal_overlay_data([[52,-3,1],[53,-3,2],[54,-3,3]]))
 
     def test_clean_map_and_explicit_task_markers(self):
-        with patch('app.thermal_overlay_data',return_value=None):
+        with patch('map_view.thermal_overlay_data',return_value=None):
             clean,_=app.build_map((),NOW,layers=['BGA turnpoints'],turnpoints=(A,B))
             active,_=app.build_map((),NOW,layers=[],task=TASK)
         clean_html=clean.get_root().render();active_html=active.get_root().render()
@@ -137,7 +137,7 @@ briefing_panel(b.load_catalog(),date(2026,6,10),'dry','ifs025',1,(),None,None,()
         import re
         from PIL import Image
         rgba=np.full((4,4,4),[244,230,90,155],dtype=np.uint8)
-        with patch('app.thermal_overlay_data',return_value=(rgba,[[52,-3],[53,-2]])):
+        with patch('map_view.thermal_overlay_data',return_value=(rgba,[[52,-3],[53,-2]])):
             map_view,_=app.build_map((),NOW,layers=['Thermals'])
         document=map_view.get_root().render()
         encoded=re.search(r'data:image/png;base64,([^"\s]+)',document).group(1)

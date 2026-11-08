@@ -29,7 +29,8 @@ def requested_name(question):
 
 @st.cache_data(ttl=86400,show_spinner=False,max_entries=256)
 def geocode(name):
-    body=JsonHttpClient().get_json('https://geocoding-api.open-meteo.com/v1/search',
+    from weather_engine import transport
+    body=transport().get_json('https://geocoding-api.open-meteo.com/v1/search',
         {'name':name,'count':10,'language':'en','format':'json','countryCode':'GB'},ttl_seconds=86400).body
     rows=[p for p in body.get('results',[]) if p.get('country_code')=='GB']
     exact=[p for p in rows if normal(p.get('name',''))==normal(name)]
@@ -104,14 +105,24 @@ def sector_radius(question):
     return 20.
 
 
-@st.cache_data(ttl=1800,show_spinner=False,max_entries=96)
-def local_forecasts(point,radius,model_key,refresh_bucket):
-    from data_ingestion import OpenMeteoClient
-    from config import FORECAST_MODELS
+def sector_points(point,radius):
     from math import radians,sin,cos,asin,atan2,degrees
     points=[point];lat,lon=radians(point.latitude),radians(point.longitude);d=radius/6371
     for bearing in (0,90,180,270):
         a=radians(bearing);y=asin(sin(lat)*cos(d)+cos(lat)*sin(d)*cos(a))
         x=lon+atan2(sin(a)*sin(d)*cos(lat),cos(d)-sin(lat)*sin(y))
         points.append(GeoPoint(point.key+':sector'+str(bearing),point.name+' sector '+str(bearing)+'°',degrees(y),degrees(x)))
-    return OpenMeteoClient().fetch_batched(points,(FORECAST_MODELS[model_key],))
+    return tuple(points)
+
+
+def local_forecasts(point,radius,model_key,refresh_bucket):
+    from weather_engine import read_forecasts
+    return read_forecasts(sector_points(point,radius),model_key)
+
+
+def _clear_weather():
+    from weather_engine import resources
+    resources().clear()
+
+
+local_forecasts.clear=_clear_weather

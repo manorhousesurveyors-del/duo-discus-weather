@@ -45,37 +45,25 @@ class UKGridTests(unittest.TestCase):
         self.assertIsNone(result[0].at(source.times[-1])['temperature_2m'])
         self.assertEqual(result[0].model,FORECAST_MODELS['ukmo'].api_name)
 
-    def test_four_concurrent_chunks_schedule_once_and_keep_model_isolation(self):
-        entered=Event();release=Event();lock=Lock();count=0
-        points=grid.national_grid()
-        def fetch(chunk,model,http):
-            nonlocal count
-            self.assertLessEqual(len(chunk),45)
-            self.assertEqual(http.settings.http_timeout_seconds,6.)
-            with lock:
-                count+=1
-                if count==4:entered.set()
-            if not release.wait(5):raise AssertionError('Test did not release transport')
-            raise IngestionError('Deterministic missing coverage')
-        with patch.object(grid,'fetch_chunk',side_effect=fetch) as request:
+    def test_cycle_view_reuses_one_engine_job_without_own_transport(self):
+        raw=Future();points=grid.national_grid()
+        with patch.object(grid,'request_forecasts',return_value=raw) as request:
             bundle=grid.UKGridBundle(int(NOW.timestamp()//1800))
-            try:
-                start=perf_counter();pending=bundle.request('ifs025')
-                self.assertLess(perf_counter()-start,.3)
-                self.assertTrue(entered.wait(2),'All four requests must start concurrently')
-                for _ in range(120):self.assertIs(bundle.request('ifs025'),pending)
-                self.assertEqual(request.call_count,4)
-                self.assertTrue(all(call.args[1]==FORECAST_MODELS['ifs025'] for call in request.call_args_list))
-                self.assertEqual({p.key for call in request.call_args_list for p in call.args[0]},{p.key for p in points})
-                self.assertFalse(pending.done())
-            finally:release.set()
+            started=perf_counter();pending=bundle.request('ifs025')
+            self.assertLess(perf_counter()-started,.02)
+            for _ in range(120):self.assertIs(bundle.request('ifs025'),pending)
+            self.assertEqual(request.call_args.args,(points,'ifs025'))
+            self.assertFalse(pending.done())
+            raw.set_result(ForecastBatch((),()))
             result=pending.result(timeout=10)
-            self.assertEqual(len(result.batch.failures),len(points)*3)
             self.assertEqual(result.batch.forecasts,())
-            self.assertIs(bundle.request('ifs025'),pending)  # no retries on failure
-            other=bundle.request('ukmo');self.assertIsNot(other,pending)
-            self.assertEqual(other.result(timeout=10).batch.failures,result.batch.failures)
-            self.assertEqual(request.call_count,12)  # Same raw data across model switches.
+            self.assertIs(bundle.request('ifs025'),pending)
+            # A new retry source is observed in the SAME cycle.
+            next_source=Future();next_source.set_result(ForecastBatch((forecast(),),()))
+            request.return_value=next_source
+            recovered=bundle.request('ifs025')
+            self.assertIsNot(recovered,pending)
+            self.assertTrue(recovered.result(timeout=10).batch.forecasts)
 
     def test_task_optimizer_can_only_read_an_already_finished_grid(self):
         from route_tools import screening_forecasts
@@ -128,7 +116,7 @@ class PageNavigationTests(unittest.TestCase):
         data=Future();data.set_result(forecasts)
         snapshot=grid.assemble((data,),(tuple(f.location for f in forecasts),),FORECAST_MODELS['ifs025'],start)
         # National transport remains pending while we navigate away, then finishes.
-        pending=Future();bundle=Mock(cycle=int(fixed_now.timestamp()//1800),coverage_revision=3,wind_grid_revision=1);bundle.request.return_value=pending
+        pending=Future();bundle=Mock(cycle=int(fixed_now.timestamp()//1800),coverage_revision=3,wind_grid_revision=2);bundle.request.return_value=pending
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict('os.environ',{'DUO_DASHBOARD_SNAPSHOT':'','DUO_TASK_STORE':tmp,'GEMINI_API_KEY':''}), \
              patch.object(app,'datetime',FrozenClock), \

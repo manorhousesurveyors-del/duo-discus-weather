@@ -44,7 +44,8 @@ def load_rate_grid(url):
     parsed=urlsplit(url)
     if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise IngestionError('Calibrated radar URL must be credential-free HTTPS without query or fragment')
-    return validate_grid(JsonHttpClient().get_json(url,{},ttl_seconds=300).body)
+    from weather_engine import transport
+    return validate_grid(transport().get_json(url,{},ttl_seconds=0).body)
 
 
 def rate_at(grid,latitude,longitude):

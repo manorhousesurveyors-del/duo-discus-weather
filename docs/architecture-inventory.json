@@ -1,0 +1,2789 @@
+[
+  {
+    "path": "airspace.py",
+    "lines": 196,
+    "imports": [
+      "config",
+      "datetime",
+      "hashlib",
+      "json",
+      "json_payload",
+      "math",
+      "pathlib",
+      "re",
+      "shapely.affinity",
+      "shapely.geometry",
+      "soaring_physics",
+      "streamlit",
+      "wave_map"
+    ],
+    "cache_decorators": [
+      {
+        "function": "_read_airspace",
+        "line": 108,
+        "decorator": "st.cache_resource(show_spinner=False, max_entries=4)"
+      }
+    ],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "alerts.py",
+    "lines": 669,
+    "imports": [
+      "__future__",
+      "argparse",
+      "base64",
+      "config",
+      "contextlib",
+      "data_ingestion",
+      "database",
+      "dataclasses",
+      "datetime",
+      "day_rating",
+      "email.message",
+      "forecast_coverage",
+      "global_land_mask",
+      "hashlib",
+      "html",
+      "json",
+      "numpy",
+      "os",
+      "pathlib",
+      "re",
+      "scripts.watchdog_state",
+      "signal",
+      "smtplib",
+      "soaring_physics",
+      "sqlite3",
+      "ssl",
+      "sys",
+      "threading",
+      "time",
+      "typing",
+      "urllib.error",
+      "urllib.parse",
+      "urllib.request",
+      "uuid",
+      "watchdog_weather"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "app.py",
+    "lines": 173,
+    "imports": [
+      "__future__",
+      "app_cache",
+      "config",
+      "data_ingestion",
+      "datetime",
+      "importlib",
+      "map_modes",
+      "os",
+      "page_router",
+      "pathlib",
+      "planning_ui",
+      "runtime_imports",
+      "session_state",
+      "streamlit",
+      "time",
+      "uk_map_grid",
+      "weather_engine",
+      "weather_ui"
+    ],
+    "cache_decorators": [],
+    "session_keys": [
+      "_full_render_count",
+      "_page_render_ms",
+      "forecast_day",
+      "forecast_model",
+      "map_layers",
+      "point_probe_enabled",
+      "task_message",
+      "thermal_default",
+      "visual_mode"
+    ],
+    "network_lines": []
+  },
+  {
+    "path": "app_cache.py",
+    "lines": 52,
+    "imports": [
+      "bga_turnpoints",
+      "config",
+      "datetime",
+      "day_rating",
+      "forecast_coverage",
+      "gemini_rest",
+      "pathlib",
+      "streamlit",
+      "task_planning"
+    ],
+    "cache_decorators": [
+      {
+        "function": "catalog_resource",
+        "line": 11,
+        "decorator": "st.cache_resource(show_spinner=False, max_entries=4)"
+      },
+      {
+        "function": "covered_forecasts",
+        "line": 23,
+        "decorator": "st.cache_resource(ttl=1800, show_spinner=False, max_entries=12)"
+      },
+      {
+        "function": "day_summary",
+        "line": 30,
+        "decorator": "st.cache_data(ttl=1800, show_spinner=False, max_entries=48)"
+      },
+      {
+        "function": "assessed_task",
+        "line": 40,
+        "decorator": "st.cache_data(ttl=1800, show_spinner=False, max_entries=32)"
+      },
+      {
+        "function": "gemini_discovery",
+        "line": 46,
+        "decorator": "st.cache_data(ttl=3600, show_spinner=False, max_entries=32)"
+      }
+    ],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "assets/airfields.js",
+    "lines": 44,
+    "imports": [],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "assets/canvas_points.js",
+    "lines": 37,
+    "imports": [],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "assets/canvas_waypoints.js",
+    "lines": 5,
+    "imports": [],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "assets/map_bridge.js",
+    "lines": 47,
+    "imports": [],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "assets/map_modes.js",
+    "lines": 255,
+    "imports": [],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "assets/ogn_traffic.js",
+    "lines": 69,
+    "imports": [],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      49
+    ]
+  },
+  {
+    "path": "assets/point_forecast_meteogram.js",
+    "lines": 440,
+    "imports": [],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "assets/reference_layers.js",
+    "lines": 16,
+    "imports": [],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "assets/shared_task.js",
+    "lines": 22,
+    "imports": [],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "assets/task_canvas.js",
+    "lines": 49,
+    "imports": [],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "assets/wave_map.js",
+    "lines": 59,
+    "imports": [],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "assets/wind_glyphs.js",
+    "lines": 55,
+    "imports": [],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "atmospheric_moisture.py",
+    "lines": 60,
+    "imports": [
+      "config",
+      "math"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "bga_turnpoints.py",
+    "lines": 463,
+    "imports": [
+      "__future__",
+      "argparse",
+      "config",
+      "csv",
+      "dataclasses",
+      "datetime",
+      "hashlib",
+      "html.parser",
+      "io",
+      "json",
+      "math",
+      "os",
+      "pathlib",
+      "re",
+      "ssl",
+      "sys",
+      "tempfile",
+      "typing",
+      "urllib.parse",
+      "urllib.request"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      385,
+      427
+    ]
+  },
+  {
+    "path": "briefing_bot.py",
+    "lines": 308,
+    "imports": [
+      "__future__",
+      "bga_turnpoints",
+      "config",
+      "data_ingestion",
+      "dataclasses",
+      "datetime",
+      "gemini_rest",
+      "math",
+      "os",
+      "re",
+      "soaring_physics",
+      "task_planning",
+      "typing",
+      "wave_map"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "briefing_jobs.py",
+    "lines": 28,
+    "imports": [
+      "app_cache",
+      "functools",
+      "gemini_rest",
+      "uk_map_grid",
+      "weather_engine"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "client_map.py",
+    "lines": 111,
+    "imports": [
+      "app_cache",
+      "branca.element",
+      "config",
+      "datetime",
+      "folium",
+      "hashlib",
+      "json",
+      "json_payload",
+      "map_weather",
+      "pathlib",
+      "planning_ui",
+      "route_tools",
+      "streamlit"
+    ],
+    "cache_decorators": [
+      {
+        "function": "task_soaring_layers",
+        "line": 75,
+        "decorator": "st.cache_data(ttl=1800, show_spinner=False, max_entries=24)"
+      }
+    ],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "config.py",
+    "lines": 336,
+    "imports": [
+      "__future__",
+      "dataclasses",
+      "datetime",
+      "math",
+      "os",
+      "pathlib",
+      "types",
+      "typing",
+      "zoneinfo"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "data_ingestion.py",
+    "lines": 987,
+    "imports": [
+      "__future__",
+      "argparse",
+      "atmospheric_moisture",
+      "collections",
+      "concurrent.futures",
+      "config",
+      "copy",
+      "data_ingestion",
+      "dataclasses",
+      "datetime",
+      "email.utils",
+      "forecast_coverage",
+      "forecast_sanitizer",
+      "http.client",
+      "json",
+      "math",
+      "os",
+      "pathlib",
+      "random",
+      "re",
+      "socket",
+      "ssl",
+      "sys",
+      "tempfile",
+      "threading",
+      "time",
+      "typing",
+      "urllib.error",
+      "urllib.parse",
+      "urllib.request",
+      "weather_engine"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      169,
+      413,
+      414,
+      483,
+      544,
+      827,
+      966
+    ]
+  },
+  {
+    "path": "database.py",
+    "lines": 372,
+    "imports": [
+      "__future__",
+      "config",
+      "contextlib",
+      "dataclasses",
+      "datetime",
+      "hashlib",
+      "json",
+      "pathlib",
+      "sqlite3",
+      "typing",
+      "uuid"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "day_rating.py",
+    "lines": 71,
+    "imports": [
+      "config",
+      "dataclasses",
+      "datetime",
+      "math",
+      "soaring_physics",
+      "statistics",
+      "task_planning"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "flight_briefing.py",
+    "lines": 244,
+    "imports": [
+      "bga_turnpoints",
+      "briefing_bot",
+      "config",
+      "dataclasses",
+      "datetime",
+      "day_rating",
+      "json_payload",
+      "map_weather",
+      "math",
+      "place_resolver",
+      "re",
+      "soaring_physics",
+      "task_planning"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "forecast_coverage.py",
+    "lines": 152,
+    "imports": [
+      "config",
+      "dataclasses",
+      "datetime",
+      "forecast_sanitizer",
+      "soaring_physics"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "forecast_sanitizer.py",
+    "lines": 62,
+    "imports": [
+      "atmospheric_moisture",
+      "config",
+      "dataclasses",
+      "math",
+      "soaring_physics"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "gemini_rest.py",
+    "lines": 133,
+    "imports": [
+      "dataclasses",
+      "json",
+      "re",
+      "time",
+      "urllib.error",
+      "urllib.parse",
+      "urllib.request"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "help_guide.py",
+    "lines": 105,
+    "imports": [
+      "briefing_bot",
+      "flight_briefing",
+      "html",
+      "place_resolver",
+      "planning_ui",
+      "re",
+      "streamlit"
+    ],
+    "cache_decorators": [],
+    "session_keys": [
+      "easy_briefing"
+    ],
+    "network_lines": []
+  },
+  {
+    "path": "json_payload.py",
+    "lines": 35,
+    "imports": [
+      "collections.abc",
+      "datetime",
+      "json",
+      "math",
+      "numpy"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "map_bridge.py",
+    "lines": 13,
+    "imports": [
+      "branca.element",
+      "pathlib"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "map_component.py",
+    "lines": 104,
+    "imports": [
+      "app_cache",
+      "base64",
+      "hashlib",
+      "json",
+      "pathlib",
+      "planning_ui",
+      "re",
+      "streamlit",
+      "streamlit.components.v1",
+      "streamlit.runtime.scriptrunner",
+      "zlib"
+    ],
+    "cache_decorators": [],
+    "session_keys": [
+      "_browser_map_documents",
+      "_map_full_refresh"
+    ],
+    "network_lines": []
+  },
+  {
+    "path": "map_modes.py",
+    "lines": 48,
+    "imports": [
+      "app_cache",
+      "branca.element",
+      "client_map",
+      "folium",
+      "json",
+      "json_payload",
+      "map_weather",
+      "pathlib",
+      "streamlit",
+      "streamlit.runtime.scriptrunner"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "map_view.py",
+    "lines": 352,
+    "imports": [
+      "__future__",
+      "branca.colormap",
+      "branca.element",
+      "client_map",
+      "config",
+      "data_ingestion",
+      "folium",
+      "folium.utilities",
+      "global_land_mask",
+      "html",
+      "map_bridge",
+      "map_component",
+      "map_modes",
+      "math",
+      "numpy",
+      "plotly.graph_objects",
+      "plotly.subplots",
+      "runtime_imports",
+      "scipy.interpolate",
+      "scipy.spatial",
+      "soaring_physics",
+      "streamlit",
+      "uk_airfields",
+      "wave_map"
+    ],
+    "cache_decorators": [
+      {
+        "function": "cached_sounding",
+        "line": 82,
+        "decorator": "st.cache_data(ttl=1800, max_entries=96, show_spinner=False)"
+      },
+      {
+        "function": "cached_meteogram",
+        "line": 87,
+        "decorator": "st.cache_data(ttl=1800, max_entries=32, show_spinner=False)"
+      },
+      {
+        "function": "wave_document",
+        "line": 343,
+        "decorator": "st.cache_data(ttl=1800, show_spinner=False, max_entries=12)"
+      }
+    ],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "map_weather.py",
+    "lines": 221,
+    "imports": [
+      "__future__",
+      "config",
+      "contourpy",
+      "datetime",
+      "global_land_mask",
+      "math",
+      "numpy",
+      "scipy.interpolate",
+      "scipy.spatial",
+      "soaring_physics",
+      "task_planning"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "ogn_live.py",
+    "lines": 363,
+    "imports": [
+      "csv",
+      "datetime",
+      "io",
+      "json",
+      "math",
+      "os",
+      "re",
+      "requests",
+      "secrets",
+      "socket",
+      "threading",
+      "time",
+      "urllib.request",
+      "xml.etree.ElementTree",
+      "zoneinfo"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      44,
+      66,
+      67
+    ]
+  },
+  {
+    "path": "ogn_traffic.py",
+    "lines": 153,
+    "imports": [
+      "client_map",
+      "concurrent.futures",
+      "datetime",
+      "json",
+      "logging",
+      "ogn_live",
+      "os",
+      "pathlib",
+      "streamlit",
+      "threading",
+      "time",
+      "xml.etree.ElementTree"
+    ],
+    "cache_decorators": [
+      {
+        "function": "device_registry",
+        "line": 20,
+        "decorator": "st.cache_resource(ttl=43200, show_spinner=False)"
+      },
+      {
+        "function": "ensure_worker",
+        "line": 117,
+        "decorator": "st.cache_resource(show_spinner=False)"
+      }
+    ],
+    "session_keys": [],
+    "network_lines": [
+      23
+    ]
+  },
+  {
+    "path": "page_router.py",
+    "lines": 38,
+    "imports": [
+      "dataclasses",
+      "importlib"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "pages/__init__.py",
+    "lines": 1,
+    "imports": [],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "pages/briefing.py",
+    "lines": 15,
+    "imports": [
+      "config",
+      "planning_ui"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "pages/help.py",
+    "lines": 14,
+    "imports": [
+      "config",
+      "help_guide"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "pages/quality.py",
+    "lines": 14,
+    "imports": [
+      "planning_ui",
+      "streamlit"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "pages/task.py",
+    "lines": 42,
+    "imports": [
+      "app_cache",
+      "config",
+      "data_ingestion",
+      "map_view",
+      "planning_ui",
+      "route_analysis",
+      "route_tools",
+      "streamlit",
+      "task_planning"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "pages/traffic.py",
+    "lines": 30,
+    "imports": [
+      "app_cache",
+      "map_component",
+      "map_view",
+      "pathlib",
+      "runtime_imports",
+      "streamlit"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "pages/wave.py",
+    "lines": 47,
+    "imports": [
+      "airspace",
+      "app_cache",
+      "config",
+      "map_component",
+      "map_view",
+      "pathlib",
+      "planning_ui",
+      "soaring_physics",
+      "streamlit",
+      "uk_map_grid",
+      "wave_map",
+      "weather_engine",
+      "weather_ui"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "pages/weather.py",
+    "lines": 229,
+    "imports": [
+      "alerts",
+      "app_cache",
+      "config",
+      "data_ingestion",
+      "datetime",
+      "importlib",
+      "logging",
+      "map_component",
+      "map_view",
+      "os",
+      "page_router",
+      "planning_ui",
+      "soaring_physics",
+      "streamlit",
+      "uk_map_grid",
+      "weather_engine",
+      "weather_ui"
+    ],
+    "cache_decorators": [],
+    "session_keys": [
+      "0",
+      "_close_point_probe",
+      "_last_sounding_coordinate",
+      "last_map_event",
+      "radar_coordinate",
+      "sounding_inspector_open"
+    ],
+    "network_lines": []
+  },
+  {
+    "path": "place_resolver.py",
+    "lines": 128,
+    "imports": [
+      "config",
+      "data_ingestion",
+      "dataclasses",
+      "math",
+      "re",
+      "streamlit",
+      "uk_airfields",
+      "unicodedata",
+      "weather_engine"
+    ],
+    "cache_decorators": [
+      {
+        "function": "geocode",
+        "line": 31,
+        "decorator": "st.cache_data(ttl=86400, show_spinner=False, max_entries=256)"
+      }
+    ],
+    "session_keys": [],
+    "network_lines": [
+      33
+    ]
+  },
+  {
+    "path": "planning_ui.py",
+    "lines": 550,
+    "imports": [
+      "__future__",
+      "app_cache",
+      "bga_turnpoints",
+      "briefing_bot",
+      "briefing_jobs",
+      "config",
+      "data_ingestion",
+      "datetime",
+      "flight_briefing",
+      "gemini_rest",
+      "hashlib",
+      "json",
+      "map_modes",
+      "pandas",
+      "pathlib",
+      "place_resolver",
+      "re",
+      "route_tools",
+      "soaring_physics",
+      "streamlit",
+      "task_planning",
+      "uk_airfields",
+      "uk_map_grid",
+      "uuid",
+      "weather_engine",
+      "weather_ui"
+    ],
+    "cache_decorators": [],
+    "session_keys": [
+      "_gemini_runtime_saved",
+      "_task_full_refresh",
+      "active_task_day",
+      "active_task_points",
+      "analyse_client_task",
+      "assistant_routes",
+      "bga_result",
+      "bot_forecast_day",
+      "briefing_messages",
+      "briefing_point",
+      "gemini_active_model",
+      "gemini_connection",
+      "gemini_last_error",
+      "gemini_runtime_key",
+      "inspector_coordinate",
+      "inspector_selection",
+      "map_centre",
+      "map_layers",
+      "map_zoom",
+      "open_optimizer",
+      "pending_briefing",
+      "radar_coordinate",
+      "selected_airfield",
+      "task_add_role",
+      "task_error",
+      "task_message",
+      "task_session",
+      "task_version",
+      "visual_mode"
+    ],
+    "network_lines": []
+  },
+  {
+    "path": "point_forecast_meteogram.py",
+    "lines": 151,
+    "imports": [
+      "app_cache",
+      "atmospheric_moisture",
+      "client_map",
+      "config",
+      "datetime",
+      "math",
+      "soaring_physics",
+      "streamlit"
+    ],
+    "cache_decorators": [
+      {
+        "function": "prepare_bundle",
+        "line": 88,
+        "decorator": "st.cache_resource(ttl=1800, max_entries=12, show_spinner=False)"
+      }
+    ],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "precipitation.py",
+    "lines": 63,
+    "imports": [
+      "config",
+      "data_ingestion",
+      "datetime",
+      "math",
+      "weather_engine"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      23
+    ]
+  },
+  {
+    "path": "radar_rates.py",
+    "lines": 67,
+    "imports": [
+      "PIL",
+      "base64",
+      "data_ingestion",
+      "datetime",
+      "folium.utilities",
+      "io",
+      "math",
+      "numpy",
+      "urllib.parse",
+      "weather_engine"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      48
+    ]
+  },
+  {
+    "path": "route_analysis.py",
+    "lines": 278,
+    "imports": [
+      "airspace",
+      "app_cache",
+      "client_map",
+      "config",
+      "data_ingestion",
+      "datetime",
+      "folium",
+      "global_land_mask",
+      "html",
+      "json",
+      "map_component",
+      "math",
+      "numpy",
+      "pathlib",
+      "planning_ui",
+      "route_tools",
+      "soaring_physics",
+      "streamlit",
+      "task_import",
+      "task_planning",
+      "uk_airfields",
+      "uk_map_grid",
+      "wave_map",
+      "weather_engine",
+      "weather_ui"
+    ],
+    "cache_decorators": [],
+    "session_keys": [
+      "pending_route_analysis",
+      "route_analysis"
+    ],
+    "network_lines": [
+      103
+    ]
+  },
+  {
+    "path": "route_tools.py",
+    "lines": 142,
+    "imports": [
+      "__future__",
+      "briefing_bot",
+      "config",
+      "data_ingestion",
+      "hashlib",
+      "os",
+      "planning_ui",
+      "streamlit",
+      "task_planning",
+      "task_sheet",
+      "urllib.parse",
+      "weather_ui"
+    ],
+    "cache_decorators": [
+      {
+        "function": "build_exports",
+        "line": 89,
+        "decorator": "st.cache_data(ttl=900, show_spinner=False, max_entries=24)"
+      }
+    ],
+    "session_keys": [
+      "optimiser_result",
+      "optimizer_job"
+    ],
+    "network_lines": []
+  },
+  {
+    "path": "runtime_imports.py",
+    "lines": 102,
+    "imports": [
+      "importlib",
+      "inspect",
+      "logging",
+      "sys",
+      "threading"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "scripts/architecture_fixture.py",
+    "lines": 34,
+    "imports": [
+      "app",
+      "datetime",
+      "os",
+      "pathlib",
+      "streamlit",
+      "sys",
+      "tests.provider_fixture",
+      "weather_engine"
+    ],
+    "cache_decorators": [
+      {
+        "function": "install",
+        "line": 21,
+        "decorator": "st.cache_resource"
+      }
+    ],
+    "session_keys": [
+      "_page_render_ms"
+    ],
+    "network_lines": []
+  },
+  {
+    "path": "scripts/audit_architecture.py",
+    "lines": 28,
+    "imports": [
+      "ast",
+      "json",
+      "pathlib",
+      "re",
+      "subprocess"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "scripts/find_watchdog_state.js",
+    "lines": 55,
+    "imports": [],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "scripts/forecast_coverage_fixture.py",
+    "lines": 11,
+    "imports": [
+      "alerts",
+      "config",
+      "pathlib",
+      "tests.test_forecast_coverage"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "scripts/fresh_forecast_fixture.py",
+    "lines": 36,
+    "imports": [
+      "app",
+      "data_ingestion",
+      "datetime",
+      "os",
+      "pathlib",
+      "streamlit",
+      "sys",
+      "tests.test_fresh_forecast",
+      "time",
+      "uk_map_grid"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "scripts/gemini_browser_fixture.py",
+    "lines": 32,
+    "imports": [
+      "app",
+      "gemini_rest",
+      "json",
+      "os",
+      "pathlib",
+      "streamlit",
+      "sys"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "scripts/point_probe_fixture.py",
+    "lines": 31,
+    "imports": [
+      "alerts",
+      "config",
+      "datetime",
+      "math",
+      "pathlib",
+      "tests.fixtures"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "scripts/run_architecture_checks.py",
+    "lines": 30,
+    "imports": [
+      "os",
+      "pathlib",
+      "socket",
+      "subprocess",
+      "sys",
+      "tempfile",
+      "time",
+      "urllib.request"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      21
+    ]
+  },
+  {
+    "path": "scripts/update_airspace.py",
+    "lines": 158,
+    "imports": [
+      "airspace",
+      "argparse",
+      "config",
+      "datetime",
+      "hashlib",
+      "json",
+      "math",
+      "pathlib",
+      "re",
+      "shapely",
+      "shapely.geometry",
+      "soaring_physics",
+      "sys",
+      "urllib.request",
+      "wave_map",
+      "yaml"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      121,
+      123,
+      138,
+      144
+    ]
+  },
+  {
+    "path": "scripts/update_continuous_terrain.py",
+    "lines": 45,
+    "imports": [
+      "concurrent.futures",
+      "datetime",
+      "hashlib",
+      "json",
+      "math",
+      "numpy",
+      "pathlib",
+      "scipy.ndimage",
+      "scripts.update_wave_terrain",
+      "sys",
+      "terrain_wave"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "scripts/update_wave_terrain.py",
+    "lines": 75,
+    "imports": [
+      "PIL",
+      "concurrent.futures",
+      "datetime",
+      "hashlib",
+      "io",
+      "json",
+      "math",
+      "numpy",
+      "pathlib",
+      "scipy.ndimage",
+      "sys",
+      "terrain_wave",
+      "urllib.request"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      29
+    ]
+  },
+  {
+    "path": "scripts/verify_architecture.py",
+    "lines": 103,
+    "imports": [
+      "argparse",
+      "asyncio",
+      "json",
+      "os",
+      "pathlib",
+      "playwright.async_api",
+      "re",
+      "shutil",
+      "time"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "scripts/verify_client_maps.py",
+    "lines": 219,
+    "imports": [
+      "argparse",
+      "asyncio",
+      "json",
+      "pathlib",
+      "playwright.async_api",
+      "time",
+      "urllib.request"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      27,
+      30
+    ]
+  },
+  {
+    "path": "scripts/verify_cloud_graphics.py",
+    "lines": 72,
+    "imports": [
+      "asyncio",
+      "base64",
+      "json",
+      "pathlib",
+      "playwright.async_api",
+      "subprocess",
+      "verify_thermal_probe"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "scripts/verify_forecast_coverage.py",
+    "lines": 71,
+    "imports": [
+      "asyncio",
+      "json",
+      "pathlib",
+      "playwright.async_api"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "scripts/verify_fresh_forecast.py",
+    "lines": 50,
+    "imports": [
+      "asyncio",
+      "json",
+      "pathlib",
+      "playwright.async_api"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "scripts/verify_gemini_browser.py",
+    "lines": 64,
+    "imports": [
+      "asyncio",
+      "json",
+      "pathlib",
+      "playwright.async_api",
+      "re"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "scripts/verify_lazy_pages.py",
+    "lines": 88,
+    "imports": [
+      "asyncio",
+      "json",
+      "pathlib",
+      "playwright.async_api",
+      "time"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "scripts/verify_live_ogn_app.py",
+    "lines": 108,
+    "imports": [
+      "asyncio",
+      "datetime",
+      "json",
+      "os",
+      "pathlib",
+      "playwright.async_api",
+      "subprocess",
+      "tempfile",
+      "time",
+      "urllib.request"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      28,
+      30,
+      100
+    ]
+  },
+  {
+    "path": "scripts/verify_point_probe.py",
+    "lines": 228,
+    "imports": [
+      "asyncio",
+      "base64",
+      "json",
+      "pathlib",
+      "playwright.async_api",
+      "statistics",
+      "time"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "scripts/verify_route_drag.py",
+    "lines": 64,
+    "imports": [
+      "asyncio",
+      "json",
+      "pathlib",
+      "playwright.async_api",
+      "urllib.request"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      13,
+      15
+    ]
+  },
+  {
+    "path": "scripts/verify_thermal_probe.py",
+    "lines": 82,
+    "imports": [
+      "asyncio",
+      "base64",
+      "json",
+      "pathlib",
+      "playwright.async_api",
+      "subprocess"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "scripts/verify_wind_display.py",
+    "lines": 215,
+    "imports": [
+      "app",
+      "argparse",
+      "asyncio",
+      "datetime",
+      "json",
+      "map_weather",
+      "pathlib",
+      "playwright.async_api",
+      "sys",
+      "tests.fixtures",
+      "urllib.request"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      65,
+      67
+    ]
+  },
+  {
+    "path": "scripts/verify_wind_ogn.py",
+    "lines": 152,
+    "imports": [
+      "app",
+      "argparse",
+      "asyncio",
+      "bga_turnpoints",
+      "datetime",
+      "json",
+      "map_weather",
+      "pathlib",
+      "playwright.async_api",
+      "sys",
+      "tests.fixtures",
+      "urllib.request"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      55,
+      57
+    ]
+  },
+  {
+    "path": "scripts/watchdog_state.py",
+    "lines": 118,
+    "imports": [
+      "__future__",
+      "argparse",
+      "contextlib",
+      "database",
+      "datetime",
+      "json",
+      "os",
+      "pathlib",
+      "sqlite3",
+      "sys",
+      "tempfile",
+      "uuid"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "session_state.py",
+    "lines": 15,
+    "imports": [],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "soaring_physics.py",
+    "lines": 607,
+    "imports": [
+      "__future__",
+      "config",
+      "data_ingestion",
+      "dataclasses",
+      "datetime",
+      "math",
+      "numpy",
+      "typing"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "task_import.py",
+    "lines": 51,
+    "imports": [
+      "bga_turnpoints",
+      "csv",
+      "io",
+      "re",
+      "task_planning",
+      "xml.etree.ElementTree"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "task_planning.py",
+    "lines": 463,
+    "imports": [
+      "__future__",
+      "bga_turnpoints",
+      "config",
+      "csv",
+      "data_ingestion",
+      "dataclasses",
+      "datetime",
+      "hashlib",
+      "io",
+      "json",
+      "math",
+      "os",
+      "pathlib",
+      "soaring_physics",
+      "typing",
+      "xml.etree.ElementTree"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "task_sheet.py",
+    "lines": 257,
+    "imports": [
+      "PIL",
+      "__future__",
+      "briefing_bot",
+      "config",
+      "dataclasses",
+      "datetime",
+      "docx",
+      "docx.enum.section",
+      "docx.oxml",
+      "docx.shared",
+      "global_land_mask",
+      "io",
+      "math",
+      "numpy",
+      "pathlib",
+      "pygeomag",
+      "qrcode",
+      "re",
+      "reportlab.lib",
+      "reportlab.lib.pagesizes",
+      "reportlab.lib.styles",
+      "reportlab.pdfbase",
+      "reportlab.pdfbase.ttfonts",
+      "reportlab.platypus",
+      "secrets",
+      "shutil",
+      "soaring_physics",
+      "task_planning",
+      "time",
+      "urllib.parse",
+      "xml.sax.saxutils"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "terrain_wave.py",
+    "lines": 230,
+    "imports": [
+      "config",
+      "functools",
+      "hashlib",
+      "json",
+      "math",
+      "numpy",
+      "pathlib",
+      "scipy.fft",
+      "scipy.ndimage",
+      "soaring_physics",
+      "streamlit",
+      "wave_map"
+    ],
+    "cache_decorators": [
+      {
+        "function": "load_continuous_terrain",
+        "line": 167,
+        "decorator": "st.cache_resource(show_spinner=False, max_entries=1)"
+      }
+    ],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/__init__.py",
+    "lines": 1,
+    "imports": [],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/fixtures.py",
+    "lines": 59,
+    "imports": [
+      "config",
+      "data_ingestion",
+      "dataclasses",
+      "datetime",
+      "os"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/provider_fixture.py",
+    "lines": 38,
+    "imports": [
+      "config",
+      "datetime",
+      "json",
+      "tests.fixtures",
+      "tests.test_ingestion",
+      "threading",
+      "time",
+      "urllib.error",
+      "urllib.parse"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_airspace_sources.py",
+    "lines": 60,
+    "imports": [
+      "airspace",
+      "config",
+      "datetime",
+      "json",
+      "pathlib",
+      "scripts.update_airspace",
+      "shapely.geometry",
+      "unittest",
+      "unittest.mock"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_alerts.py",
+    "lines": 231,
+    "imports": [
+      "alerts",
+      "config",
+      "database",
+      "dataclasses",
+      "datetime",
+      "io",
+      "json",
+      "pathlib",
+      "scripts.watchdog_state",
+      "smtplib",
+      "soaring_physics",
+      "tempfile",
+      "tests.fixtures",
+      "tests.test_ingestion",
+      "unittest",
+      "unittest.mock",
+      "urllib.error",
+      "urllib.parse"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_bga_turnpoints.py",
+    "lines": 94,
+    "imports": [
+      "bga_turnpoints",
+      "dataclasses",
+      "json",
+      "pathlib",
+      "tempfile",
+      "unittest"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_briefing_bot.py",
+    "lines": 47,
+    "imports": [
+      "bga_turnpoints",
+      "briefing_bot",
+      "dataclasses",
+      "task_planning",
+      "tests.test_task_planning",
+      "unittest",
+      "unittest.mock"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_briefing_jobs.py",
+    "lines": 32,
+    "imports": [
+      "app_cache",
+      "briefing_jobs",
+      "gemini_rest",
+      "threading",
+      "time",
+      "unittest",
+      "unittest.mock",
+      "weather_engine"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_cloud_moisture.py",
+    "lines": 82,
+    "imports": [
+      "atmospheric_moisture",
+      "config",
+      "data_ingestion",
+      "dataclasses",
+      "forecast_coverage",
+      "json",
+      "pathlib",
+      "point_forecast_meteogram",
+      "shutil",
+      "soaring_physics",
+      "subprocess",
+      "tests.fixtures",
+      "unittest",
+      "unittest.mock"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      40
+    ]
+  },
+  {
+    "path": "tests/test_config.py",
+    "lines": 77,
+    "imports": [
+      "config",
+      "datetime",
+      "math",
+      "unittest"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_dashboard.py",
+    "lines": 85,
+    "imports": [
+      "alerts",
+      "app",
+      "config",
+      "data_ingestion",
+      "datetime",
+      "pathlib",
+      "soaring_physics",
+      "streamlit.testing.v1",
+      "tempfile",
+      "tests.fixtures",
+      "unittest",
+      "unittest.mock",
+      "weather_ui"
+    ],
+    "cache_decorators": [],
+    "session_keys": [
+      "sounding_inspector_open"
+    ],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_database.py",
+    "lines": 150,
+    "imports": [
+      "concurrent.futures",
+      "config",
+      "database",
+      "datetime",
+      "pathlib",
+      "scripts.watchdog_state",
+      "sqlite3",
+      "tempfile",
+      "unittest"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_flight_overhaul.py",
+    "lines": 108,
+    "imports": [
+      "bga_turnpoints",
+      "briefing_bot",
+      "config",
+      "datetime",
+      "flight_briefing",
+      "gemini_rest",
+      "io",
+      "json",
+      "numpy",
+      "terrain_wave",
+      "tests.fixtures",
+      "unittest",
+      "unittest.mock",
+      "urllib.error",
+      "urllib.parse"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_forecast_coverage.py",
+    "lines": 176,
+    "imports": [
+      "alerts",
+      "app",
+      "app_cache",
+      "concurrent.futures",
+      "config",
+      "data_ingestion",
+      "dataclasses",
+      "datetime",
+      "day_rating",
+      "forecast_coverage",
+      "json",
+      "map_weather",
+      "pathlib",
+      "point_forecast_meteogram",
+      "soaring_physics",
+      "streamlit.testing.v1",
+      "tempfile",
+      "tests.fixtures",
+      "uk_map_grid",
+      "unittest",
+      "unittest.mock"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_fresh_forecast.py",
+    "lines": 139,
+    "imports": [
+      "app",
+      "concurrent.futures",
+      "config",
+      "data_ingestion",
+      "dataclasses",
+      "datetime",
+      "day_rating",
+      "forecast_coverage",
+      "os",
+      "pathlib",
+      "streamlit.testing.v1",
+      "tempfile",
+      "tests.fixtures",
+      "uk_map_grid",
+      "unittest",
+      "unittest.mock",
+      "weather_engine"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_grid_navigation.py",
+    "lines": 177,
+    "imports": [
+      "app",
+      "concurrent.futures",
+      "config",
+      "data_ingestion",
+      "datetime",
+      "numpy",
+      "pathlib",
+      "route_tools",
+      "streamlit.testing.v1",
+      "tempfile",
+      "tests.fixtures",
+      "threading",
+      "time",
+      "uk_map_grid",
+      "unittest",
+      "unittest.mock",
+      "urllib.error"
+    ],
+    "cache_decorators": [],
+    "session_keys": [
+      "uk_map_grid_bundle"
+    ],
+    "network_lines": [
+      28
+    ]
+  },
+  {
+    "path": "tests/test_ingestion.py",
+    "lines": 390,
+    "imports": [
+      "config",
+      "data_ingestion",
+      "dataclasses",
+      "datetime",
+      "io",
+      "json",
+      "pathlib",
+      "ssl",
+      "tempfile",
+      "unittest",
+      "urllib.error",
+      "urllib.parse",
+      "urllib.request"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      92,
+      168,
+      170,
+      190,
+      195,
+      245,
+      248,
+      255,
+      276,
+      355,
+      357,
+      365,
+      369,
+      376,
+      378
+    ]
+  },
+  {
+    "path": "tests/test_instant_maps.py",
+    "lines": 153,
+    "imports": [
+      "airspace",
+      "alerts",
+      "base64",
+      "bga_turnpoints",
+      "config",
+      "dataclasses",
+      "datetime",
+      "day_rating",
+      "json",
+      "numpy",
+      "ogn_traffic",
+      "pathlib",
+      "planning_ui",
+      "route_tools",
+      "soaring_physics",
+      "tempfile",
+      "terrain_wave",
+      "tests.fixtures",
+      "tests.test_ingestion",
+      "tests.test_task_planning",
+      "unittest",
+      "unittest.mock",
+      "zlib"
+    ],
+    "cache_decorators": [],
+    "session_keys": [
+      "task_error"
+    ],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_lazy_local.py",
+    "lines": 188,
+    "imports": [
+      "alerts",
+      "app",
+      "app_cache",
+      "base64",
+      "bga_turnpoints",
+      "config",
+      "dataclasses",
+      "datetime",
+      "flight_briefing",
+      "folium",
+      "gemini_rest",
+      "json",
+      "json_payload",
+      "map_component",
+      "numpy",
+      "pathlib",
+      "place_resolver",
+      "planning_ui",
+      "soaring_physics",
+      "streamlit.testing.v1",
+      "tempfile",
+      "terrain_wave",
+      "tests.fixtures",
+      "tests.test_task_planning",
+      "unittest",
+      "unittest.mock",
+      "wave_map",
+      "zlib"
+    ],
+    "cache_decorators": [],
+    "session_keys": [
+      "active_task_points"
+    ],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_map_modes.py",
+    "lines": 110,
+    "imports": [
+      "config",
+      "data_ingestion",
+      "datetime",
+      "folium",
+      "json",
+      "map_modes",
+      "map_weather",
+      "math",
+      "radar_rates",
+      "soaring_physics",
+      "tests.fixtures",
+      "unittest",
+      "unittest.mock"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_map_transport.py",
+    "lines": 37,
+    "imports": [
+      "map_component",
+      "pathlib",
+      "shutil",
+      "subprocess",
+      "unittest",
+      "unittest.mock"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_map_upgrades.py",
+    "lines": 205,
+    "imports": [
+      "airspace",
+      "app",
+      "ast",
+      "bga_turnpoints",
+      "config",
+      "data_ingestion",
+      "dataclasses",
+      "datetime",
+      "json",
+      "map_weather",
+      "numpy",
+      "pathlib",
+      "planning_ui",
+      "route_analysis",
+      "shutil",
+      "soaring_physics",
+      "subprocess",
+      "task_import",
+      "task_planning",
+      "tempfile",
+      "tests.fixtures",
+      "tests.test_task_planning",
+      "uk_airfields",
+      "unittest",
+      "unittest.mock",
+      "wave_map"
+    ],
+    "cache_decorators": [],
+    "session_keys": [
+      "visual_mode"
+    ],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_ogn_live.py",
+    "lines": 112,
+    "imports": [
+      "datetime",
+      "json",
+      "ogn_live",
+      "ogn_traffic",
+      "pathlib",
+      "tempfile",
+      "time",
+      "unittest",
+      "unittest.mock"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      68
+    ]
+  },
+  {
+    "path": "tests/test_ogn_stream.py",
+    "lines": 176,
+    "imports": [
+      "app",
+      "ast",
+      "concurrent.futures",
+      "datetime",
+      "importlib",
+      "math",
+      "ogn_live",
+      "ogn_traffic",
+      "os",
+      "pathlib",
+      "streamlit.testing.v1",
+      "subprocess",
+      "sys",
+      "tempfile",
+      "tests.test_ogn_live",
+      "threading",
+      "types",
+      "uk_map_grid",
+      "unittest",
+      "unittest.mock"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      81,
+      82,
+      89
+    ]
+  },
+  {
+    "path": "tests/test_physics.py",
+    "lines": 136,
+    "imports": [
+      "config",
+      "dataclasses",
+      "datetime",
+      "math",
+      "numpy",
+      "soaring_physics",
+      "tests.fixtures",
+      "unittest",
+      "unittest.mock"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_planning_ui.py",
+    "lines": 226,
+    "imports": [
+      "PIL",
+      "alerts",
+      "app",
+      "ast",
+      "base64",
+      "bga_turnpoints",
+      "config",
+      "datetime",
+      "io",
+      "numpy",
+      "pathlib",
+      "planning_ui",
+      "re",
+      "route_tools",
+      "streamlit.testing.v1",
+      "task_planning",
+      "tempfile",
+      "tests.fixtures",
+      "tests.test_task_planning",
+      "unittest",
+      "unittest.mock"
+    ],
+    "cache_decorators": [],
+    "session_keys": [
+      "0",
+      "2026-06-10",
+      "assistant_routes",
+      "briefing_messages",
+      "content",
+      "easy_briefing",
+      "map_layers",
+      "optimiser_result",
+      "radar_coordinate",
+      "sidebar_task_builder_open",
+      "tasks_by_day",
+      "visual_mode"
+    ],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_point_forecast.py",
+    "lines": 154,
+    "imports": [
+      "alerts",
+      "app",
+      "app_cache",
+      "ast",
+      "concurrent.futures",
+      "config",
+      "dataclasses",
+      "datetime",
+      "json",
+      "numpy",
+      "pathlib",
+      "point_forecast_meteogram",
+      "soaring_physics",
+      "streamlit.testing.v1",
+      "tempfile",
+      "tests.fixtures",
+      "types",
+      "uk_map_grid",
+      "unittest",
+      "unittest.mock"
+    ],
+    "cache_decorators": [],
+    "session_keys": [
+      "point_probe_enabled"
+    ],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_precipitation.py",
+    "lines": 100,
+    "imports": [
+      "app",
+      "config",
+      "copy",
+      "data_ingestion",
+      "datetime",
+      "json",
+      "precipitation",
+      "tests.fixtures",
+      "unittest",
+      "unittest.mock",
+      "weather_engine"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      22,
+      27,
+      48,
+      50,
+      67,
+      70
+    ]
+  },
+  {
+    "path": "tests/test_runtime_imports.py",
+    "lines": 113,
+    "imports": [
+      "alerts",
+      "ast",
+      "importlib",
+      "ogn_traffic",
+      "os",
+      "pathlib",
+      "runtime_imports",
+      "streamlit.testing.v1",
+      "subprocess",
+      "sys",
+      "tempfile",
+      "tests.fixtures",
+      "types",
+      "unittest",
+      "unittest.mock"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_task_planning.py",
+    "lines": 159,
+    "imports": [
+      "bga_turnpoints",
+      "config",
+      "csv",
+      "dataclasses",
+      "datetime",
+      "io",
+      "soaring_physics",
+      "task_planning",
+      "tempfile",
+      "tests.fixtures",
+      "unittest",
+      "unittest.mock",
+      "xml.etree.ElementTree"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_task_sheet.py",
+    "lines": 109,
+    "imports": [
+      "PIL",
+      "bga_turnpoints",
+      "csv",
+      "dataclasses",
+      "datetime",
+      "docx",
+      "io",
+      "pathlib",
+      "route_tools",
+      "task_planning",
+      "task_sheet",
+      "tempfile",
+      "tests.test_task_planning",
+      "unittest",
+      "unittest.mock",
+      "xml.etree.ElementTree",
+      "zipfile"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_thermal_revision.py",
+    "lines": 113,
+    "imports": [
+      "config",
+      "data_ingestion",
+      "dataclasses",
+      "datetime",
+      "math",
+      "point_forecast_meteogram",
+      "soaring_physics",
+      "tests.fixtures",
+      "types",
+      "unittest",
+      "unittest.mock"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_unified_update.py",
+    "lines": 132,
+    "imports": [
+      "app",
+      "bga_turnpoints",
+      "briefing_bot",
+      "config",
+      "data_ingestion",
+      "datetime",
+      "gemini_rest",
+      "json",
+      "json_payload",
+      "map_component",
+      "numpy",
+      "pathlib",
+      "planning_ui",
+      "streamlit.testing.v1",
+      "tempfile",
+      "tests.fixtures",
+      "tests.test_ingestion",
+      "types",
+      "unittest",
+      "unittest.mock",
+      "wave_map"
+    ],
+    "cache_decorators": [],
+    "session_keys": [
+      "2026-10-24",
+      "briefing_messages",
+      "content",
+      "tasks_by_day"
+    ],
+    "network_lines": [
+      113
+    ]
+  },
+  {
+    "path": "tests/test_watchdog_budget.py",
+    "lines": 166,
+    "imports": [
+      "alerts",
+      "config",
+      "data_ingestion",
+      "database",
+      "dataclasses",
+      "datetime",
+      "day_rating",
+      "io",
+      "json",
+      "os",
+      "pathlib",
+      "signal",
+      "subprocess",
+      "tempfile",
+      "tests.fixtures",
+      "tests.test_forecast_coverage",
+      "threading",
+      "time",
+      "unittest",
+      "unittest.mock",
+      "urllib.error",
+      "watchdog_weather",
+      "yaml"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      44
+    ]
+  },
+  {
+    "path": "tests/test_watchdog_recovery.py",
+    "lines": 138,
+    "imports": [
+      "alerts",
+      "database",
+      "dataclasses",
+      "datetime",
+      "io",
+      "json",
+      "os",
+      "pathlib",
+      "scripts.watchdog_state",
+      "shutil",
+      "sqlite3",
+      "subprocess",
+      "tempfile",
+      "tests.fixtures",
+      "unittest",
+      "unittest.mock",
+      "yaml"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_weather_engine.py",
+    "lines": 195,
+    "imports": [
+      "concurrent.futures",
+      "config",
+      "data_ingestion",
+      "dataclasses",
+      "datetime",
+      "day_rating",
+      "forecast_coverage",
+      "forecast_sanitizer",
+      "session_state",
+      "tests.fixtures",
+      "tests.provider_fixture",
+      "tests.test_ingestion",
+      "threading",
+      "time",
+      "unittest",
+      "unittest.mock",
+      "urllib.error",
+      "weather_engine"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      79,
+      81,
+      84,
+      89,
+      138
+    ]
+  },
+  {
+    "path": "tests/test_wind_display.py",
+    "lines": 77,
+    "imports": [
+      "app",
+      "client_map",
+      "json",
+      "math",
+      "pathlib",
+      "shutil",
+      "subprocess",
+      "tests.fixtures",
+      "unittest"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "tests/test_wind_domain.py",
+    "lines": 53,
+    "imports": [
+      "dataclasses",
+      "json",
+      "map_weather",
+      "math",
+      "numpy",
+      "tests.fixtures",
+      "unittest"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "uk_airfields.py",
+    "lines": 109,
+    "imports": [
+      "bga_turnpoints",
+      "branca.element",
+      "client_map",
+      "config",
+      "dataclasses",
+      "json",
+      "json_payload",
+      "pathlib",
+      "soaring_physics",
+      "streamlit"
+    ],
+    "cache_decorators": [
+      {
+        "function": "load_airfields",
+        "line": 48,
+        "decorator": "st.cache_resource(show_spinner=False, max_entries=1)"
+      },
+      {
+        "function": "airfield_records",
+        "line": 102,
+        "decorator": "st.cache_resource(show_spinner=False, max_entries=1)"
+      }
+    ],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "uk_map_grid.py",
+    "lines": 155,
+    "imports": [
+      "concurrent.futures",
+      "config",
+      "data_ingestion",
+      "dataclasses",
+      "datetime",
+      "forecast_coverage",
+      "map_weather",
+      "numpy",
+      "streamlit",
+      "threading",
+      "weather_engine"
+    ],
+    "cache_decorators": [
+      {
+        "function": "load_uk_map_grid",
+        "line": 117,
+        "decorator": "st.cache_resource(ttl=1800, max_entries=2, show_spinner=False)"
+      }
+    ],
+    "session_keys": [
+      "uk_map_grid_bundle"
+    ],
+    "network_lines": []
+  },
+  {
+    "path": "watchdog_weather.py",
+    "lines": 3,
+    "imports": [
+      "weather_engine"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "wave_map.py",
+    "lines": 166,
+    "imports": [
+      "PIL",
+      "airspace",
+      "app_cache",
+      "base64",
+      "client_map",
+      "config",
+      "folium",
+      "html",
+      "io",
+      "math",
+      "numpy",
+      "streamlit",
+      "streamlit.runtime.scriptrunner",
+      "terrain_wave",
+      "zlib"
+    ],
+    "cache_decorators": [
+      {
+        "function": "cached_wave_payload",
+        "line": 136,
+        "decorator": "st.cache_data(ttl=1800, show_spinner=False, max_entries=12)"
+      }
+    ],
+    "session_keys": [],
+    "network_lines": []
+  },
+  {
+    "path": "weather_engine.py",
+    "lines": 374,
+    "imports": [
+      "collections",
+      "concurrent.futures",
+      "config",
+      "data_ingestion",
+      "dataclasses",
+      "forecast_sanitizer",
+      "queue",
+      "threading",
+      "time",
+      "urllib.parse"
+    ],
+    "cache_decorators": [],
+    "session_keys": [],
+    "network_lines": [
+      70,
+      79
+    ]
+  },
+  {
+    "path": "weather_ui.py",
+    "lines": 174,
+    "imports": [
+      "alerts",
+      "config",
+      "data_ingestion",
+      "datetime",
+      "pathlib",
+      "precipitation",
+      "radar_rates",
+      "re",
+      "soaring_physics",
+      "streamlit",
+      "streamlit.runtime.scriptrunner",
+      "uk_airfields",
+      "uk_map_grid",
+      "weather_engine"
+    ],
+    "cache_decorators": [
+      {
+        "function": "load_recorded",
+        "line": 32,
+        "decorator": "st.cache_resource(max_entries=2, show_spinner=False)"
+      }
+    ],
+    "session_keys": [],
+    "network_lines": [
+      85,
+      94,
+      109
+    ]
+  }
+]

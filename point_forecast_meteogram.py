@@ -11,7 +11,7 @@ from config import LOCAL_TIMEZONE, METRES_TO_FEET, MPS_TO_KNOTS
 from soaring_physics import Profile, evaluate_thermals, wind_components
 from atmospheric_moisture import dewpoint, relative_humidity, ice_relative_humidity
 
-PROBE_API_REVISION = 5
+PROBE_API_REVISION = 6
 LEVELS = (950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200)
 PRESSURE_FIELDS = ('height_ft','rh','u','v','cloud_cover','temperature','dewpoint','rh_ice')
 FIELDS = ('temperature', 'dewpoint', 'depth', 'climb', 'heat', 'solar',
@@ -142,10 +142,10 @@ def observation_payload(aviation):
     return reports
 
 
-def add_probe(map_view,forecasts,day,*,aviation=None,loading='dry'):
+def add_probe(map_view,forecasts,day,*,aviation=None,loading='dry',prepared=None):
     """Attach only to an enabled Weather map. A failure remains local to it."""
     from app_cache import forecast_run_id
     from client_map import script
-    payload={**prepare_bundle(forecast_run_id(forecasts),day,loading,_forecasts=tuple(forecasts)),
+    payload={**(prepared if prepared is not None else prepare_bundle(forecast_run_id(forecasts),day,loading,_forecasts=tuple(forecasts))),
              'observations':observation_payload(aviation)}
     script(map_view,'point_forecast_meteogram.js','installDuoPointProbe',payload)

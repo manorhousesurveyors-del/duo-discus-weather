@@ -1,6 +1,10 @@
 /* Independent Windy/SkySight-inspired UI. Forecast sources remain explicit. */
 function installDuoModes(map, data) {
   'use strict';
+  data={samples:[],contours:{type:'FeatureCollection',features:[]},modes:{},...data};
+  data.samples=Array.isArray(data.samples)?data.samples.filter(Boolean):[];
+  data.modes=data.modes&&typeof data.modes==='object'?data.modes:{};
+  if(!Array.isArray(data.contours?.features))data.contours={type:'FeatureCollection',features:[]};
   map._duoMode=data.mode;
   if(['wind','thermal','pfd','xc','stf'].includes(data.mode))map._duoClientClicks=true;
   if (map._duoCleanup) map._duoCleanup();
@@ -120,14 +124,26 @@ function installDuoModes(map, data) {
       radarClick([data.radar_point.latitude,data.radar_point.longitude],data.radar_point);
   }
   let windClick=null;
-  if(data.mode==='wind'&&data.wind){
-    const w=data.wind,signature=w.times[0];let level=0,index=0;
+  if(data.mode==='wind'){
+    // Controls belong to the view, not to a successful forecast response.
+    const raw=data.wind||{},base=Date.parse(data.when)||Date.now();
+    const times=Array.isArray(raw.times)&&raw.times.length?raw.times:Array.from({length:120},(_,i)=>new Date(base+i*3600000).toISOString());
+    const w={...raw,times,grid:raw.grid||{},stations:Array.isArray(raw.stations)?raw.stations:[],
+      levels:Array.isArray(raw.levels)&&raw.levels.length?raw.levels:['Surface · 10 m','950 hPa','850 hPa','800 hPa','700 hPa','500 hPa'],
+      labels:Array.isArray(raw.labels)&&raw.labels.length===times.length?raw.labels:times,
+      source:raw.source||'Awaiting verified weather'};
+    const signature=w.times[0];let level=0,index=0;
     try{const saved=JSON.parse(sessionStorage.getItem('duo-wind')||'null');if(saved&&saved.signature===signature){level=saved.level;index=saved.index;}else{index=Math.max(0,w.times.findIndex(t=>new Date(t)>=new Date(data.when)));}}catch(e){}
+    if(!Number.isInteger(level)||level<0||level>=w.levels.length)level=0;
+    if(!Number.isInteger(index)||index<0||index>=w.times.length)index=0;
     const save=()=>{try{sessionStorage.setItem('duo-wind',JSON.stringify({signature,level,index}));}catch(e){}};
     const altitude=control('topleft','duo-altitude',w.levels.map((label,i)=>'<button data-level="'+i+'" aria-pressed="'+(i===level)+'" title="Pressure-level height is approximate. Missing levels use log-pressure vector interpolation; underground levels show labelled surface wind.">'+esc(label)+'</button>').join(''));
     const timeline=control('bottomleft','duo-timeline','<label for="duo-wind-time">'+esc(w.labels[index])+'</label><input id="duo-wind-time" aria-label="Five-day hourly wind timeline" title="Move through five days. Grey or empty coverage means this model has no data for that hour." type="range" min="0" max="'+(w.times.length-1)+'" value="'+index+'"><button class="duo-play" title="Play or pause the wind forecast timeline.">▶ Play timeline</button><small>Model forecast · '+esc(w.source)+'. Black arrows move with the wind; barbs point into it. Spatial gap estimates: '+(w.coverage?.spatial_estimates||0)+'; furthest nearest source '+(w.coverage?.max_nearest_source_km||0)+' km. Estimates get less reliable across large gaps.</small>');
-    const displayBar=control('topright','duo-altitude','<button data-wind-display title="Switch instantly between arrows moving with the wind and meteorological barbs pointing into it. Map-click inspection works in both views." aria-pressed="false">Wind Display: Streaming Arrows</button>');
-    const displayButton=displayBar.querySelector('button');
+    const displayBar=control('topright','duo-altitude',[
+      ['arrows','Streaming Wind','Black arrows follow the wind. Click the map for the forecast at every height.'],
+      ['barbs','Wind Barbs','Black barbs point into the wind. Feathers show speed in knots.'],
+      ['off','Wind Off','Hide all wind marks. The map and point inspection remain available.']
+    ].map(([key,label,help])=>'<button data-wind-view="'+key+'" title="'+help+'" aria-pressed="false">'+label+'</button>').join(''));
     control('bottomright','duo-legend','<b>Wind · kt</b><small>Arrows move with the wind.<br>Barbs point into the wind: half = 5 kt, full = 10 kt, triangle = 50 kt. Circle = calm.<br>Click for wind at every altitude.</small>');
     // Wind has no coloured raster at any zoom. Suppress a legacy canvas on
     // initial render and immediately on zoom, including zoom >= 7.
@@ -137,16 +153,17 @@ function installDuoModes(map, data) {
     const pc=particles.getContext('2d'),glyphs=map._duoWindGlyphs,motion=window.matchMedia('(prefers-reduced-motion: reduce)');
     let grid=[],cols=0,rows=0,swarm=[],last=0,display='arrows',barbs=[],spacing=100,drawFrames=0,arrowCount=0;
     let width=0,height=0,ratio=1;
-    try{if(sessionStorage.getItem('duo-wind-display')==='barbs')display='barbs';}catch(e){}
+    try{const saved=sessionStorage.getItem('duo-wind-display');if(['barbs','off'].includes(saved))display=saved;}catch(e){}
     function weights(lat,lon){
       const g=w.grid,ys=g.latitudes,xs=g.longitudes;
+      if(!ys||!xs||ys.length<2||xs.length<2)return [];
       if(lat<ys[0]||lat>ys.at(-1)||lon<xs[0]||lon>xs.at(-1))return [];
       const row=Math.min(ys.length-2,Math.max(0,Math.floor((lat-ys[0])/(ys.at(-1)-ys[0])*(ys.length-1))));
       const col=Math.min(xs.length-2,Math.max(0,Math.floor((lon-xs[0])/(xs.at(-1)-xs[0])*(xs.length-1))));
       const fy=(lat-ys[row])/(ys[row+1]-ys[row]),fx=(lon-xs[col])/(xs[col+1]-xs[col]);
-      return [[(1-fx)*(1-fy),g.indices[row][col]],[fx*(1-fy),g.indices[row][col+1]],[(1-fx)*fy,g.indices[row+1][col]],[fx*fy,g.indices[row+1][col+1]]].filter(p=>p[1]!==null&&p[0]>0);
+      return [[(1-fx)*(1-fy),g.indices?.[row]?.[col]],[fx*(1-fy),g.indices?.[row]?.[col+1]],[(1-fx)*fy,g.indices?.[row+1]?.[col]],[fx*fy,g.indices?.[row+1]?.[col+1]]].filter(p=>Number.isInteger(p[1])&&p[0]>0);
     }
-    function sample(weight,t=index,l=level){let u=0,v=0,total=0,interpolated=false,terrain=false,spatial=false,count=0;for(const [f,i] of weight){const a=w.stations[i].values[t]?.[l];if(!a)continue;u+=a[0]*f;v+=a[1]*f;total+=f;count++;interpolated||=!!(a[2]&1);terrain||=!!(a[2]&2);spatial||=!!(a[2]&4);}return total?{u:u/total,v:v/total,interpolated,terrain,spatial,count}:null;}
+    function sample(weight,t=index,l=level){let u=0,v=0,total=0,interpolated=false,terrain=false,spatial=false,count=0;for(const [f,i] of weight){const a=w.stations[i]?.values?.[t]?.[l];if(!a||!Number.isFinite(a[0])||!Number.isFinite(a[1]))continue;u+=a[0]*f;v+=a[1]*f;total+=f;count++;interpolated||=!!(a[2]&1);terrain||=!!(a[2]&2);spatial||=!!(a[2]&4);}return total?{u:u/total,v:v/total,interpolated,terrain,spatial,count}:null;}
     function gridVector(x,y){
       const ix=Math.round(x/28),iy=Math.round(y/28);
       return ix<0||ix>=cols||iy<0||iy>=rows?null:grid[iy*cols+ix];
@@ -185,9 +202,9 @@ function installDuoModes(map, data) {
     }
     function renderDisplay(){
       cancelAnimationFrame(animation);animation=0;
-      displayButton.textContent='Wind Display: '+(display==='arrows'?'Streaming Arrows':'Wind Barbs');
-      displayButton.setAttribute('aria-pressed',String(display==='barbs'));
-      if(display==='barbs')paintBarbs();else{paintArrows();if(!motion.matches)animation=requestAnimationFrame(animate);}
+      displayBar.querySelectorAll('[data-wind-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.windView===display)));
+      if(display==='off'){pc.clearRect(0,0,width,height);barbs=[];arrowCount=0;}
+      else if(display==='barbs')paintBarbs();else{paintArrows();if(!motion.matches)animation=requestAnimationFrame(animate);}
     }
     function rebuild(){
       if(!alive)return;hideLegacyRaster();const size=map.getSize(),origin=map.containerPointToLayerPoint([0,0]);
@@ -204,11 +221,11 @@ function installDuoModes(map, data) {
       for(let y=0;y<ny;y++)for(let x=0;x<nx;x++)swarm.push(seed({},(x+.2+Math.random()*.6)*width/nx,(y+.2+Math.random()*.6)*height/ny));
       renderDisplay();
     }
-    displayButton.onclick=()=>{
-      display=display==='arrows'?'barbs':'arrows';
+    displayBar.querySelectorAll('[data-wind-view]').forEach(button=>button.onclick=()=>{
+      display=button.dataset.windView;
       try{sessionStorage.setItem('duo-wind-display',display);}catch(e){}
       renderDisplay();
-    };
+    });
     function update(){save();altitude.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(Number(b.dataset.level)===level)));timeline.querySelector('label').textContent=w.labels[index];timeline.querySelector('input').value=index;rebuild();if(lastClick)windClick(lastClick);}
     altitude.querySelectorAll('button').forEach(button=>button.onclick=()=>{level=Number(button.dataset.level);update();});
     timeline.querySelector('input').oninput=e=>{index=Number(e.target.value);update();};

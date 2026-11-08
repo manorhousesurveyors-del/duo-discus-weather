@@ -85,12 +85,14 @@ def aviation_payload(batch):
     return out
 
 
-def add_airfields(map_view,batch=None,*,live=True,route=False,selected=None,show=True):
-    """Canvas markers; current model reports fetched on demand in the browser."""
+def add_airfields(map_view,batch=None,*,live=True,route=False,selected=None,show=True,forecasts=(),when=None):
+    """Canvas markers; hover reads selected cached weather without new requests."""
     from branca.element import MacroElement,Template
+    from client_map import surface_payload
     payload=airfield_records()
     element=MacroElement()
-    element.payload=browser_json({'airfields':payload,'reports':aviation_payload(batch),'live':live,'route':route,'selected':selected,'show':show})
+    element.payload=browser_json({'airfields':payload,'reports':aviation_payload(batch),'live':live,'route':route,'selected':selected,'show':show,
+                                 'weather':surface_payload(forecasts,when) if when else []})
     script=Path(__file__).with_name('assets').joinpath('airfields.js').read_text()
     element._template=Template('{% macro script(this, kwargs) %}\n'+script+'\ninstallDuoAirfields({{this._parent.get_name()}},{{this.payload|safe}});\n{% endmacro %}')
     element.add_to(map_view)

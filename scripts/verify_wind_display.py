@@ -142,12 +142,12 @@ async def main(args):
         await page.locator('[data-level="0"]').click()
         await wind_text()
         times = []
-        async def toggle():
-            elapsed = await page.evaluate('''()=>{const start=performance.now();document.querySelector('[data-wind-display]').click();return performance.now()-start;}''')
+        async def toggle(display):
+            elapsed = await page.evaluate('''(display)=>{const start=performance.now();document.querySelector('[data-wind-view="'+display+'"]').click();return performance.now()-start;}''',display)
             assert elapsed < 300, elapsed
             times.append(elapsed)
-        await toggle()
-        assert await page.locator('[data-wind-display]').inner_text() == 'Wind Display: Wind Barbs'
+        await toggle('barbs')
+        assert await page.locator('[data-wind-view=barbs]').get_attribute('aria-pressed') == 'true'
         stats = await page.evaluate('map_div._duoWind.renderStats')
         assert stats['barbCount'] > 10 and stats['arrowCount'] == 0 and not stats['animationRunning'], stats
         strokes = await page.evaluate('[...windDraw.strokes]')
@@ -178,7 +178,10 @@ async def main(args):
         # Simulate an old heat canvas retained by a hot deployment.
         await page.evaluate('''()=>{map_div.setZoom(6,{animate:false});const c=document.createElement('canvas');c.className='duo-wind-heat';c.style.background='blue';map_div.getContainer().appendChild(c);map_div.setZoom(7,{animate:false});}''')
         assert await page.locator('.duo-wind-heat').evaluate('(c)=>getComputedStyle(c).display') == 'none'
-        await toggle()
+        await toggle('off')
+        assert not await page.evaluate('map_div._duoWind.renderStats.animationRunning')
+        assert await page.evaluate('map_div._duoWind.display')=='off'
+        await toggle('arrows')
         assert await page.evaluate('map_div._duoWind.renderStats.animationRunning')
         assert await page.evaluate('map_div._duoWind.renderStats.arrowCount') > 0
         await page.emulate_media(reduced_motion='reduce')
@@ -187,11 +190,22 @@ async def main(args):
         assert await page.evaluate('events.length') == 0
         assert not errors, errors
         await page.evaluate('map_div._duoCleanup()')
-        assert await page.locator('.duo-wind-particles,[data-wind-display]').count() == 0
+        assert await page.locator('.duo-wind-particles,[data-wind-view]').count() == 0
+        # A missing/malformed upstream payload must never remove the toolbar.
+        for missing in (None,{'grid':None,'stations':[None,{}],'levels':None}):
+            await page.evaluate('(wind)=>installDuoModes(map_div,{mode:"wind",when:"2026-11-08T12:00:00Z",wind,samples:null,contours:null,modes:null})',missing)
+            assert await page.locator('[data-wind-view]').count()==3
+            assert await page.locator('[data-level]').count()==6
+            assert await page.evaluate('map_div._duoWind.sampleAt(53,-3)') is None
+            for mode in ('barbs','off','arrows'):
+                await page.locator('[data-wind-view='+mode+']').click()
+                assert await page.evaluate('map_div._duoWind.display')==mode
+            await page.evaluate('map_div._duoCleanup()')
+        assert not errors,errors
         results = {'coverage_checks':coverage, 'quadrants':quadrants, 'canvas_pixels':pixels,
                    'barbs':stats['barbCount'], 'barb_spacing':spacing, 'toggle_ms':times,
                    'altitude_and_timeline_in_both_modes':True, 'rerun_events':0,
-                   'reduced_motion':True, 'errors':errors, 'terrain_tiles':args.terrain}
+                   'reduced_motion':True, 'missing_payload_controls':True, 'errors':errors, 'terrain_tiles':args.terrain}
         (out/'results.json').write_text(json.dumps(results, indent=2)+'\n')
         print(json.dumps(results)); await browser.close()
 

@@ -137,7 +137,15 @@ def cached_wave_payload(forecast_run_id,when,_forecasts):
     return wave_payload(_forecasts,when)
 
 
-def add_wave_map(map_view,forecasts,when):
+def empty_wave_payload(when):
+    return {'when':when.isoformat(),'frames':[{'altitude':a,'tiles':[],'peak':None,'sites':[],
+        'positive_cells':0,'negative_cells':0} for a in ALTITUDES_FT],
+        'domains':[],'bands':WAVE_BANDS,'source':'Preparing the wave field',
+        'limits':'Navigation and altitude controls remain available while the field is prepared.',
+        'terrain_status':'Wave calculation runs in the background.'}
+
+
+def add_wave_map(map_view,forecasts,when,*,prepared=None):
     import streamlit as st
     from streamlit.runtime.scriptrunner import get_script_run_ctx
     from client_map import script,reorder_layer_control
@@ -146,7 +154,7 @@ def add_wave_map(map_view,forecasts,when):
     import folium,html
     from app_cache import forecast_run_id
     sources=tuple(f for f in forecasts if f.location.key.startswith(('region:','ridge:')))
-    payload=cached_wave_payload(forecast_run_id(sources),when,_forecasts=sources)
+    payload=prepared if prepared is not None else cached_wave_payload(forecast_run_id(sources),when,_forecasts=sources)
     script(map_view,'wave_map.js','installDuoWave',payload)
     body=load_airspace(when.astimezone(LOCAL_TIMEZONE).date())
     if body:

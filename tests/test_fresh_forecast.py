@@ -36,6 +36,12 @@ class FreshForecastTests(unittest.TestCase):
         import app
         import uk_map_grid as grid
         self.app,self.grid=app,grid
+        import weather_engine
+        from unittest.mock import Mock
+        store=weather_engine.ResourceStore(workers=2)
+        owner=patch.object(weather_engine,'_store',store);owner.start();self.addCleanup(owner.stop);self.addCleanup(store.close)
+        http=weather_engine.ForecastHttpClient(opener=Mock(side_effect=AssertionError('Unexpected network')))
+        owner=patch.object(weather_engine,'_transport',http);owner.start();self.addCleanup(owner.stop)
         app.load_sites.clear();grid.regional_sources.clear();grid.regional_future.clear()
         self.addCleanup(app.load_sites.clear)
         self.addCleanup(grid.regional_sources.clear)
@@ -72,7 +78,7 @@ class FreshForecastTests(unittest.TestCase):
                 self.grid.regional_future(CYCLE,key).result(timeout=10)
                 at.run();self.assert_ready(at)
                 self.assertEqual(at.selectbox(key='forecast_model').value,key)
-            fetch.assert_called_once()
+            self.assertEqual(fetch.call_count,3)  # Each newly selected model loads once; days/hours reuse it.
 
     def test_pending_cold_start_keeps_help_usable_and_does_not_render_zero_cards_or_load_grid(self):
         from streamlit.testing.v1 import AppTest
@@ -82,7 +88,10 @@ class FreshForecastTests(unittest.TestCase):
              patch.object(self.grid,'regional_future',return_value=pending), \
              patch.object(self.grid,'load_uk_map_grid',side_effect=AssertionError('No grid before regional coverage')):
             at=AppTest.from_string('import app\napp._main()',default_timeout=30).run()
-            self.assertFalse(at.exception);self.assertFalse(at.metric);self.assertFalse(at.warning)
+            self.assertFalse(at.exception);self.assertFalse(at.warning)
+            self.assertEqual(len(at.metric),10)
+            self.assertTrue(at.get('component_instance'))
+            self.assertTrue(all('Unavailable' not in str(m.value) for m in at.metric))
             self.assertTrue(any('Loading the five-day regional forecast' in i.value for i in at.info))
             at.radio(key='active_page').set_value('Help Guide').run()
             self.assertFalse(at.exception);self.assertFalse(at.get('component_instance'))
@@ -115,20 +124,16 @@ class FreshForecastTests(unittest.TestCase):
         results=complete_regional_forecasts((bad,nearby),FORECAST_MODELS['ukmo'],START.date())
         self.assertEqual(soaring_coverage(next(f for f in results if f.location==POINT),START.date()),(0,)*5)
 
-    def test_failed_large_batch_gets_one_small_fallback_in_same_cycle_shared_by_models(self):
-        empty=ForecastBatch((),(FetchFailure(POINT.key,'ukmo_seamless','HTTP timeout'),))
+    def test_failed_primary_uses_targeted_donor_before_validation(self):
+        empty=ForecastBatch((),(FetchFailure(POINT.key,'icon_eu','HTTP timeout'),))
         recovered=ForecastBatch((sources()[-1],),())
         with patch.object(self.grid,'forecast_locations',return_value=(POINT,)), \
-             patch.object(self.grid.OpenMeteoClient,'fetch_batched',return_value=empty) as first, \
-             patch('watchdog_weather.fetch_weather',return_value={'regional':recovered}) as fallback:
-            for key in ('icon_eu','ukmo','ifs025'):
-                batch=self.grid.regional_future(CYCLE,key).result(timeout=10)
-                self.assertEqual(soaring_coverage(batch.forecasts[0],START.date()),(8,)*5)
-                self.assertTrue(batch.failures)  # Preserve the original outage note.
-            first.assert_called_once();fallback.assert_called_once()
-            group=fallback.call_args.args[0][0]
-            self.assertEqual(group[1],(POINT,));self.assertEqual(group[-1],1)
-            self.assertEqual(tuple(m.api_name for m in group[2]),('icon_eu','ecmwf_ifs025'))
+             patch.object(self.grid.OpenMeteoClient,'fetch_batched',side_effect=(empty,recovered)) as fetch:
+            batch=self.grid.regional_future(CYCLE,'icon_eu').result(timeout=10)
+            self.assertEqual(soaring_coverage(batch.forecasts[0],START.date()),(8,)*5)
+            self.assertEqual(fetch.call_count,2)
+            self.assertEqual(fetch.call_args.args[0],(POINT,))
+            self.assertEqual(fetch.call_args.args[1],(FORECAST_MODELS['ifs025'],))
 
 
 if __name__=='__main__':unittest.main()

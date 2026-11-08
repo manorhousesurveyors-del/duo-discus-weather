@@ -56,18 +56,27 @@ def optimizer_panel(catalog,day,loading,model_key,bucket,forecasts,*,recorded=Fa
         origin_code=points[0].code if points else 'MYN'
         origin=next((p for p in points if p.code==origin_code),catalog.by_code.get(origin_code))
         cols[2].metric('Start point',origin_code,help='Use your current task’s start. With no task, the search starts at Long Mynd MYN.')
-        if st.button('Optimise Route',key='optimise_route',disabled=origin is None,help='Screen up to 30 routes, check the best three using corridor forecasts, then plot the highest-ranked flyable route. This replaces the current task only when a complete flight is found.'):
-            with st.spinner('Searching BGA routes and checking weather along each shortlisted corridor…'):
-                screening=forecasts if recorded else screening_forecasts(forecasts,model_key,bucket)
-                candidates=shortlist_tasks(catalog,origin,target,screening,day,loading,preference=(FORECAST_MODELS[model_key].api_name,))
-                checked=[];errors=[]
-                for task in candidates:
-                    try:
-                        weather,failures=task_weather(task,forecasts,model_key,bucket,recorded=recorded)
-                        result=assess_task(task,weather,day,loading,preference=(FORECAST_MODELS[model_key].api_name,))
-                        checked.append((task,result));errors.extend(failures)
-                    except (IngestionError,ValueError) as exc:errors.append(str(exc))
-                winner=choose_optimised(checked,objective)
+        job_key=(day,loading,model_key,target,objective,origin)
+        if st.button('Optimise Route',key='optimise_route',disabled=origin is None,help='Screen nearby routes, check their corridors in the background, then plot the best supported route.'):
+            screening=forecasts if recorded else screening_forecasts(forecasts,model_key,bucket)
+            st.session_state['optimizer_job']=(job_key,shortlist_tasks(catalog,origin,target,screening,day,loading,preference=(FORECAST_MODELS[model_key].api_name,)))
+        pending=st.session_state.get('optimizer_job')
+        if pending and pending[0]==job_key:
+            candidates=pending[1]
+            if not recorded:
+                from weather_ui import forecasts_pending
+                from task_planning import corridor_points
+                waiting=[forecasts_pending(corridor_points(task),model_key) for task in candidates]
+                if any(waiting):return
+            checked=[];errors=[]
+            for task in candidates:
+                try:
+                    weather,failures=task_weather(task,forecasts,model_key,bucket,recorded=recorded)
+                    result=assess_task(task,weather,day,loading,preference=(FORECAST_MODELS[model_key].api_name,))
+                    checked.append((task,result));errors.extend(failures)
+                except (IngestionError,ValueError) as exc:errors.append(str(exc))
+            winner=choose_optimised(checked,objective)
+            st.session_state.pop('optimizer_job',None)
             if winner:
                 task,result=winner;set_task(day,task,rerun=False);complete_task(day,task)
                 st.session_state['optimiser_result']=f'Loaded {task_distance(task):.0f} km: {result.verdict}. Best {objective.lower()} among {len(checked)} checked candidates. This is a bounded search, not a global optimum.'

@@ -1,64 +1,38 @@
-"""Non-blocking, cycle-scoped five-day UK grid; no widget values in cache keys."""
+"""UI adapters for the shared weather engine; no independent HTTP/cache policy."""
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Lock
 import numpy as np
 import streamlit as st
 
-from config import (FORECAST_MODELS, LOCAL_TIMEZONE, OPEN_METEO_URL, Settings,
-                    default_forecast_model, forecast_locations)
-from data_ingestion import (FetchFailure, ForecastBatch, IngestionError, JsonHttpClient,
-                            JsonResponse, SchemaError, OpenMeteoClient, parse_forecast, utc_datetime)
+from config import FORECAST_MODELS, LOCAL_TIMEZONE, default_forecast_model, forecast_locations
+from data_ingestion import FetchFailure, ForecastBatch, IngestionError, OpenMeteoClient, utc_datetime
+from forecast_coverage import COVERAGE_REVISION, complete_regional_forecasts
 from map_weather import national_grid, wind_payload
-from forecast_coverage import (COVERAGE_REVISION, complete_forecasts,
-                               complete_regional_forecasts, soaring_coverage)
+from weather_engine import ForecastHttpClient, request_forecasts, resources, prefer_verified
 
-_pool = ThreadPoolExecutor(max_workers=12, thread_name_prefix='uk-map-grid')
-_national_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix='national-grid')
-WIND_GRID_REVISION = 1
+WIND_GRID_REVISION=2
+_pool=ThreadPoolExecutor(max_workers=2,thread_name_prefix='weather-products')
+_derived={}
+_lock=Lock()
 
 
 def grid_variables():
-    """Current schema, including high-cloud levels, also after a hot deployment."""
     from config import forecast_variables
     return forecast_variables()
 
 
-class GridHttpClient(JsonHttpClient):
-    """One attempt per chunk, without the alert client's pacing/retry sleeps.
-
-    A cycle schedules each model once. A 429 is retained as missing coverage;
-    it never triggers another request within the cycle.
-    """
-    def __init__(self, *, national=False, **kwargs):
-        super().__init__(replace(Settings.from_env(), http_timeout_seconds=6.0 if national else 3.5,
-                                 http_max_attempts=1, http_workers=4 if national else 12), **kwargs)
-
-    def _pace(self, host, cost=1.0):
-        pass
+class GridHttpClient(ForecastHttpClient):
+    """Compatibility alias; all production requests use weather_engine.transport."""
+    def __init__(self,*,national=False,**kwargs):super().__init__(**kwargs)
 
 
-def fetch_chunk(points, model, http):
-    response = http.get_json(OPEN_METEO_URL, {
-        'latitude': ','.join(str(p.latitude) for p in points),
-        'longitude': ','.join(str(p.longitude) for p in points),
-        'models': model.api_name, 'hourly': ','.join(grid_variables()),
-        'forecast_hours': 120, 'past_hours': 24, 'timezone': 'GMT', 'timeformat': 'unixtime',
-        'wind_speed_unit': 'ms', 'temperature_unit': 'celsius', 'precipitation_unit': 'mm',
-        'cell_selection': 'land',
-    }, ttl_seconds=0)
-    bodies = [response.body] if isinstance(response.body, dict) else response.body
-    if not isinstance(bodies,list) or len(bodies) != len(points):
-        raise SchemaError('UK grid response count does not match request')
-    forecasts = []
-    for index, (point, body) in enumerate(zip(points, bodies)):
-        if not isinstance(body, dict) or body.get('location_id', index) != index:
-            raise SchemaError('UK grid response order is invalid')
-        # Request five days even for short-range models; null tails stay unknown.
-        forecasts.append(parse_forecast(JsonResponse(body, response.fetched_at), point,
-                                        replace(model, horizon_hours=119)))
-    return tuple(forecasts)
+def fetch_chunk(points,model,http):
+    from dataclasses import replace
+    good,bad=OpenMeteoClient(http=http)._fetch_chunk(points,replace(model,horizon_hours=119),grid_variables())
+    if bad:raise IngestionError(bad[0].message)
+    return tuple(good)
 
 
 @dataclass(frozen=True)
@@ -98,153 +72,84 @@ def make_snapshot(forecasts, failures, anchor):
 
 
 class UKGridBundle:
-    """One resource per cycle, with separate lazy results for each named model."""
-    def __init__(self, cycle):
-        self.coverage_revision = COVERAGE_REVISION
-        self.wind_grid_revision = WIND_GRID_REVISION
-        self.cycle = cycle
-        self.anchor = datetime.fromtimestamp(cycle * 1800, UTC)
-        self._lock = Lock()
-        self._models = {}
-        self._raw = None
+    """A lightweight cycle view of process-wide weather, shared across sessions."""
+    def __init__(self,cycle):
+        self.cycle=cycle;self.coverage_revision=COVERAGE_REVISION;self.wind_grid_revision=WIND_GRID_REVISION
+        self.anchor=datetime.fromtimestamp(cycle*1800,UTC);self._models={};self._sources={}
+
+    def request(self,model_key):
+        source=request_forecasts(national_grid(),model_key)
+        if self._sources.get(model_key) is not source:
+            self._sources[model_key]=source
+            self._models[model_key]=transform(source,('grid',self.cycle,model_key),
+                lambda batch:self._snapshot(batch,model_key))
+        return self._models[model_key]
+
+    def _snapshot(self,batch,model_key):
+        usable=prefer_verified(batch,national_grid(),model_key)
+        return make_snapshot(usable.forecasts,usable.failures,self.anchor)
 
     def completed(self,model_key):
-        """Read an existing result without scheduling or waiting for any work."""
-        with self._lock:
-            result=self._models.get(model_key)
-        if result is None or not result.done() or result.exception() is not None:
-            return None
-        return result.result()
-
-    def request(self, model_key):
-        """Schedule once, return immediately. Day/hour/page/task are never inputs."""
-        with self._lock:
-            if model_key in self._models:
-                return self._models[model_key]
-            result = Future()
-            self._models[model_key] = result
-            if self._raw is None:
-                self._start_raw(model_key)
-            def completed(raw):
-                def publish():
-                    try:
-                        batch = raw.result()
-                        forecasts = complete_forecasts(batch.forecasts, FORECAST_MODELS[model_key])
-                        result.set_result(make_snapshot(forecasts, batch.failures, self.anchor))
-                    except Exception as exc:
-                        result.set_exception(exc)
-                _pool.submit(publish)
-            self._raw.add_done_callback(completed)
-            return result
-
-    def _start_raw(self, model_key):
-        """45-coordinate batches, at most four requests in flight, no retries.
-
-        Switching the selected model reuses these raw arrays. An unavailable
-        provider/chunk cannot discard a healthy fallback provider's response.
-        """
-        self._raw = Future()
-        points = national_grid()
-        size = 45
-        chunks = tuple(points[i:i+size] for i in range(0, len(points), size))
-        http = GridHttpClient(national=True)
-        # Cover every row/column before spending the provider quota on donors.
-        # Chunk-first ordering exhausted quotas in the south before Scotland.
-        models = (FORECAST_MODELS[model_key], *(m for k,m in FORECAST_MODELS.items() if k != model_key))
-        jobs = [(_national_pool.submit(fetch_chunk, chunk, model, http), chunk, model)
-                for model in models for chunk in chunks]
-        remaining = len(jobs)
-        done_lock = Lock()
-        def completed(_):
-            nonlocal remaining
-            with done_lock:
-                remaining -= 1
-                if remaining:
-                    return
-            forecasts, failures = [], []
-            for job, chunk, model in jobs:
-                try:
-                    forecasts.extend(job.result())
-                except (IngestionError, OSError, ValueError) as exc:
-                    failures.extend(FetchFailure(p.key, model.api_name, str(exc)) for p in chunk)
-            self._raw.set_result(ForecastBatch(tuple(forecasts), tuple(failures)))
-        for job, _, _ in jobs:
-            job.add_done_callback(completed)
+        result=self._models.get(model_key)
+        return result.result() if result and result.done() and result.exception() is None else None
 
 
-@st.cache_resource(ttl=1800, max_entries=2, show_spinner=False)
-def load_uk_map_grid(forecast_cycle_30min_bucket, coverage_revision=3, wind_grid_revision=1):
+def transform(source,key,function):
+    """CPU products run off the UI thread even when the source is already ready."""
+    key=(key,source)
+    with _lock:
+        if key in _derived:return _derived[key]
+        result=Future();_derived[key]=result
+        if len(_derived)>48:
+            for old in list(_derived):
+                if old!=key and _derived[old].done():del _derived[old]
+                if len(_derived)<=48:break
+    def done(raw):
+        def compute():
+            try:result.set_result(function(raw.result()))
+            except Exception as error:result.set_exception(error)
+        _pool.submit(compute)
+    source.add_done_callback(done)
+    return result
+
+
+@st.cache_resource(ttl=1800,max_entries=2,show_spinner=False)
+def load_uk_map_grid(forecast_cycle_30min_bucket,coverage_revision=3,wind_grid_revision=2):
     return UKGridBundle(forecast_cycle_30min_bucket)
 
 
 def session_grid(cycle):
-    bundle = st.session_state.get('uk_map_grid_bundle')
-    if (bundle is None or bundle.cycle != cycle or getattr(bundle,'coverage_revision',0) != COVERAGE_REVISION
-            or getattr(bundle,'wind_grid_revision',0) != WIND_GRID_REVISION):
-        bundle = load_uk_map_grid(cycle)
-        st.session_state['uk_map_grid_bundle'] = bundle
+    bundle=st.session_state.get('uk_map_grid_bundle')
+    if bundle is None or bundle.cycle!=cycle or getattr(bundle,'wind_grid_revision',0)!=WIND_GRID_REVISION:
+        bundle=load_uk_map_grid(cycle);st.session_state['uk_map_grid_bundle']=bundle
     return bundle
 
 
+def regional_sources(cycle,model_key=None,coverage_revision=3):
+    return request_forecasts(forecast_locations(),model_key or default_forecast_model())
+
+
 def fetch_regional_sources(cycle):
-    """One shared source bundle, including a bounded recovery of missing regions.
-
-    A large multi-coordinate timeout must not poison the complete 30-minute
-    cycle. Retry only unsupported regional anchors as small, independent
-    ICON/ECMWF requests, once before publishing the bundle. Model/day/hour
-    switches share this work; the national map grid is never involved.
-    """
-    http = GridHttpClient()
-    client = OpenMeteoClient(http.settings, http=http)
-    points = forecast_locations()
-    batch = client.fetch_batched(points, FORECAST_MODELS.values(), batch_size=8)
-    first_day = datetime.fromtimestamp(cycle*1800, UTC).astimezone(LOCAL_TIMEZONE).date()
-    resolved = {f.location.key: f for f in complete_regional_forecasts(
-        batch.forecasts, FORECAST_MODELS[default_forecast_model()], first_day)}
-    missing = tuple(p for p in points if p.key.startswith('region:') and
-                    (p.key not in resolved or min(soaring_coverage(resolved[p.key], first_day)) < 8))
-    if not missing:
-        return batch
-    from watchdog_weather import fetch_weather
-    recovery = fetch_weather([('regional', missing,
-        (FORECAST_MODELS['icon_eu'], FORECAST_MODELS['ifs025']), grid_variables(), 1)],
-        client=client)['regional']
-    combined = {(f.location.key, f.model): f for f in batch.forecasts}
-    for forecast in recovery.forecasts:
-        key = (forecast.location.key, forecast.model)
-        previous = combined.get(key)
-        # Preserve a useful original when the fresh retry supplies less evidence.
-        if previous is None or sum(soaring_coverage(forecast, first_day)) >= sum(soaring_coverage(previous, first_day)):
-            combined[key] = forecast
-    return ForecastBatch(tuple(combined.values()), batch.failures+recovery.failures)
+    """CLI compatibility; UI callers use the non-blocking regional_future."""
+    return regional_sources(cycle).result()
 
 
-@st.cache_resource(ttl=1800,max_entries=2,show_spinner=False)
-def regional_sources(cycle, coverage_revision=3):
-    return _pool.submit(fetch_regional_sources, cycle)
+def regional_future(cycle,model_key=None,coverage_revision=3):
+    model_key=model_key or default_forecast_model()
+    first_day=datetime.fromtimestamp(cycle*1800,UTC).astimezone(LOCAL_TIMEZONE).date()
+    def product(batch):
+        usable=prefer_verified(batch,forecast_locations(),model_key)
+        return ForecastBatch(complete_regional_forecasts(usable.forecasts,FORECAST_MODELS[model_key],first_day),usable.failures)
+    return transform(regional_sources(cycle,model_key),('regional',cycle,model_key),product)
 
 
-@st.cache_resource(ttl=1800,max_entries=6,show_spinner=False)
-def regional_future(cycle,model_key=None, coverage_revision=3):
-    model_key = model_key or default_forecast_model()
-    result = Future()
-    def completed(raw):
-        def publish():
-            try:
-                batch = raw.result()
-                first_day = datetime.fromtimestamp(cycle*1800, UTC).astimezone(LOCAL_TIMEZONE).date()
-                result.set_result(ForecastBatch(complete_regional_forecasts(
-                    batch.forecasts, FORECAST_MODELS[model_key], first_day), batch.failures))
-            except Exception as exc:
-                result.set_exception(exc)
-        _pool.submit(publish)
-    regional_sources(cycle).add_done_callback(completed)
-    return result
+# Test/refresh compatibility. Invalidating TTLs does not discard live work or
+# provider cooldowns, and is deliberately narrower than st.cache_data.clear().
+regional_sources.clear=regional_future.clear=lambda:resources().clear()
 
 
-@st.fragment(run_every='500ms')
-def grid_progress(future,message="UK weather grid is updating in the background. You can keep using the app."):
-    """The active page polls only its pending work; navigation stays usable."""
-    if future.done():
-        st.rerun(scope='app')
+@st.fragment(run_every='2s')
+def grid_progress(future,message='Weather updates in the background. Maps and navigation remain usable.',retry=None):
+    current=retry() if retry else future
+    if current is not future or (future.done() and retry is None):st.rerun(scope='app')
     st.caption(message)
