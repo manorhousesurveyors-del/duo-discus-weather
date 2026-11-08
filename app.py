@@ -12,7 +12,7 @@ from pathlib import Path
 import streamlit as st
 import runtime_imports
 
-_runtime_changed=getattr(runtime_imports,'API_REVISION',0)<14
+_runtime_changed=getattr(runtime_imports,'API_REVISION',0)<15
 if _runtime_changed:
     importlib.reload(runtime_imports)
 runtime_imports.refresh_cached_modules(deployment_changed=_runtime_changed)

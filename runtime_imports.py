@@ -10,7 +10,7 @@ import sys
 from threading import RLock
 
 # Bump when new compatibility contracts must reach an already-running app.
-API_REVISION = 14
+API_REVISION = 15
 
 _lock = RLock()
 _log = logging.getLogger(__name__)
@@ -21,6 +21,7 @@ LAZY_APIS = {
     'config': {'forecast_variables': (), 'moisture_variables': (), 'duo_circling_sink_knots': (), 'default_forecast_model': ()},
     'atmospheric_moisture': {'complete_moisture': ()},
     'data_ingestion': {'parse_forecast': ('variables',), 'split_model_response': (), 'weather_transport': (), 'Forecast': ('field_sources','source_runs')},
+    'weather_engine': {'ProviderGate': (), 'ForecastHttpClient': ()},
     'soaring_physics': {'evaluate_thermals': ('loading',), 'thermal_usable_depth': ()},
     'forecast_coverage': {'complete_forecasts': (), 'complete_regional_forecasts': ()},
     'task_planning': {'assess_task': ()},
@@ -28,9 +29,11 @@ LAZY_APIS = {
     'day_rating': {'rate_day': ()},
     'alerts': {'load_bundle': ()},
     'forecast_sanitizer': {'sanitize': (), 'COMPLETION_API': ()},
+    'weather_anchors': {'sample_anchors': ()},
+    'weather_demo': {'demo_forecasts': ()},
     'met_norway': {'fetch_met_forecasts': ()},
     'weather_disk_cache': {'save_live': (), 'load_live': ()},
-    'sync_weather': {'fetch_forecasts': ('product',), 'display_bundle': ()},
+    'sync_weather': {'fetch_forecasts': ('product',), 'display_bundle': (), 'met_transport': (), '_http_resource': ('revision',)},
     'weather_ui': {'source_value': ()},
     'session_state': {'migrate': ('synchronous',)},
     'uk_map_grid': {'grid_variables': (), 'transform': (), 'synchronous_snapshot': (), 'load_uk_map_grid': ('wind_grid_revision',)},
@@ -84,6 +87,12 @@ def refresh_cached_modules(*, deployment_changed=False):
                     raise ImportError(f'{name} on disk lacks the current dashboard API')
                 refreshed.append(name)
                 _log.info('Refreshed cached application module: %s', name)
+        if 'config' in refreshed:
+            # Keep saved Turnpoint instances valid: rebind their coordinate
+            # dependency without replacing the catalog's dataclass identity.
+            catalog_module = sys.modules.get('bga_turnpoints')
+            if catalog_module is not None:
+                catalog_module.GeoPoint = sys.modules['config'].GeoPoint
     return tuple(refreshed)
 
 

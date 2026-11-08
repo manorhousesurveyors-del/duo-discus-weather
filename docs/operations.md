@@ -212,25 +212,28 @@ against separate ledgers for the same recipients.
 
 ## API quota and networking
 
-Open-Meteo batches reduce HTTP overhead, not weighted API cost. Pacing uses
-coordinate count × max(1, hourly variables × models / 10 × max(1, days/14)),
-with a default 300 weighted calls/minute. A 429 without `Retry-After` causes a
-shared 60-second cooldown. Caches/limiters are per process; dashboard sessions
-and runners behind one IP can share the upstream quota without sharing the
-limiter. Lower `DUO_OPEN_METEO_CALLS_PER_MINUTE` when necessary.
+The dashboard fetches nine UK/Ireland anchors and reuses each successful
+five-day bundle for 30 minutes. Its 168-node display grid is interpolated from
+those anchors. Local token budgets, request pacing and provider cooldown gates
+are disabled, including the legacy transport. `DUO_OPEN_METEO_CALLS_PER_MINUTE`
+is retained for configuration compatibility; it no longer delays requests.
 
-The expanded watchdog costs roughly 1,200 weighted calls/run, around 4,800/day,
-before retries/dashboard usage. Consult [Open-Meteo pricing](https://open-meteo.com/en/pricing)
-for the free tier's usage/license terms. The 168-node UK/Ireland map
-bundle uses three source models and the current profile-variable schema. Its
-weighted quota cost depends on fields, coordinates and requested forecast length. Its cache is shared
-across sessions for 30 minutes. The dashboard grid makes one concurrent attempt
-per chunk; a 429 stays missing until the next cycle, with no retry sleep. This
-can exceed a free provider's minute quota; the app remains usable while missing
-coverage is labelled. Retain the 0.5° convergence grid unless budget and provider
-plan support more points.
+An Open-Meteo error immediately tries MET Norway through a separate client.
+Clients are cached by provider and transport revision; bump the revision when
+changing their contract so a hot deployment cannot retain an obsolete client.
+Broad exception handling at provider/fallback boundaries also covers stale
+exception classes. Explicit Refresh retries without waiting for a local timer.
+If both services fail, the app uses valid stored data or labelled demonstration
+data, which is excluded from operational flight assessments and alerts.
 
-Weather HTTPS hosts: `api.open-meteo.com`, `aviationweather.gov`.
+External quotas still apply, including to other apps sharing an outbound IP.
+Consult [Open-Meteo pricing](https://open-meteo.com/en/pricing) for usage and
+licensing terms. The watchdog has separate coordinate/model batches and a
+bounded fetch deadline; retain the 0.5° convergence grid unless the provider
+plan supports more points. Generic non-dashboard HTTP clients can still use
+bounded retries within one call; they do not install shared cooldown timers.
+
+Weather HTTPS hosts: `api.open-meteo.com`, `api.met.no`, `aviationweather.gov`.
 Map HTTPS hosts: `api.rainviewer.com`, `tilecache.rainviewer.com`,
 `tile.openstreetmap.org`, `a.tile.opentopomap.org`, `cdn.jsdelivr.net`,
 `server.arcgisonline.com`. Terrain refresh uses `s3.amazonaws.com`.
@@ -340,49 +343,28 @@ core APIs are validated after reloading; a genuinely incomplete checkout is not
 silently treated as a working forecast engine.
 
 
-## National grid and page navigation · 24 October 2026
+## National grid and page navigation
 
 `uk_map_grid.load_uk_map_grid` is a shared resource keyed only by the UTC
 30-minute forecast-cycle bucket. `st.session_state["uk_map_grid_bundle"]` holds
-that same resource. Each model has a separate, lazy Future inside the bundle;
-changing model never relabels another model's forecast. Day, hour, active page,
-wing loading and task edits cannot start a second fetch within the same cycle.
-A new cycle or explicit Refresh starts new work when Weather needs it.
+that same resource. Each selected model has a separate completed snapshot;
+Future wrappers remain only for compatibility and do not start background work.
+Day, hour, active page, wing loading and task edits reuse the displayed bundle.
+A new cycle or explicit Refresh permits a fresh provider attempt.
 
-Each cold grid covers 168 points, 120 forecast hours and 24 past hours in
-45-coordinate chunks. Four concurrent workers request every geographic chunk
-of the selected model before donors. Each request has a six-second socket
-timeout, one attempt and no pacing/retry sleeps. Wind frames and the read-only
-hour-indexed NumPy cube are prepared by the worker. This is not a guaranteed
-six-second total transfer deadline or a promised two-second provider response.
-Regional forecasts also update in the background. The watchdog now uses its own
-bounded single-attempt transport, described at the start of this guide.
-
-As of 6 November, the fresh-session and regional-loader default is ICON-EU.
-The cycle's regional bundle completes missing fields, then validates all five
-10:00–18:00 local windows. If simple completion is insufficient, a better-covered
-ICON/ECMWF sounding is selected with explicit provenance. A failed large batch
-gets one recovery pass for unsupported regional anchors using single-point
-ICON/ECMWF requests and the shared 12-second recovery deadline. The original
-failure notes remain available. Neither changing the day/hour nor switching
-models repeats this recovery. Nothing fetches the national grid for it.
-
-While a fresh regional Future is pending, Weather shows the loading message and
-keeps page navigation available. It does not publish empty ratings as 0/8 or
-start the national grid. Completed results trigger a page update through the
-existing progress fragment. A real all-provider outage still reports missing
-evidence; the application does not manufacture ratings. Cache revision 3 and
-runtime API revision 8 retire earlier failed bundles and cached loader code
-during hot deployment while retaining saved tasks and explicit model choices.
+The 168-node, 120-hour wind grid and read-only NumPy cube are derived from the
+nine anchors in the synchronous pass. No 168-point provider request or automatic
+progress fragment runs. ICON-EU is the fresh-session default. Provider failover,
+stored data and labelled demonstrations follow the API policy above; actual
+provider identity and original retrieval times remain visible.
 
 Only the Weather page's wind/thermal/PFD/XC/STF modes request the national grid.
 The other six pages return before that branch. Task optimisation may read an
-already completed current-cycle grid; it never starts one. Its explicit corridor
-checks still fetch only the shortlisted routes. The old blocking grid spinner
-and duplicate national loader have been removed. Missing points remain missing;
-when every grid request fails, existing regional wind remains the fallback.
+already completed current-cycle grid; it never starts one. Corridor checks reuse
+the same coarse anchor data with spatial provenance. They do not imply that
+weather was downloaded or measured at every route point.
 
-The page body is cleared before rendering its keyed active-page container.
+One keyed active-page container renders on each user interaction.
 Weather summaries/cards and the inspector render only on Weather. Task, Wave,
 OGN and text pages have their own exclusive branches. Finished Weather/Task/OGN
 map documents are cached per session, with forecast, hour, task, catalog,
@@ -392,7 +374,7 @@ catalog digest instead of hashing every turnpoint on each rerun.
 Timing regressions in `tests/test_grid_navigation.py` measure real warm AppTest
 page switches (<300 ms), cube hour selection (<5 ms), and no repeated fetch on
 day/hour changes. Cold map construction and browser iframe/tile loading are
-measured separately; neither shares the warm-server timing guarantee.
+measured separately; neither is included in the warm-server timing measurement.
 
 ## Weather-only point probe
 
@@ -411,12 +393,10 @@ restores hover behaviour, and sends one deliberate state change to turn off the
 Streamlit switch. Panel buttons stop propagation so they cannot become map
 clicks. Navigation resets the flag before the next page renders.
 
-The 250/200 hPa additions bring the shared request schema to 96 variables
-(about 1,872 weighted calls per 195-node cold model/cycle under the existing cost
-estimate). They are part of the ordinary cached profile request, not an extra
-probe request. Runtime API revision 4 refreshes old configuration, parser and
-grid bindings during Streamlit hot reload. Older cached samples missing the new
-fields remain valid, with missing values instead of exceptions.
+The probe accepts extended pressure profiles through 250/200 hPa when present.
+The current dashboard requests a compact 30-variable anchor schema; enabling
+the probe does not request extra upper-air data. Missing native levels remain
+missing, while MET/demo estimates keep their explicit provenance labels.
 
 The probe's optional API revision 2 adds an already-loaded aviation batch. It
 copies valid METAR coordinates, temperature, observation time and stale status

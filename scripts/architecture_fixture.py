@@ -29,19 +29,32 @@ class Clock(datetime):
     def combine(cls,day,hour,tzinfo=None):return datetime.combine(day,hour,tzinfo)
 
 
+# Reproduce an exception retained from an older import: it deliberately does
+# NOT inherit today's IngestionError and is not today's exported class object.
+StaleDeferredWeather=type('DeferredWeather',(RuntimeError,),{'__module__':'weather_engine'})
+
+
 class FixtureTransport:
-    """Respect the exact requested variables; extra fixture fields cannot help."""
-    def __init__(self,provider):
+    """Host-restricted clients prove failover bypasses the stale primary."""
+    def __init__(self,provider,host):
         self.provider=provider;self.lock=Lock();self.started=None;self.completed=None
+        self.host=host;self.attempts=[];self.deferred_raises=0
 
     def get_json(self,url,params,*,ttl_seconds=0):
         with self.lock:
             if self.started is None:self.started=perf_counter()
+            self.attempts.append((urlsplit(url).hostname,dict(params)))
         request=Request(url+'?'+urlencode(params))
         try:
+            if urlsplit(url).hostname!=self.host:
+                raise AssertionError('Provider used the wrong fixture transport: '+url)
+            if self.host=='api.open-meteo.com' and self.provider.scenario=='deferred':
+                with self.lock:self.deferred_raises+=1
+                raise StaleDeferredWeather('Synthetic stale provider gate failed before HTTP')
             with self.provider(request,timeout=4.0) as response:
                 rows=json.loads(response.read())
         except HTTPError as exc:
+            if self.provider.scenario=='429':raise  # Exercise an unnormalised provider exception.
             raise ServiceError('Synthetic provider HTTP '+str(exc.code),status=exc.code) from exc
         except TimeoutError as exc:
             raise ServiceError('Synthetic provider timeout') from exc
@@ -61,20 +74,27 @@ def install():
     # The older broad fixture used native surface_pressure only. The compact
     # production query requests the provider's standard MSL pressure instead.
     provider.hourly['pressure_msl']=[1013.25]*len(provider.hourly['time'])
-    transport=FixtureTransport(provider)
+    transport=FixtureTransport(provider,'api.open-meteo.com')
+    met_transport=FixtureTransport(provider,'api.met.no')
     class Statistics(BaseHTTPRequestHandler):
         def do_GET(self):
             with provider.lock:calls=list(provider.calls)
-            with transport.lock:
-                span=(transport.completed-transport.started)*1000 if transport.completed else None
-            body=json.dumps({'requests':len(calls),'calls':calls,'provider_span_ms':span}).encode()
+            starts=[];ends=[];attempts=[];deferred=0
+            for client in (transport,met_transport):
+                with client.lock:
+                    if client.started is not None:starts.append(client.started)
+                    if client.completed is not None:ends.append(client.completed)
+                    attempts.extend(client.attempts);deferred+=client.deferred_raises
+            span=(max(ends)-min(starts))*1000 if ends else None
+            body=json.dumps({'requests':len(calls),'calls':calls,'provider_span_ms':span,
+                             'transport_attempts':attempts,'deferred_raises':deferred}).encode()
             self.send_response(200)
             self.send_header('Content-Type','application/json')
             self.send_header('Content-Length',str(len(body)))
             self.end_headers();self.wfile.write(body)
         def do_POST(self):
             scenario=self.rfile.read(int(self.headers.get('Content-Length','0'))).decode()
-            if scenario not in ('healthy','429','timeout','offline'):
+            if scenario not in ('healthy','429','timeout','offline','deferred'):
                 self.send_error(400);return
             provider.scenario=scenario
             provider.delay=.05
@@ -82,10 +102,11 @@ def install():
         def log_message(self,*args):pass
     statistics=ThreadingHTTPServer(('127.0.0.1',0),Statistics)
     Thread(target=statistics.serve_forever,daemon=True).start()
-    return provider,transport,statistics.server_address[1]
+    return provider,transport,met_transport,statistics.server_address[1]
 
-provider,transport,statistics_port=install()
+provider,transport,met_transport,statistics_port=install()
 sync_weather.transport=lambda:transport
+sync_weather.met_transport=lambda:met_transport
 sync_weather.datetime=Clock
 app.datetime=Clock
 app.main()

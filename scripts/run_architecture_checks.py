@@ -6,10 +6,10 @@ from urllib.request import urlopen
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'var'/'architecture-browser';OUT.mkdir(parents=True,exist_ok=True)
 parser=argparse.ArgumentParser()
-parser.add_argument('--scenario',choices=('healthy','429','timeout','offline'),action='append')
+parser.add_argument('--scenario',choices=('healthy','429','timeout','offline','deferred'),action='append')
 args=parser.parse_args()
 failures=[]
-for scenario in args.scenario or ('healthy','429','timeout','offline'):
+for scenario in args.scenario or ('healthy','429','timeout','offline','deferred'):
     with tempfile.TemporaryDirectory(prefix='duo-browser-') as tasks:
         with socket.socket() as sock:
             sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]

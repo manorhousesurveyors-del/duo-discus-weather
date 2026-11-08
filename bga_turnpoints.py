@@ -86,6 +86,9 @@ class Turnpoint:
 
     @property
     def point(self) -> GeoPoint:
+        # Saved Turnpoints survive deployments; use the current forecast class
+        # so derived task forecasts remain serializable after config reloads.
+        from config import GeoPoint
         return GeoPoint('bga:'+self.code, f'{self.code} · {self.name}', self.latitude, self.longitude)
 
 

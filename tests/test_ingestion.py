@@ -124,11 +124,14 @@ class HttpTests(unittest.TestCase):
         self.get(client)
         self.assertIn(7, self.clock.sleeps)
 
-    def test_long_retry_after_does_not_retry_too_early(self):
-        client = self.client([HTTPError('https://example.test', 429, 'Throttled', {'Retry-After': '120'}, None)])
+    def test_long_retry_after_ends_this_call_without_locking_the_next_call(self):
+        client = self.client([HTTPError('https://example.test', 429, 'Throttled', {'Retry-After': '120'}, None),Response()])
         with self.assertRaises(ServiceError):
             self.get(client)
         self.assertEqual(len(self.calls), 1)
+        self.get(client)
+        self.assertEqual(len(self.calls),2)
+        self.assertFalse(self.clock.sleeps)
 
     def test_permanent_error_is_not_retried_or_leaked(self):
         client = self.client([HTTPError('https://example.test?secret=hidden', 403, 'Forbidden', {}, None)])
@@ -174,26 +177,39 @@ class HttpTests(unittest.TestCase):
             _HttpsRedirectHandler().redirect_request(Request('https://example.test'), None,
                                                      301, 'Redirect', {}, 'http://example.test')
 
-    def test_rate_limit_and_cache_eviction(self):
+    def test_cache_eviction_does_not_delay_successive_requests(self):
         client = self.client([Response(), Response(), Response()], cache_entries=1)
         self.get(client, {'x': 1})
         self.get(client, {'x': 2})
         self.get(client, {'x': 1})
         self.assertEqual(len(self.calls), 3)
-        self.assertGreaterEqual(self.clock.seconds, 2.4)
+        self.assertEqual(self.clock.seconds,0)
+        self.assertFalse(self.clock.sleeps)
 
-    def test_weighted_multilocation_pacing_accounts_for_provider_quota(self):
+    def test_multilocation_requests_have_no_artificial_cost_or_pacing(self):
         client=self.client([Response(),Response()])
         params={'latitude':','.join(['52']*20),'hourly':','.join(HOURLY_VARIABLES),
                 'models':'icon_eu','forecast_hours':121}
         for _ in range(2):
             client.get_json('https://api.open-meteo.com/v1/forecast',params,ttl_seconds=0)
-        self.assertAlmostEqual(self.clock.seconds,20*len(HOURLY_VARIABLES)/10*60/300)
+        self.assertEqual(len(self.calls),2)
+        self.assertEqual(self.clock.seconds,0)
+        self.assertFalse(self.clock.sleeps)
 
-    def test_unspecified_429_cooldown_waits_one_minute(self):
+    def test_generic_retry_without_retry_after_does_not_invent_a_one_minute_wait(self):
         client=self.client([HTTPError('https://api.open-meteo.com',429,'quota',{},None),Response()])
         client.get_json('https://api.open-meteo.com/v1/forecast',{},ttl_seconds=0)
-        self.assertGreaterEqual(self.clock.seconds,60)
+        self.assertGreaterEqual(self.clock.seconds,1)
+        self.assertLess(self.clock.seconds,2)
+
+    def test_pace_is_a_noop_and_network_does_not_call_legacy_overrides(self):
+        from unittest.mock import Mock
+        client=self.client([Response()])
+        self.assertIsNone(client._pace('api.open-meteo.com',10**9))
+        client._pace=Mock(side_effect=AssertionError('Legacy gate must be bypassed'))
+        self.get(client)
+        client._pace.assert_not_called()
+        self.assertFalse(self.clock.sleeps)
 
 
 class ForecastTests(unittest.TestCase):

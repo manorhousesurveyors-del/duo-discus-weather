@@ -72,9 +72,52 @@ runtime_imports.LAZY_APIS={}
 del map_component.cached_document
 map_modes.add_map_modes=lambda view:None
 import app
-assert runtime_imports.API_REVISION==14
+assert runtime_imports.API_REVISION==15
 assert callable(map_component.cached_document)
 assert runtime_imports._supports(map_modes,{'add_map_modes':('wind_product',)})
+"""
+        result=subprocess.run([sys.executable,'-c',script],cwd=Path(__file__).resolve().parents[1],
+                              text=True,capture_output=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_deployment_reload_keeps_anchor_live_met_and_demo_forecasts_pickleable(self):
+        # A real reload replaces dataclass identities. Consumers holding old
+        # GeoPoint/Forecast classes used to fail inside st.cache_data afterward.
+        script = """
+import pickle
+from datetime import datetime,UTC
+import config,data_ingestion,weather_anchors,weather_demo,met_norway,sync_weather,app_cache,bga_turnpoints
+import runtime_imports
+from tests.fixtures import forecast
+from tests.provider_fixture import met_compact
+before=type(weather_anchors.ANCHORS[0])
+saved_turnpoint=bga_turnpoints.Turnpoint('MYN','Long Mynd',52.518,-2.88,430.)
+saved_turnpoint_class=type(saved_turnpoint)
+refreshed=runtime_imports.refresh_cached_modules(deployment_changed=True)
+assert 'weather_anchors' in refreshed and 'weather_demo' in refreshed
+point=weather_anchors.ANCHORS[0]
+assert type(point) is config.GeoPoint and type(point) is not before
+assert type(pickle.loads(pickle.dumps(point))) is config.GeoPoint
+assert type(saved_turnpoint) is saved_turnpoint_class is bga_turnpoints.Turnpoint
+assert bga_turnpoints.GeoPoint is config.GeoPoint
+assert type(saved_turnpoint.point) is config.GeoPoint
+assert type(pickle.loads(pickle.dumps(saved_turnpoint))) is saved_turnpoint_class
+assert type(pickle.loads(pickle.dumps(saved_turnpoint.point))) is config.GeoPoint
+anchor=datetime(2026,11,8,tzinfo=UTC)
+live=forecast(point,start=anchor,hours=120,model='icon_eu')
+met=met_norway.parse_met_forecast(data_ingestion.JsonResponse(met_compact(point.latitude,point.longitude),anchor),point,anchor)
+demo=weather_demo.demo_forecasts((point,),anchor,'icon_eu')[0]
+for source in (live,met,demo):
+    assert type(source) is data_ingestion.Forecast
+    assert type(source.location) is config.GeoPoint
+    restored=pickle.loads(pickle.dumps(source))
+    assert restored.source==source.source and restored.field_sources==source.field_sources
+    # Cross the actual Streamlit data-cache serialization boundary twice.
+    run=app_cache.forecast_run_id((source,))
+    first=sync_weather._samples(run,(point,saved_turnpoint.point),'regional',(source,))
+    second=sync_weather._samples(run,(point,saved_turnpoint.point),'regional',(source,))
+    assert first[0].source==second[0].source==source.source
+    assert type(second[0]) is data_ingestion.Forecast
 """
         result=subprocess.run([sys.executable,'-c',script],cwd=Path(__file__).resolve().parents[1],
                               text=True,capture_output=True,timeout=30)

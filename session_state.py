@@ -1,12 +1,12 @@
 """Owned session-state migration; saved tasks/preferences are never swept away."""
-SCHEMA_VERSION=3
+SCHEMA_VERSION=4
 OBSOLETE_KEYS={'_uk_grid_hour','_weather_map_state','forecast_coverage_revision'}
 
 
 def migrate(state, *, synchronous=True):
     if state.get('session_schema_version')==SCHEMA_VERSION:return
     for key in list(state):
-        if key in OBSOLETE_KEYS or key.startswith('forecast_fallback:'):
+        if key in OBSOLETE_KEYS or key.startswith(('forecast_fallback:','display_weather_bundle:','forecast_bundle:')):
             state.pop(key,None)
     # Transport futures from the previous implementation must not pin a failed
     # 30-minute download. The engine owns new futures, not each user's session.

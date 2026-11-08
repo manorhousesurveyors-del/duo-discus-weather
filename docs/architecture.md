@@ -13,19 +13,36 @@ fragment restarted the application and removed its map container. Removing the
 rerun loop stopped flashing, but the shared provider gate could still reject a
 fresh request before any network call.
 
+Hot reload could also retain an old cached `ForecastHttpClient` after the
+dashboard changed its client class. The legacy `ProviderGate.admit`,
+`ProviderGate.failed` and both `_pace` methods now do nothing. No transport
+calls the gate, and failed jobs have no retry lockout. `DeferredWeather` remains
+only as an import-compatible exception name for older deployments.
+
 `sync_weather.SyncHttpClient` now inherits the plain JSON transport, with no
 provider gate or cooldown state. It makes one attempt with a 1.25-second socket
 timeout and no pacing/retry sleeps. It sends the identifying User-Agent
 `DuoDiscusSoaringWeather/1.0 github.com/manorhousesurveyors-del/duo-discus-weather`.
 No claim is made that either external provider can never rate-limit or fail.
 
+Open-Meteo and MET Norway have independent clients cached by provider name and
+`HTTP_TRANSPORT_REVISION`. Changing that revision replaces stale client objects.
+The HTTP, live-bundle and fallback boundaries catch `Exception`, including
+exceptions from obsolete hot-reloaded class definitions. A broken primary
+client cannot prevent the independent MET request; failed persistence cannot
+discard live data or prevent the stored/demonstration fallback.
+
+Runtime API revision 15 also refreshes anchor/demo modules after replacing
+forecast dataclasses. Session migration discards derived forecast/map products,
+while saved BGA Turnpoints retain their class and use the current coordinate
+class. This prevents serialization failures during an in-place deployment.
+
 ## Forecast path
 
 1. `weather_anchors.ANCHORS` defines exactly nine real sample locations: Long
    Mynd, Exeter, Cambridge, Denbigh, Sutton Bank, Borders, Aboyne, Belfast and
    Dublin. One Open-Meteo request fetches five days at these locations. It asks
-   for 30 supported surface/wind/sounding variables, a weighted cost of 27 rather
-   than the former 270.6. Missing essential columns may use one selective donor
+   for 30 supported surface/wind/sounding variables. Missing essential columns may use one selective donor
    request, still limited to the same nine anchors.
 2. HTTP 429, timeout, malformed data or unresolved essential gaps immediately
    try MET Norway's official Locationforecast compact endpoint. Nine point GETs
@@ -119,7 +136,7 @@ This environment setting is separate from Streamlit Cloud's outbound access.
 Live MET verification requires the policy to be applied; realistic provider
 fixtures exercise the complete failure and parsing paths independently.
 
-Final verification: all 377 automated tests passed. Four Chromium scenarios
+The preceding nine-anchor revision passed all 377 automated tests. Four Chromium scenarios
 (healthy, 429, timeout and both providers offline) passed, including eight
 10-second idle checks with zero automatic activity. Warm page rendering measured
 7–100 ms, probe preparation32–50 ms, and wind controls below3 ms. A live
@@ -127,3 +144,8 @@ Open-Meteo request fetched all nine anchors in1.71 seconds in this environment.
 Late-day MET cards use known remaining-hour surface temperatures when the
 morning soaring window lies outside the returned data; they do not invent
 historical thermals.
+
+The gate-removal regressions additionally verify immediate real network attempts
+after HTTP 429, no weighted pacing, bypass of stale gate state, and immediate
+retry of failed jobs. See the latest entry in [validation](validation.md) for
+the hotfix's test results.

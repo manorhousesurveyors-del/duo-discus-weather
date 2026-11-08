@@ -38,6 +38,9 @@ class FreshForecastTests(unittest.TestCase):
         self.http.get_json.side_effect=AssertionError('Unexpected network')
         owner=patch.object(sync_weather,'transport',return_value=self.http)
         owner.start();self.addCleanup(owner.stop)
+        alternate=Mock(get_json=self.http.get_json)
+        owner=patch.object(sync_weather,'met_transport',return_value=alternate)
+        owner.start();self.addCleanup(owner.stop)
 
     def healthy_response(self, endpoint, params, **kwargs):
         """Return only fields requested by production, with absent model BLH."""

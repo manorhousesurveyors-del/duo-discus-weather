@@ -12,7 +12,7 @@ from config import FORECAST_MODELS, forecast_locations
 from forecast_coverage import soaring_coverage
 from forecast_quality import flight_evidence, is_demo, is_surface_estimate
 from map_weather import national_grid, wind_payload
-from met_norway import MET_URL, USER_AGENT
+from met_norway import MET_URL, USER_AGENT, MetHttpClient
 from tests.provider_fixture import FailoverProvider, NOW
 from tests.test_ingestion import Response
 from weather_anchors import ANCHORS, sample_anchors
@@ -29,6 +29,11 @@ class SynchronousWeatherTests(unittest.TestCase):
         owner=patch.dict('os.environ',{'DUO_WEATHER_CACHE_PATH':str(self.disk)})
         owner.start();self.addCleanup(owner.stop)
         weather.clear();self.addCleanup(weather.clear)
+        # Both independent HTTP clients use the same deterministic provider
+        # fixture; no outage regression may accidentally contact the network.
+        self.met_client=None
+        owner=patch.object(weather,'met_transport',side_effect=lambda:self.met_client)
+        owner.start();self.addCleanup(owner.stop)
 
     def client(self, scenario='healthy', *, ukmo_solar_gap=False, delay=0):
         provider=FailoverProvider(scenario,delay=delay)
@@ -57,6 +62,8 @@ class SynchronousWeatherTests(unittest.TestCase):
             return Response(json.dumps(body).encode())
         client=weather.SyncHttpClient(opener=open_request,clock=lambda:NOW,
             sleep=lambda _:self.fail('No retry sleeps or cooldown waits allowed'))
+        self.met_client=MetHttpClient(opener=open_request,clock=lambda:NOW,
+            sleep=lambda _:self.fail('No fallback retry sleeps allowed'))
         self.assertFalse(hasattr(client,'gate'))
         return provider,client,active
 

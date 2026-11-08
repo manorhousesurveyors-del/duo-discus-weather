@@ -5,6 +5,7 @@ in the dashboard transport. HTTP errors leave the live cache immediately.
 """
 from dataclasses import replace
 from datetime import UTC, datetime
+import logging
 import streamlit as st
 from config import FORECAST_MODELS, Settings, forecast_locations
 from data_ingestion import (OPEN_METEO_URL, FetchFailure, ForecastBatch, IngestionError,
@@ -12,7 +13,11 @@ from data_ingestion import (OPEN_METEO_URL, FetchFailure, ForecastBatch, Ingesti
 from forecast_sanitizer import sanitize
 from weather_anchors import ANCHORS, sample_anchors
 
-API_REVISION = 3
+API_REVISION = 4
+# Changing only a client class does not invalidate st.cache_resource's function
+# cache. Include this contract in the key, and never share clients by provider.
+HTTP_TRANSPORT_REVISION = 1
+_log = logging.getLogger(__name__)
 SURFACE_VARIABLES = (
     'temperature_2m','dew_point_2m','wind_speed_10m','wind_direction_10m',
     'wind_gusts_10m','shortwave_radiation','cloud_cover','cloud_cover_low',
@@ -47,13 +52,39 @@ class SyncHttpClient(JsonHttpClient):
 
 
 @st.cache_resource(show_spinner=False)
+def _http_resource(provider, revision):
+    if provider == 'open-meteo':
+        return SyncHttpClient()
+    from met_norway import MetHttpClient
+    return MetHttpClient()
+
+
 def transport():
-    return SyncHttpClient()
+    return _http_resource('open-meteo', HTTP_TRANSPORT_REVISION)
+
+
+def met_transport():
+    """Independent direct HTTP client; never reuse a failed primary transport."""
+    return _http_resource('met-norway', HTTP_TRANSPORT_REVISION)
+
+
+def _transport():
+    """Compatibility for older deployments and their transport injection seam."""
+    return transport()
 
 
 def _request(points, model, fields):
     """One bounded batched GET, with the exact requested schema validated."""
-    response = transport().get_json(OPEN_METEO_URL, {
+    try:
+        return _request_forecasts(points, model, fields)
+    except Exception as exc:
+        # Hot reload can retain exceptions derived from an obsolete class object.
+        # Do not rely on current IngestionError identity at this HTTP boundary.
+        raise IngestionError('Open-Meteo request/response failed: '+str(exc)) from exc
+
+
+def _request_forecasts(points, model, fields):
+    response = _transport().get_json(OPEN_METEO_URL, {
         'latitude': ','.join(str(p.latitude) for p in points),
         'longitude': ','.join(str(p.longitude) for p in points),
         'models': model.api_name, 'hourly': ','.join(fields),
@@ -107,25 +138,41 @@ def live_anchor_bundle(model_key, refresh_bucket):
         if any(any(v is None for v in f.hourly.get(key,(None,)))
                for f in forecasts for key in ESSENTIAL_REGIONAL_FIELDS):
             raise IngestionError('Primary essential surface fields are incomplete')
-    except (IngestionError,OSError) as primary_error:
-        from met_norway import fetch_met_forecasts
-        met=fetch_met_forecasts(ANCHORS,http=transport(),anchor=anchor)
-        if not met.forecasts:
+    except Exception as primary_error:
+        _log.info('Open-Meteo unavailable; trying independent MET Norway client: %s', primary_error)
+        try:
+            from met_norway import fetch_met_forecasts
+            met=fetch_met_forecasts(ANCHORS,http=met_transport(),anchor=anchor)
+            if not met.forecasts:
+                raise IngestionError('MET Norway returned no usable forecasts')
+            forecasts=met.forecasts
+        except Exception as alternate_error:
             raise IngestionError('Both live weather services could not be reached. '
-                                 +str(primary_error)) from primary_error
-        forecasts=met.forecasts
-    from weather_disk_cache import save_live
-    save_live(forecasts,model_key)
+                                 +str(alternate_error)) from alternate_error
+    try:
+        from weather_disk_cache import save_live
+        save_live(forecasts,model_key)
+    except Exception as exc:
+        # Persistence is optional; a disk error must not discard good live data.
+        _log.warning('Could not persist live weather; using it in memory: %s', exc)
     return ForecastBatch(tuple(forecasts),())
 
 
 def _resolve_bundle(model_key,refresh_bucket):
     try:
-        return live_anchor_bundle(model_key,refresh_bucket)
-    except (IngestionError,OSError) as exc:
-        from weather_disk_cache import load_live
+        bundle=live_anchor_bundle(model_key,refresh_bucket)
+        if not bundle.forecasts:
+            raise IngestionError('Live weather bundle is empty')
+        return bundle
+    except Exception as exc:
+        _log.info('Using stored weather or labelled demonstration: %s', exc)
         anchor=datetime.fromtimestamp(refresh_bucket*1800,UTC)
-        stored=load_live(model_key,anchor)
+        try:
+            from weather_disk_cache import load_live
+            stored=load_live(model_key,anchor)
+        except Exception as disk_error:
+            _log.warning('Could not read stored weather; using demonstration: %s', disk_error)
+            stored=()
         if stored:
             return ForecastBatch(stored,(FetchFailure('weather','stored',
                 'Using stored live forecast with its original retrieval time; live services did not respond.'),))

@@ -195,7 +195,7 @@ async def main(args):
         first_text = await page.locator('body').inner_text()
         if args.scenario == 'healthy':
             assert await page.get_by_text('8/8 local hours covered', exact=False).count() == 5
-        elif args.scenario in ('429', 'timeout'):
+        elif args.scenario in ('429', 'timeout', 'deferred'):
             assert re.search(r'MET Norway', first_text, re.I), first_text
             assert re.search(r'assum|estimat\w*.*upper|upper.*estimat', first_text, re.I), first_text
         else:
@@ -215,8 +215,11 @@ async def main(args):
         first_requests = await provider_statistics()
         meteo = [query for host, query in first_requests['calls'] if host == 'api.open-meteo.com']
         met = [query for host, query in first_requests['calls'] if host == 'api.met.no']
-        assert len(meteo) == 1, first_requests
-        assert len(meteo[0]['latitude'][0].split(',')) == 9, first_requests
+        attempts = [query for host, query in first_requests['transport_attempts'] if host == 'api.open-meteo.com']
+        assert len(attempts) == 1, first_requests
+        assert len(attempts[0]['latitude'].split(',')) == 9, first_requests
+        assert len(meteo) == (0 if args.scenario == 'deferred' else 1), first_requests
+        assert first_requests['deferred_raises'] == int(args.scenario == 'deferred'), first_requests
         assert len(met) == (0 if args.scenario == 'healthy' else 9), first_requests
         assert len({(item['lat'][0], item['lon'][0]) for item in met}) == len(met), first_requests
         assert first_requests['provider_span_ms'] < 2000, first_requests
@@ -270,7 +273,7 @@ async def main(args):
         assert 'Unavailable' not in callout_text, callout_text
         cells = await frame().locator('.duo-callout').last.locator('td').all_text_contents()
         assert cells and not any(cell.strip() == '—' for cell in cells), cells
-        if args.scenario in ('429', 'timeout'):
+        if args.scenario in ('429', 'timeout', 'deferred'):
             assert 'MET Norway' in callout_text, callout_text
             assert re.search(r'assum|estimated', callout_text, re.I), callout_text
         elif args.scenario == 'offline':
@@ -343,6 +346,6 @@ async def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--scenario', choices=['healthy', '429', 'timeout', 'offline'], default='healthy')
+    parser.add_argument('--scenario', choices=['healthy', '429', 'timeout', 'offline', 'deferred'], default='healthy')
     parser.add_argument('--url', default='http://127.0.0.1:8508')
     asyncio.run(main(parser.parse_args()))

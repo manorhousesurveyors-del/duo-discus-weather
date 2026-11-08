@@ -2,6 +2,8 @@
 
 The first section records Modules 1–2. The completed Modules 3–5 checks and
 updated cloud setup are recorded below it.
+Entries are chronological. Historical pacing/cooldown results describe earlier
+implementations; the latest transport hotfix is recorded at the end.
 
 Validated on 23 October 2026 with Python 3.12.14 in the cloud workspace.
 
@@ -1211,3 +1213,41 @@ the providers and forecast algorithms were not changed by this display update.
 
 Local screenshots and JSON results are in `var/wind-display-browser/`,
 `var/wind-ogn-browser/` and `var/fresh-forecast-browser/` (ignored by Git).
+
+## Legacy transport gate removal — 8 November 2026
+
+The focused transport, ingestion and assistant-job suite passed **53 tests**.
+Tests confirm that repeated HTTP 429 responses still make real network attempts
+without sleeps or a local lockout. Stale gate deadlines and exhausted budgets
+have no effect; donor requests also bypass legacy gate state. Failed jobs can
+retry immediately, and a full job queue returns an ordinary service error,
+never `DeferredWeather`. Generic HTTP cache expiry, TLS verification and bounded
+within-call retries remain covered.
+
+The dashboard now caches independent Open-Meteo and MET Norway clients using a
+transport revision key. Provider and fallback boundaries catch all ordinary
+exceptions, including obsolete exception classes retained during hot reload.
+Fallback still preserves source labels: stored live weather keeps its original
+timestamps, and demonstration data cannot qualify tasks or trigger alerts.
+
+The hot-deployment regression replaces real module/class definitions, then
+checks live, MET and demonstration forecasts through Streamlit's data cache.
+Saved BGA Turnpoints retain their identity; their coordinates remain pickleable.
+Separate regressions inject current and obsolete `DeferredWeather`, raw HTTP
+429, malformed responses and disk failures through `load_sites` and `app.main`.
+
+A live MET Norway request also succeeded from this environment: the provider's
+update was `2026-11-08T17:29:57Z`. Parsing produced a 120-hour display axis with
+101 actual temperature hours; the missing earlier hours were not fabricated.
+
+All five Chromium scenarios passed: healthy, raw HTTP 429, timeout, both
+providers offline, and an obsolete `DeferredWeather` raised before primary
+HTTP. The last scenario made zero Open-Meteo HTTP calls and nine independent
+MET calls. Each scenario displayed numeric first-pass cards and wind levels;
+ten-second Clean/Wind idle checks recorded zero reruns, requests or iframe
+replacements. Wind controls, point inspection, navigation and explicit Refresh
+recovery passed. Results/screenshots are in `var/architecture-browser/` (ignored).
+
+Final full-suite verification: **387 tests passed**. Warm browser server renders
+across all seven pages were 10–135 ms in these scenarios; cold construction,
+iframe loading and external provider latency are separate measurements.

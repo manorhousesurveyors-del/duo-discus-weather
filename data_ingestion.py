@@ -1,7 +1,7 @@
 """Concurrent Open-Meteo and Aviation Weather Center ingestion.
 
 Python 3.11+ standard library only. No I/O occurs on import. All external reads
-use verified HTTPS, bounded retries, per-host pacing and an expiring memory
+use verified HTTPS, bounded retries and an expiring memory
 cache. Forecasts remain separated by model, preserve missing values and units,
 and never silently substitute one model for another. This module sends no alerts.
 """
@@ -96,7 +96,7 @@ class JsonResponse:
 
 
 class JsonHttpClient:
-    """Thread-safe bounded cache and rate limiter, shared across provider clients.
+    """Thread-safe bounded cache, without admission gates or host lockouts.
 
     The injected opener/sleep/clock parameters enable deterministic transport
     tests. TLS certificate checks use Python's default trusted context.
@@ -120,22 +120,10 @@ class JsonHttpClient:
         else:
             self.opener = opener
         self._lock = threading.Lock()
-        self._next_request: dict[str, float] = {}
         self._cache: OrderedDict[str, tuple[float, bytes, datetime]] = OrderedDict()
 
     def _pace(self, host: str, cost: float = 1.0) -> None:
-        # Recheck after sleeping so a provider cooldown also delays queued workers.
-        while True:
-            with self._lock:
-                now = self.monotonic()
-                delay = self._next_request.get(host, now) - now
-                if delay <= 0:
-                    interval = self.settings.http_min_interval_seconds
-                    if host == 'api.open-meteo.com':
-                        interval = max(interval,cost*60/self.settings.open_meteo_calls_per_minute)
-                    self._next_request[host] = now + interval
-                    return
-            self.sleep(delay)
+        return None
 
     def _retry_delay(self, attempt: int, header: str | None) -> float:
         if header:
@@ -148,7 +136,7 @@ class JsonHttpClient:
                     delay = 0
             if math.isfinite(delay) and delay > 0:
                 if delay > 60:
-                    raise ServiceError("Provider requests a cooldown longer than 60 seconds; retry later", status=429)
+                    raise ServiceError("Provider Retry-After exceeds this request's retry budget", status=429)
                 return delay
         return min(30.0, 2**attempt + random.uniform(0, 0.25))
 
@@ -180,15 +168,7 @@ class JsonHttpClient:
                 return JsonResponse(self._decode(cached[1]), cached[2], True)
             self._cache.pop(url, None)
         host = parsed.hostname
-        cost = 1.0
-        if host == 'api.open-meteo.com':
-            locations = len(str(params.get('latitude','')).split(','))
-            variables = len(str(params.get('hourly','')).split(','))
-            models = len(str(params.get('models','')).split(','))
-            days = (float(params.get('forecast_hours',168))+float(params.get('past_hours',0)))/24
-            cost = locations*max(1,variables*models/10*max(1,days/14))
         for attempt in range(self.settings.http_max_attempts):
-            self._pace(host,cost)
             request = Request(url, headers={"Accept": "application/json", "Accept-Encoding": "identity",
                                            "User-Agent": "duo-discus-weather/0.1 (forecast research)"})
             retry_header = None
@@ -222,12 +202,12 @@ class JsonHttpClient:
                 if status not in {408, 429, 500, 502, 503, 504}:
                     raise ServiceError(f"{host} returned HTTP {status}", status=status) from None
                 try:
-                    cooldown=float(retry_header) if retry_header else None
+                    retry_seconds=float(retry_header) if retry_header else None
                 except ValueError:
-                    try:cooldown=max(0.,(utc_datetime(parsedate_to_datetime(retry_header))-utc_datetime(self.clock())).total_seconds())
-                    except (ValueError,TypeError,OverflowError):cooldown=None
+                    try:retry_seconds=max(0.,(utc_datetime(parsedate_to_datetime(retry_header))-utc_datetime(self.clock())).total_seconds())
+                    except (ValueError,TypeError,OverflowError):retry_seconds=None
                 failure = ServiceError(f"{host} returned HTTP {status} after retries", status=status,
-                                       retry_after=cooldown if cooldown is not None and math.isfinite(cooldown) else None)
+                                       retry_after=retry_seconds if retry_seconds is not None and math.isfinite(retry_seconds) else None)
             except (URLError, TimeoutError, socket.timeout, ConnectionError, HTTPException, ssl.SSLError) as exc:
                 reason = exc.reason if isinstance(exc, URLError) else exc
                 if isinstance(reason, ssl.SSLError) or "403 Forbidden" in str(reason) or "407 Proxy" in str(reason):
@@ -235,9 +215,9 @@ class JsonHttpClient:
                 failure = ServiceError(f"{host} connection failed after retries ({type(reason).__name__})")
             if attempt + 1 == self.settings.http_max_attempts:
                 raise failure
-            delay = self._retry_delay(attempt, retry_header or ('60' if failure.status == 429 else None))
-            with self._lock:
-                self._next_request[host] = max(self._next_request.get(host, 0), self.monotonic() + delay)
+            # Optional retries are confined to this call. They never set a
+            # shared deadline that could prevent the next call or provider.
+            self.sleep(self._retry_delay(attempt, retry_header))
         raise AssertionError("Positive attempt count is required")
 
 
@@ -443,9 +423,6 @@ class OpenMeteoClient:
                 return f is not None and has_core_coverage(f) and min(soaring_coverage(f,f.fetched_at.astimezone(LOCAL_TIMEZONE).date()))==8
             missing=tuple(p for p in points if not ready(p))
             if not missing:break
-            # A host-wide 429/timeout cooldown makes fallback requests futile.
-            gate=getattr(self.http,'gate',None)
-            if gate is not None and gate.clock()<gate.until:break
             support=self.fetch_batched(missing,(donor,),batch_size=batch_size)
             raw.extend(support.forecasts);failures.extend(support.failures)
             resolved=complete_forecasts(raw,model)

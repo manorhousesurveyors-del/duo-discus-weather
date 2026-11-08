@@ -1,9 +1,9 @@
-"""Process-wide weather scheduling, admission control and verified-result cache.
+"""Legacy single-flight weather jobs and verified-result cache.
 
 No Streamlit imports, widgets, notification delivery or OGN dependencies. Network
 work belongs to daemon workers. Readers never wait for a socket. Failed/partial
 responses are transient results, never entries in the successful forecast cache.
-Provider cooldown metadata is deliberately separate from cached weather.
+There is no provider admission gate, token budget or failed-result lockout.
 """
 from collections import OrderedDict, deque
 from concurrent.futures import Future
@@ -11,19 +11,19 @@ from dataclasses import dataclass, replace
 from queue import Empty, Queue
 from threading import Event, Lock, Thread
 from time import monotonic
-from urllib.parse import urlsplit
 
 from config import FORECAST_MODELS, HOURLY_VARIABLES, Settings
 from data_ingestion import FetchFailure, ForecastBatch, IngestionError, JsonHttpClient, ServiceError, OpenMeteoClient
 
-ENGINE_REVISION = 1
+ENGINE_REVISION = 2
 
 
 class DeferredWeather(ServiceError):
-    """Admission deferred; the UI can continue and the scheduler can retry later."""
+    """Import compatibility for old deployments; production never raises this."""
 
 
 class ProviderGate:
+    """Compatibility shell. Neither method may delay or reject an HTTP call."""
     def __init__(self, *, clock=monotonic, budget=300):
         self.clock, self.budget = clock, budget
         self.lock = Lock()
@@ -32,31 +32,14 @@ class ProviderGate:
         self.requests = self.deferred = self.rate_limits = 0
 
     def admit(self, cost):
-        with self.lock:
-            now = self.clock()
-            while self.costs and self.costs[0][0] <= now-60:
-                self.costs.popleft()
-            if now < self.until:
-                self.deferred += 1
-                raise DeferredWeather('Weather provider requested a cooldown; try Refresh weather later',
-                                      status=429, retry_after=self.until-now)
-            if sum(c for _, c in self.costs)+cost > self.budget:
-                self.deferred += 1
-                delay = max(1., self.costs[0][0]+60-now) if self.costs else 60.
-                raise DeferredWeather('Weather request budget reached; try Refresh weather after the current minute', retry_after=delay)
-            self.costs.append((now, cost)); self.requests += 1
+        return None
 
     def failed(self, error):
-        if isinstance(error, DeferredWeather):
-            return
-        with self.lock:
-            delay = error.retry_after if getattr(error, 'retry_after', None) else (60. if getattr(error, 'status', None)==429 else 5.)
-            self.until = max(self.until, self.clock()+delay)
-            self.rate_limits += getattr(error, 'status', None)==429
+        return None
 
 
 class ForecastHttpClient(JsonHttpClient):
-    """One 3.5-second attempt, no sleeps, no raw JSON cache, shared admission."""
+    """One 3.5-second attempt, no sleeps, no raw JSON cache or provider gate."""
     def __init__(self, *, gate=None, **kwargs):
         super().__init__(replace(Settings.from_env(), http_timeout_seconds=3.5,
                                  http_max_attempts=1, http_workers=3), **kwargs)
@@ -64,8 +47,7 @@ class ForecastHttpClient(JsonHttpClient):
         self._requests_lock=Lock();self._inflight={}
 
     def _pace(self, host, cost=1.):
-        if host == 'api.open-meteo.com':
-            self.gate.admit(cost)
+        return None
 
     def get_json(self, endpoint, params, *, ttl_seconds=0):
         key=(endpoint,tuple(sorted(params.items())))
@@ -77,11 +59,6 @@ class ForecastHttpClient(JsonHttpClient):
             # Validation/completion happens after parsing. Never memoize raw
             # empty arrays, missing model columns or HTTP failures as weather.
             response=super().get_json(endpoint, params, ttl_seconds=0)
-        except IngestionError as error:
-            if urlsplit(endpoint).hostname == 'api.open-meteo.com':
-                self.gate.failed(error)
-            pending.set_exception(error)
-            raise
         except Exception as error:
             pending.set_exception(error);raise
         else:
@@ -122,7 +99,7 @@ class ResourceStore:
             now = self.clock()
             entry = self.entries.setdefault(key, _Entry())
             self.entries.move_to_end(key)
-            if entry.future is not None and (not entry.future.done() or now < max(entry.expires,entry.retry_at)):
+            if entry.future is not None and (not entry.future.done() or now < entry.expires):
                 return entry.future
             future = entry.future = Future()
             def run():
@@ -132,18 +109,18 @@ class ResourceStore:
                 except Exception as error:
                     with self.lock:
                         entry.error = str(error)
-                        entry.retry_at = self.clock()+max(retry,getattr(error,'retry_after',0) or 0)
+                        entry.expires = entry.retry_at = 0.
                     future.set_exception(error)
                 else:
                     with self.lock:
                         if valid:
                             entry.good=value; entry.expires=self.clock()+ttl; entry.retry_at=0; entry.error=''
                         else:
-                            entry.retry_at=self.clock()+retry; entry.error='Incomplete response; retry scheduled'
+                            entry.expires=entry.retry_at=0.; entry.error='Incomplete response'
                     future.set_result(value)
             if self.queue.full():
-                entry.retry_at=now+retry
-                future.set_exception(DeferredWeather('Weather queue busy; retry scheduled',retry_after=retry))
+                entry.expires=entry.retry_at=0.
+                future.set_exception(ServiceError('Weather job queue is busy'))
             else:
                 self.queue.put_nowait(run)
             # Never evict in-flight work: that would permit duplicate requests.
@@ -158,7 +135,7 @@ class ResourceStore:
             return entry.good if entry else None
 
     def clear(self):
-        """Refresh invalidates successful TTLs, never in-flight work/cooldowns."""
+        """Refresh invalidates successful TTLs without cancelling live work."""
         with self.lock:
             for entry in self.entries.values():entry.expires=0.
 
@@ -245,8 +222,8 @@ def previous_forecasts(points,model_key,fields=None):
 def request_forecasts(points, model_key, *, fields=None):
     """Schedule small resumable chunks, reusing every verified completed chunk.
 
-    A national update can span a quota window without downloading its first
-    successful chunks again. Aggregate futures hold no separate HTTP cache.
+    Successful chunks are reused; failures can be requested again immediately.
+    Aggregate futures hold no separate HTTP cache or retry timer.
     """
     points=tuple(points)
     if not points:raise ValueError('At least one forecast coordinate is required')

@@ -18,9 +18,12 @@ class BriefingJobsTests(TestCase):
             start=perf_counter();value=connection('fingerprint','key','test-only-key')
             self.assertLess(perf_counter()-start,.1);self.assertFalse(value.models)
             self.assertTrue(entered.wait(1));release.set();store.queue.join()
-            self.assertIn('429',connection('fingerprint','key','test-only-key').error)
+            failed=store.entries[('models','fingerprint','key')].future
+            self.assertIn('429',str(failed.exception()))
             self.assertIsNone(store.previous(('models','fingerprint','key')))
-            clock[0]=16;api.return_value.connect.side_effect=None
+            # A new explicit check can retry immediately, without advancing a
+            # local timer or reusing the failed result as cached connection data.
+            api.return_value.connect.side_effect=None
             api.return_value.connect.return_value=Connection(('gemini-test',),'key')
             connection('fingerprint','key','test-only-key');store.queue.join()
             self.assertEqual(connection('fingerprint','key','test-only-key').models,('gemini-test',))

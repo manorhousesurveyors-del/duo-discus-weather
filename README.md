@@ -119,16 +119,18 @@ for source attribution, supported formats, assessment limits and operating detai
 ## UK wind, airfields and route analysis
 
 Wind uses a complete **168-node rectangular grid** from 49.5–61°N and
-11°W–2.5°E, including coastal water. Bilinear canvas interpolation removes the
-old distance-cutoff holes. Three shared I/O workers fetch eight-coordinate
-chunks with one 3.5-second attempt, no retry sleeps, and a process-wide quota
-gate. Only incomplete coordinates request model support. Verified chunks are
-reused across later attempts; geographic updates can span quota windows. Missing vectors use same-hour, same-level
-nearest-neighbour interpolation, explicitly labelled as spatial estimates. The
-legend reports the largest nearest-source distance; broad gaps are less reliable.
-A completely unavailable hour/level stays unknown. All six altitude frames are cached together;
-wind/wave altitude changes, panning and zooming stay in the browser.
-Initial live downloads still depend on provider latency and quotas.
+11°W–2.5°E, including coastal water. Nine UK/Ireland forecast anchors supply
+labelled spatial estimates; bilinear canvas interpolation draws between grid
+nodes. One compact Open-Meteo request fetches five days, cached for 30 minutes.
+There is no local quota gate, pacing delay or failed-request cooldown.
+
+Provider failures immediately try an independent MET Norway client, then valid
+stored weather or a clearly labelled demonstration. Estimated and demonstration
+profiles cannot approve tasks or trigger alerts. Provider clients are cached by
+provider and transport revision so hot deployment replaces obsolete clients.
+All six altitude frames are cached together; wind/wave altitude changes,
+panning and zooming stay in the browser. External providers can still impose
+quotas or time out; see [weather architecture](docs/architecture.md).
 
 Wind draws charcoal arrows with white outlines over the clear terrain map;
 there is no coloured wind haze at any zoom. **Streaming Wind**, **Wind Barbs**

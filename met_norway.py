@@ -245,7 +245,7 @@ def fetch_met_forecasts(points, *, http, anchor) -> ForecastBatch:
     for future in done:
         point = jobs[future]
         try:forecasts[point.key]=future.result()
-        except (IngestionError,OSError,ValueError,TypeError,KeyError) as exc:
+        except Exception as exc:
             failures[point.key]=FetchFailure(point.key,'MET Norway',str(exc))
     for future in pending:
         point = jobs[future];future.cancel()

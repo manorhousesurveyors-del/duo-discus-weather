@@ -50,16 +50,27 @@ class ResourceTests(unittest.TestCase):
         self.time+=6
         self.assertEqual(self.store.request('timeout',lambda:'recovered').result(1),'recovered')
 
-    def test_refresh_retains_last_good_value_and_cannot_erase_cooldown(self):
+    def test_refresh_retains_last_good_value_without_a_failed_request_lockout(self):
         self.store.request('a',lambda:'good',ttl=1).result(1)
         self.time=2
         failed=self.store.request('a',Mock(side_effect=ServiceError('429',status=429,retry_after=120)))
         with self.assertRaises(ServiceError):failed.result(1)
         self.assertEqual(self.store.previous('a'),'good')
-        self.store.clear();self.time=30
-        self.assertIs(self.store.request('a',Mock(side_effect=AssertionError('cooldown bypass'))),failed)
-        self.time=123
+        self.store.clear()
         self.assertEqual(self.store.request('a',lambda:'new').result(1),'new')
+        self.assertEqual(self.time,2)
+
+    def test_busy_job_queue_returns_service_error_never_deferred_weather(self):
+        release=Event();entered=Event()
+        store=ResourceStore(workers=1,max_entries=1)
+        self.addCleanup(store.close);self.addCleanup(release.set)
+        def blocked():entered.set();release.wait(2);return 'done'
+        store.request('running',blocked)
+        self.assertTrue(entered.wait(1))
+        store.request('queued',lambda:'queued')
+        busy=store.request('busy',lambda:'busy')
+        with self.assertRaises(ServiceError) as raised:busy.result(1)
+        self.assertNotIsInstance(raised.exception,DeferredWeather)
 
     def test_known_zeroes_are_cacheable_and_coordinate_roles_are_relabelled(self):
         f=forecast(changes={'precipitation':0,'shortwave_radiation':0,'wind_speed_10m':0})
@@ -71,17 +82,34 @@ class ResourceTests(unittest.TestCase):
 
 
 class ProviderTests(unittest.TestCase):
-    def test_429_retry_after_applies_to_every_consumer_without_sleeping(self):
+    def test_429_does_not_prevent_the_next_real_network_attempt_or_sleep(self):
         now=[0.];gate=ProviderGate(clock=lambda:now[0]);opener=Mock(side_effect=HTTPError(OPEN_METEO_URL,429,'limited',{'Retry-After':'90'},None))
         sleep=Mock(side_effect=AssertionError('UI/worker sleep'))
         first=ForecastHttpClient(gate=gate,opener=opener,sleep=sleep)
         second=ForecastHttpClient(gate=gate,opener=opener,sleep=sleep)
         with self.assertRaises(ServiceError):first.get_json(OPEN_METEO_URL,{},ttl_seconds=1800)
-        now[0]=60
-        with self.assertRaises(DeferredWeather):second.get_json(OPEN_METEO_URL,{},ttl_seconds=1800)
-        opener.assert_called_once();sleep.assert_not_called();self.assertEqual(gate.until,90)
-        now[0]=91;opener.side_effect=lambda *a,**k:Response(b'{"ok":true}')
+        with self.assertRaises(ServiceError) as raised:second.get_json(OPEN_METEO_URL,{},ttl_seconds=1800)
+        self.assertNotIsInstance(raised.exception,DeferredWeather)
+        self.assertEqual(opener.call_count,2);sleep.assert_not_called();self.assertEqual(gate.until,0)
+        opener.side_effect=lambda *a,**k:Response(b'{"ok":true}')
         self.assertEqual(second.get_json(OPEN_METEO_URL,{},ttl_seconds=1800).body,{'ok':True})
+        self.assertEqual(opener.call_count,3)
+        self.assertEqual(now[0],0)
+
+    def test_legacy_gate_state_and_methods_cannot_affect_transport(self):
+        gate=ProviderGate(clock=Mock(side_effect=AssertionError('Gate clock must not run')),budget=0)
+        gate.until=float('inf');gate.costs.append((0,10**9))
+        self.assertIsNone(gate.admit(float('inf')))
+        self.assertIsNone(gate.failed(ServiceError('429',status=429,retry_after=3600)))
+        self.assertEqual(gate.until,float('inf'))
+        gate.admit=Mock(side_effect=AssertionError('Admission gate must never be called'))
+        gate.failed=Mock(side_effect=AssertionError('Failure gate must never be called'))
+        opener=Mock(side_effect=[HTTPError(OPEN_METEO_URL,429,'limited',{},None),Response(b'{"ok":true}')])
+        client=ForecastHttpClient(gate=gate,opener=opener)
+        self.assertIsNone(client._pace('api.open-meteo.com',10**9))
+        with self.assertRaises(ServiceError):client.get_json(OPEN_METEO_URL,{},ttl_seconds=0)
+        self.assertEqual(client.get_json(OPEN_METEO_URL,{},ttl_seconds=0).body,{'ok':True})
+        gate.admit.assert_not_called();gate.failed.assert_not_called()
 
     def test_even_http_200_empty_or_partial_json_is_never_cached(self):
         opener=Mock(side_effect=lambda *a,**k:Response(b'{"hourly":{}}'))
@@ -137,14 +165,14 @@ class EngineIntegrationTests(unittest.TestCase):
         calls=[]
         def fetch(group,model,**kwargs):
             calls.append(tuple(p.key for p in group))
-            if group[0].key=='8' and now[0]==0:
+            if group[0].key=='8' and calls.count(tuple(p.key for p in group))==1:
                 return ForecastBatch((),tuple(FetchFailure(p.key,model.api_name,'temporary 429') for p in group))
             return ForecastBatch(tuple(forecast(p) for p in group),())
         with patch.object(engine,'_store',store),patch.object(OpenMeteoClient,'fetch_supported',side_effect=fetch):
             first=engine.request_forecasts(points,'ifs025');self.assertEqual(len(first.result(5).forecasts),8)
-            self.assertIs(engine.request_forecasts(points,'ifs025'),first)
-            now[0]=16
             second=engine.request_forecasts(points,'ifs025');self.assertEqual(len(second.result(5).forecasts),12)
+            self.assertIsNot(second,first)
+            self.assertEqual(now[0],0.)
             self.assertEqual(len(calls),3)
             self.assertEqual(sum(group[0]=='0' for group in calls),1)
             # An alias at exactly the same coordinates must preserve caller roles.
@@ -189,7 +217,9 @@ class EngineIntegrationTests(unittest.TestCase):
         night=list(primary.hourly['precipitation']);night[2]=None
         primary=alter(primary,precipitation=night)
         donor=forecast(start=START,hours=144,model='ecmwf_ifs025')
+        http=Mock()
+        http.gate=Mock(clock=Mock(side_effect=AssertionError('No gate may stop a donor request')),until=float('inf'))
         with patch.object(OpenMeteoClient,'fetch_batched',side_effect=[ForecastBatch((primary,),()),ForecastBatch((donor,),())]) as fetch:
-            batch=OpenMeteoClient().fetch_supported((primary.location,),FORECAST_MODELS['icon_eu'])
+            batch=OpenMeteoClient(http=http).fetch_supported((primary.location,),FORECAST_MODELS['icon_eu'])
             self.assertEqual(fetch.call_count,2);self.assertTrue(complete_batch(batch))
             self.assertEqual(batch.forecasts[0].field_sources['precipitation'][2],'ecmwf_ifs025')
